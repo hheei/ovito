@@ -14,7 +14,7 @@
 | Environment | Frontend runs | Notes |
 |-------------|---------------|-------|
 | Linux dev box (`chlo` workstation) | Qt Quick via `xcb` under `xvfb-run` | Headless: no display server, no Wayland compositor. GPU: AMD Ryzen 9 9950X (RADV) + Mesa llvmpipe/lavapipe software drivers. |
-| macOS test host `buddy` (Mac mini, Apple M4) | Qt Quick and classic frontend with the **Cocoa/Metal** backend | Attached monitor (Acer EK241Y, `devicePixelRatio = 1`), console session belongs to user `kings` — so GUI tests must run as `kings`, not as `buddy` (see section 5.2). Qt lives in `/Users/buddy/Qt/6.10.2/macos` and Homebrew's `boost`/`hdf5`/`netcdf` are installed. |
+| macOS test host `buddy` (Mac mini, Apple M4) | Qt Quick and classic frontend with the **Cocoa/Metal** backend | Attached monitor (Acer EK241Y, `devicePixelRatio = 1`), console session belongs to user `kings` — so GUI tests must run as `kings`, not as `buddy` (see section 5.2). The checkout used for testing is `/Users/kings/ovito` with the build directory `build-buddy`; Qt lives in `/Users/buddy/Qt/6.10.2/macos` (readable for `kings`) and Homebrew's `boost`/`hdf5`/`netcdf` are installed. |
 | macOS host `mac` (Apple Silicon) | same | Retina (`devicePixelRatio = 2`). Not used any more: `buddy` is the designated test machine. |
 | Windows / D3D12 | — | No x86_64 Windows machine is available. A Parallels Windows 11 VM exists on `buddy` but **cannot** be used for this (section 5.4). |
 
@@ -129,18 +129,36 @@ a task **without** a `UserInterface`), which the release build hid completely.
 
 ### 5.1 Toolchain setup (already done once, recorded for reproducibility)
 
+Qt is installed by the `buddy` account with `aqt` (a Python venv is enough; there is no `aqt` in Homebrew) into
+`/Users/buddy/Qt`, and `/Users/buddy` is mode 750 with group `staff` — `kings` is in `staff`, so the build running as `kings`
+can read it. Two accounts are involved because only `kings` owns the console session (section 5.2):
+
 ```bash
-# Qt 6.10.2 with private headers (QtQuick private API is required by the QQuickRhiItem renderer)
-python3 -m aqt install-qt mac desktop 6.10.2 clang_64 --outputdir "$HOME/Qt"
-python3 -m aqt install-qt mac desktop 6.10.2 clang_64 -m qtshadertools --outputdir "$HOME/Qt"   # qt_add_shaders
+# once, as `buddy` (needs a Python venv with aqtinstall)
+python3 -m aqt install-qt mac desktop 6.10.2 clang_64 --outputdir /Users/buddy/Qt
+python3 -m aqt install-qt mac desktop 6.10.2 clang_64 -m qtshadertools --outputdir /Users/buddy/Qt   # qt_add_shaders
+```
 
-brew install boost hdf5 netcdf        # required by geogram (Delaunay plugin) and by the netcdf integration
+```bash
+# once, as `kings` (Homebrew's boost/hdf5/netcdf are system-wide)
+/opt/homebrew/bin/brew install cmake ninja boost hdf5 netcdf
 
-# Configure: the fork has no macOS preset yet, so pass the Qt prefix explicitly
-cmake -S . -B build-mac -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DCMAKE_PREFIX_PATH="$HOME/Qt/6.10.2/macos;/opt/homebrew" \
+# clone + submodules, then configure; the fork has no macOS preset, so pass the Qt prefix explicitly
+cd ~/ovito && git submodule update --init src/3rdparty/zstd src/3rdparty/hdf5 src/3rdparty/netcdf-c
+cmake -S . -B build-buddy -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_PREFIX_PATH="/Users/buddy/Qt/6.10.2/macos;/opt/homebrew" \
   -DOVITO_BUILD_APP=ON -DOVITO_BUILD_QML_FRONTEND=ON -DOVITO_BUILD_CPP_TESTS=OFF -DOVITO_USE_CCACHE=OFF
-ninja -C build-mac -j 10
+/opt/homebrew/bin/ninja -C build-buddy -j 8     # full target set, ~30 min on the M4
+```
+
+The non-interactive SSH shell has no Homebrew in `PATH`, hence the absolute `/opt/homebrew/bin/ninja`; `OVITO_USE_CCACHE=OFF`
+because Homebrew ccache is not installed there.
+
+The binaries end up in the macOS bundle layout, not in `bin/`:
+
+```
+build-buddy/Ovito.app/Contents/MacOS/ovito              # classic frontend
+build-buddy/Ovito.app/Contents/MacOS/ovito-qml-spike    # Qt Quick frontend
 ```
 
 ### 5.2 Running GUI tests over SSH
@@ -189,22 +207,20 @@ ssh kings@buddy 'QT_QPA_PLATFORM=cocoa DYLD_FRAMEWORK_PATH=$HOME/Qt/6.10.2/macos
   spike's `--qml-capture` does.
 * Use the framework-based Qt: `CMAKE_PREFIX_PATH=$HOME/Qt/6.10.2/macos` works, private headers live inside the frameworks
   (e.g. `QtQuick.framework/Headers/6.10.2/QtQuick/private/qquickrhiitem_p.h`).
-* **The prototype executable needs `DYLD_LIBRARY_PATH`** pointing at the bundle's plugin directory. Without it the loader
-  aborts with `Library not loaded: @rpath/GuiQml.so`:
+* **Qt itself must be on the loader path in the build tree**; the OVITO plugins no longer need to be (the `@rpath`
+  packaging gap that required `DYLD_LIBRARY_PATH=<bundle>/Contents/PlugIns` was fixed in the spike target, see §9):
 
 ```bash
 cd ~/ovito
-export QT_QPA_PLATFORM=cocoa
-export DYLD_LIBRARY_PATH="$PWD/build-mac/Ovito.app/Contents/PlugIns:$HOME/Qt/6.10.2/macos/lib"
-./build-mac/Ovito.app/Contents/MacOS/ovito-qml-spike \
-  --qml-capture /tmp/mac.png --qml-capture-delay 4000 --qml-pick 300,300 /tmp/lattice_512.xyz
+QT_QPA_PLATFORM=cocoa DYLD_LIBRARY_PATH=/Users/buddy/Qt/6.10.2/macos/lib \
+  ./build-buddy/Ovito.app/Contents/MacOS/ovito-qml-spike \
+  --qml-capture /tmp/buddy.png --qml-capture-delay 4000 --qml-pick 300,300 /tmp/lattice_512.xyz
 ```
 
-  This is a real packaging gap of the prototype target on macOS (recorded as O9): on Linux the same binary finds its
-  plugins through its rpath, on macOS it does not.
 * Retina displays report `devicePixelRatio = 2`, so `--qml-capture` writes images at twice the logical window size and all
-  four viewports render at 4× the pixel count of the same window on a non-Retina machine. Always state the pixel size when
-  comparing frame rates across machines.
+  four viewports render at 4× the pixel count of the same window on a non-Retina machine. Always state the pixel size and
+  the device pixel ratio when comparing frame rates across machines (`buddy` reports `devicePixelRatio = 1`, the retired
+  `mac` host reported 2).
 * `PasteBoard: Error creating pasteboard` messages from a SSH-launched GUI process are harmless.
 * **Log files can contain binary bytes** (Qt/pasteboard/UTF-8 output), so `grep` prints `Binary file … matches`. Use
   `grep -a` in scripts that parse these logs.
@@ -263,6 +279,13 @@ if missing:
 
 * **Boost headers** on Windows (`vcpkg install boost-headers:x64-windows`, passed as `-DBOOST_ROOT=...`): geogram requires
   them, and the failure surfaces during configure as `Could NOT find Boost (missing: Boost_INCLUDE_DIR)`.
+* **HDF5 + NetCDF-C** on Windows (`vcpkg install "hdf5[hl]:x64-windows" "netcdf-c[netcdf-4]:x64-windows"` plus
+  `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`): the Particles plugin's `netcdf_integration` module
+  needs them, and only `OVITO_REDISTRIBUTABLE_PACKAGE`/`OVITO_BUILD_PYPI` builds take them from the bundled submodules.
+  Without them configure fails with `Could NOT find HDF5 (missing: HDF5_LIBRARIES HDF5_INCLUDE_DIRS HDF5_HL_LIBRARIES C HL)`.
+  The Linux jobs get the equivalent from `libhdf5-dev`/`libnetcdf-dev`, the macOS job from `brew`, and the Windows runner
+  image provides neither. `netcdf-c[netcdf-4]` is enough: requesting the default features would pull `dap`/`nczarr` and build
+  curl for remote access that OVITO does not use.
 * **`dxc` on Windows**: `qsb` precompiles the HLSL shaders to DXIL, and OVITO turns a missing `dxc` into a `FATAL_ERROR`
   at configure time. The Windows SDK ships `dxc.exe` under `Windows Kits\10\bin\<version>\x64`; the workflow adds that
   directory to `GITHUB_PATH` and falls back to the `Microsoft.Direct3D.DXC` NuGet package.
@@ -273,6 +296,12 @@ if missing:
 Note that a *compiler version* difference between a CI runner and the development machine can fail the build for reasons
 unrelated to the frontend: the macOS job was failing on `static_assert(false, ...)` in `DataBuffer.h` because Apple clang 15
 predates the C++23 resolution of CWG 2518. When a build works locally but fails in CI, compare the compiler versions first.
+
+Another trap that cost one CI round trip: the Actions **`env` context only contains variables defined by the workflow or
+written to `GITHUB_ENV`**, not the runner's machine-level environment variables. `${{ env.VCPKG_INSTALLATION_ROOT }}` or
+`${{ env.LOCALAPPDATA }}` therefore expand to the empty string even though the variables exist in the shell; read them as
+`$env:VCPKG_INSTALLATION_ROOT` in a `pwsh` step and export derived values through `GITHUB_ENV` (`$env:GITHUB_ENV`).
+The vcpkg installation root is also *not* `VCPKG_ROOT` on the runner, which points at Visual Studio's copy.
 
 ---
 
@@ -332,8 +361,15 @@ silent-empty-scene trap of §3.1: it must be ≥ 1.
   GUI-thread operation.
 * Everything below 59 fps is *vsync-limited* on this hardware, so a comparison must always state whether vsync was on.
   `QSG_NO_VSYNC=1` removes the cap on Linux (68 → 131 fps for a 512-atom scene in the `basic` render loop).
-* On macOS the opposite was observed: `QSG_NO_VSYNC=1` made the QML measurements **twice as slow** (16.95 → 35.71 ms per
-  frame, reproduced twice). Do not use it there without re-checking; report both numbers.
+* **A 60 Hz display can hide the whole result.** On the first macOS host (Retina) every data set measured 57.7–59.0 fps
+  regardless of the particle count, which says nothing more than "vsync holds". `QSG_NO_VSYNC=1` there made the QML run
+  *twice as slow* (16.95 → 35.71 ms, reproduced twice) — that anomaly was never explained, and on the second host the same
+  variable has the expected effect (102 → 116 fps). Always check whether the measured numbers are pinned to the display
+  refresh, and prefer a host or a data set where they are not.
+* A single data point is easy to misread: on the M4 the frame time of a four-viewport scene is flat (8.9–10.9 ms from 512 to
+  32768 atoms) and *independent of the window size* (8.87 ms at 1920×940 versus 9.80 ms at 1280×800 at the same data set),
+  i.e. the per-frame fixed cost dominates. Vary both the data set and the window size before drawing a conclusion about
+  scaling.
 * The Qt Quick render loop mode matters more than the graphics backend: for the same scene the `basic` (single-threaded)
   loop was ~2× faster than the default (threaded) loop (7.6 ms vs 15.3 ms per frame with four viewports, 512 atoms).
 * `--qml-window-size WxH` sets the window size before anything is measured; use it when comparing against the classic
