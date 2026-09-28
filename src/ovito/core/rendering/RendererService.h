@@ -33,6 +33,13 @@ class OVITO_CORE_EXPORT RendererService
 {
 public:
 
+    /// A service is a long-lived object that owns GPU resources; it must not be copied, and it must be
+    /// destroyed through the pointer that created it. Declaring this explicitly also keeps MSVC from
+    /// instantiating the implicit assignment operators, which the move-only members below cannot support.
+    RendererService() = default;
+    RendererService(const RendererService&) = delete;
+    RendererService& operator=(const RendererService&) = delete;
+
     /// Destructor.
     virtual ~RendererService() = default;
 
