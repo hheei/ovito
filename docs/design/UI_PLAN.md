@@ -224,9 +224,13 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   error dialog for a file whose format cannot be detected, and the cleanup that removes a half-imported pipeline after a
   cancellation (**D20**). Deliverable 6 (resources and packaging) is verified by building with
   `OVITO_BUILD_QML_FRONTEND=OFF`, which contains neither QML sources nor a QML target. **Open from this phase**:
-  deliverable 7 (the carried-over Phase 1 items O1, O2, O4, O7/O11) and the exit-gate verification on macOS and Windows
+  deliverable 7 (the carried-over Phase 1 items O4 and O7/O11; **O2 is fixed** - `RenderThread` now requests an explicit
+  Vulkan API version - and **O1 is documented** as an environment constraint) and the exit-gate verification on Windows
   (D3D12 has no test host). The spike verifies the shell with `--qml-layout-check` and `--qml-import-check` in CI; the
-  testing recipe is [UI_TEST_ENV.md](UI_TEST_ENV.md).
+  testing recipe is [UI_TEST_ENV.md](UI_TEST_ENV.md). Verified so far: Linux/OpenGL (all checks, including the four
+  viewports, the splitter drag and its undo, picking, the import path and the cancellation) and macOS/Metal (the same
+  check set, 126 fps with four viewports at 1280x800); macOS screenshots need the screen-recording permission, so the
+  shell evidence image is the Linux one.
 
 - **Non-goals of this phase** (so the shell does not swallow the later ones): pipeline and property models, the pipeline
   view and editors, timeline and animation, render settings and output, data inspector, session saving, command palette.
