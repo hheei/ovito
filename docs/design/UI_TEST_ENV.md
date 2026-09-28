@@ -354,6 +354,13 @@ written to `GITHUB_ENV`**, not the runner's machine-level environment variables.
 `$env:VCPKG_INSTALLATION_ROOT` in a `pwsh` step and export derived values through `GITHUB_ENV` (`$env:GITHUB_ENV`).
 The vcpkg installation root is also *not* `VCPKG_ROOT` on the runner, which points at Visual Studio's copy.
 
+The same trap hits `PATH`: a step that sets `env: PATH: <dir>;${{ env.PATH }}` does not append to the runner's search path
+but replaces it with `<dir>` alone. On Windows that made every CTest run abort with exit code `0xc0000135`
+(STATUS_DLL_NOT_FOUND) for the five tests that link `Core`, because neither `Core`'s dependency DLLs nor anything else
+could be found; the header-only `tst_containers` still passed, which is the hint that the failure is about loading, not
+about the test. Compose the variable in the shell instead
+(`$env:PATH = "...;$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin;$env:PATH"`).
+
 ---
 
 ## 7. Temporary benchmark instrumentation (never commit)
