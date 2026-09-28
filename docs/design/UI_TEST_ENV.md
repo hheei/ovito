@@ -14,8 +14,9 @@
 | Environment | Frontend runs | Notes |
 |-------------|---------------|-------|
 | Linux dev box (`chlo` workstation) | Qt Quick via `xcb` under `xvfb-run` | Headless: no display server, no Wayland compositor. GPU: AMD Ryzen 9 9950X (RADV) + Mesa llvmpipe/lavapipe software drivers. |
-| macOS test host (`mac`, Apple Silicon, macOS 27) | Qt Quick and classic frontend with the **Cocoa/Metal** backend | Real logged-in GUI session; SSH-launched GUI processes can open windows (§5). |
-| Windows / D3D12 | — | No such machine is available, so the D3D12 target cannot be verified yet. |
+| macOS test host `buddy` (Mac mini, Apple M4) | Qt Quick and classic frontend with the **Cocoa/Metal** backend | Attached monitor (Acer EK241Y, `devicePixelRatio = 1`), console session belongs to user `kings` — so GUI tests must run as `kings`, not as `buddy` (see section 5.2). Qt lives in `/Users/buddy/Qt/6.10.2/macos` and Homebrew's `boost`/`hdf5`/`netcdf` are installed. |
+| macOS host `mac` (Apple Silicon) | same | Retina (`devicePixelRatio = 2`). Not used any more: `buddy` is the designated test machine. |
+| Windows / D3D12 | — | No x86_64 Windows machine is available. A Parallels Windows 11 VM exists on `buddy` but **cannot** be used for this (section 5.4). |
 
 ### Dataset generation used in all measurements
 
@@ -144,9 +145,48 @@ ninja -C build-mac -j 10
 
 ### 5.2 Running GUI tests over SSH
 
-* The user has a real console session, so a plain SSH-launched process **can** create and show an `NSWindow` (verified with
-  a 10-line Cocoa program before investing in the Qt install). `QT_QPA_PLATFORM=cocoa` is the default; no
-  `launchctl asuser` trick is needed.
+**A graphical session for the SSH user is a hard precondition.** macOS refuses to create a window for a user who has no
+Aqua session, and the symptom is a Qt abort with:
+
+```
+Cannot create window: no screens available
+PasteBoard: Error creating pasteboard: com.apple.pasteboard.clipboard [-4960]
+Abort trap: 6
+```
+
+This is not a Qt or OVITO problem, and it is what happens when the SSH user is not the console user. Check before blaming the
+code:
+
+```bash
+who                                     # who owns the console session?
+stat -f "%Su" /dev/console              # console user
+system_profiler SPDisplaysDataType      # an attached display shows up as a "Displays:" section
+```
+
+On `buddy` the console session belongs to `kings` (attached monitor, so a real screen exists), while `buddy` has only a
+remote session — hence the earlier abort. Additionally, `open -a` and other Launch Services calls fail for a non-GUI
+session as well:
+
+```
+The application /Applications/… cannot be opened for an unexpected reason,
+error=Error Domain=RBSRequestErrorDomain Code=5 "Launch failed."
+    Underlying Error: Domain does not support specified action
+```
+
+This is why the Parallels Desktop application cannot be started from an SSH session (section 5.4).
+
+Quick check that a Qt GUI window really works for the intended user (replace `kings@buddy`):
+
+```bash
+ssh kings@buddy 'QT_QPA_PLATFORM=cocoa DYLD_FRAMEWORK_PATH=$HOME/Qt/6.10.2/macos/lib \
+  <cmake-built test that shows a QWindow and prints isExposed()>'
+```
+
+* `QT_QPA_PLATFORM=cocoa` is the default; no `launchctl asuser` trick is needed when the user owns the console session.
+* Harmless noise in such runs: `qt.gui.icc: fromIccProfile: failed size sanity 1`, `PasteBoard: Error creating pasteboard`.
+* `QScreen::grabWindow()` returns a 0×0 image on macOS unless the process has screen-recording permission. Use
+  `QQuickWindow::grabWindow()` instead (it re-renders through QRhi and does not need that permission), which is what the
+  spike's `--qml-capture` does.
 * Use the framework-based Qt: `CMAKE_PREFIX_PATH=$HOME/Qt/6.10.2/macos` works, private headers live inside the frameworks
   (e.g. `QtQuick.framework/Headers/6.10.2/QtQuick/private/qquickrhiitem_p.h`).
 * **The prototype executable needs `DYLD_LIBRARY_PATH`** pointing at the bundle's plugin directory. Without it the loader
@@ -181,8 +221,25 @@ sleep 2
 pgrep -fl Ovito.app || echo CLEAN
 ```
 
-Add `timeout <seconds>` in front of the command as a second line of defence, and start long runs with an explicit PID
-file so the process can be killed deterministically.
+Add a timeout in front of the command as a second line of defence (note that macOS has no `/usr/bin/timeout`; either build
+one from the command itself — `cmd & pid=$!; sleep N; kill -9 $pid` — or install `coreutils` for `gtimeout`), and start long
+runs with an explicit PID file so the process can be killed deterministically.
+
+### 5.4 Windows/D3D12 cannot be validated with the Parallels VM
+
+The `buddy` host has a `Windows 11.pvm` virtual machine, but it is not a usable D3D12 test target:
+
+* Parallels Desktop on Apple Silicon exposes **DirectX 11.1** at most — there is no D3D12 support in the guest.
+* The guest is Windows 11 **ARM64**, while OVITO's Windows target is **AMD64/x86_64**.
+
+So a D3D12 smoke test needs an x86_64 Windows runner. Qt Quick's D3D12 backend supports the **WARP** software adapter
+(`QSG_RHI_PREFER_SOFTWARE_RENDERER=1`), and OVITO's render thread creates its D3D12 device with default
+`QRhiD3D12InitParams`, which falls back to the DXGI default adapter (WARP on a GPU-less machine) — i.e. a CPU-only CI runner
+can exercise the D3D12 code paths, the same way lavapipe covers Vulkan on Linux. Prerequisites for such a job: a Qt 6.10
+Windows installation with private headers, and `dxc` on `PATH` (OVITO precompiles HLSL SM 6.0 to DXIL).
+
+Also note that when a Windows machine *is* available, a classic-frontend run needs the interactive import dialog out of the
+way (section 3.1) — that trap applies to every platform.
 
 ---
 
@@ -251,7 +308,20 @@ silent-empty-scene trap of §3.1: it must be ≥ 1.
 
 ---
 
-## 8. Quick checklist
+## 8. QML viewport (Qt Quick frontend) specifics
+
+* **Bundle rpath on macOS**: an app-bundle executable resolves plugins through `@executable_path/../PlugIns/`, *not* through
+  `@executable_path/../${OVITO_RELATIVE_PLUGINS_DIRECTORY}` — that variable is bundle-*root* relative (it already contains
+  `Ovito.app/Contents/PlugIns`), so adding another `../` yields `Contents/Contents/PlugIns` and dyld fails with
+  `Library not loaded: @rpath/GuiQml.so`. `src/main/CMakeLists.txt` uses the literal form; the spike target now does too.
+  Verify without a GUI: `otool -l <binary> | grep -A2 LC_RPATH` and a run that must get past plugin loading.
+* Version-skew trap when a test host gets source files copied by hand: the executable and the `GuiQml` plugin must be
+  built from the same revision, otherwise option parsing or QML type registration silently mismatches (`Error: Unknown
+  option qml-frame-stats` was the observable symptom). Copy the *source file* and rebuild, never a stale binary.
+* Assertion/lifecycle checks are only meaningful in an assert-enabled build (§4); a clean run of an `NDEBUG` build proves
+  nothing about object lifetimes.
+
+## 9. Quick checklist
 
 1. Build the frontend: `cmake --preset native -DOVITO_BUILD_QML_FRONTEND=ON && cmake --build --preset native -j 16`.
 2. Assertions: build `build-asserts` (§4) and run the same checks there; release builds hide lifecycle defects.

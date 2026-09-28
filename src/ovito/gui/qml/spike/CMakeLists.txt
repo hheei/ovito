@@ -19,7 +19,10 @@ SET_TARGET_PROPERTIES(OvitoQmlSpike PROPERTIES OUTPUT_NAME "ovito-qml-spike")
 SET_TARGET_PROPERTIES(OvitoQmlSpike PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${OVITO_BINARY_DIRECTORY}")
 SET_TARGET_PROPERTIES(OvitoQmlSpike PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE)
 IF(APPLE)
-    SET_TARGET_PROPERTIES(OvitoQmlSpike PROPERTIES INSTALL_RPATH "@executable_path/;@executable_path/../${OVITO_RELATIVE_LIBRARY_DIRECTORY}/;@executable_path/../${OVITO_RELATIVE_PLUGINS_DIRECTORY}/")
+    # Note: the plugin and framework directories of an app bundle are relative to Contents/, not to the build
+    # directory, so they cannot be built from OVITO_RELATIVE_PLUGINS_DIRECTORY (which is bundle-root relative).
+    # Keep this in sync with the main executable target in src/main/CMakeLists.txt.
+    SET_TARGET_PROPERTIES(OvitoQmlSpike PROPERTIES INSTALL_RPATH "@executable_path/;@executable_path/../Frameworks/;@executable_path/../PlugIns/")
 ELSEIF(LINUX)
     SET_TARGET_PROPERTIES(OvitoQmlSpike PROPERTIES INSTALL_RPATH "$ORIGIN/../${OVITO_RELATIVE_LIBRARY_DIRECTORY}/:$ORIGIN/../${OVITO_RELATIVE_LIBRARY_DIRECTORY}/lib/:$ORIGIN/../${OVITO_RELATIVE_PLUGINS_DIRECTORY}/:$ORIGIN/../${OVITO_RELATIVE_3RDPARTY_LIBRARY_DIRECTORY}/")
 ENDIF()
