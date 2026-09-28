@@ -79,6 +79,14 @@ src/
    - Use OVITO's async framework: `TaskScope`, `asyncLaunch()`, or C++20 coroutines.
 5. **Headless Execution**:
    - Qt requires `QT_QPA_PLATFORM=offscreen` in environments without an active X11/Wayland display server (CI, Docker, headless servers).
+   - But `offscreen` cannot provide a QRhi for the Qt Quick frontend: use `QT_QPA_PLATFORM=xcb` under `xvfb-run` instead.
+     The full recipe (backend selection, datasets, measurement flags, known traps) is in
+     **[docs/design/UI_TEST_ENV.md](docs/design/UI_TEST_ENV.md)** — read it before running or interpreting any
+     frontend test, and extend it whenever a new testing pitfall is found.
+6. **Clean up after GUI test runs**:
+   - A frontend window keeps rendering until the process is terminated, which can saturate the machine (and on remote hosts
+     even block SSH). Always kill the process, then verify that none is left (`pkill -9 -f Ovito.app; pgrep -fl Ovito.app`),
+     and always launch long-running GUI runs under `timeout`.
 
 ---
 

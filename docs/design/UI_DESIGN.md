@@ -7,8 +7,9 @@
 > **Visual Inspiration**: VS Code Modern Theme (Clean, focused, dark/light modern)
 >
 > **Status**: Proposed Design; the Qt Quick viewport rendering bridge and the asynchronous picking path are validated on
-> the Linux/OpenGL backend (see [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md)); cross-backend and performance validation are
-> still open
+> the Linux/OpenGL, Linux/Vulkan and macOS/Metal backends, with a measured performance baseline against the classic
+> frontend (see [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md) and [UI_TEST_ENV.md](UI_TEST_ENV.md)); the Windows/D3D12 target
+> and a hardware-driver Vulkan run remain unverified
 >
 > **Execution Plan**: [UI_PLAN.md](UI_PLAN.md)
 

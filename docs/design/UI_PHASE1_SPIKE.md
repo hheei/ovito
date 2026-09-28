@@ -5,8 +5,14 @@
 > **Status**: The critical rendering risk is validated — an OVITO scene is rendered inside a Qt Quick window by a
 > `QQuickRhiItem` renderer that uses the scene graph's own QRhi, with four simultaneous viewports and no
 > `RenderThread` in the interactive frame path. Object picking is implemented as an asynchronous offscreen pass served by
-> OVITO's `RenderThread` machinery, verified end to end (selection through `SelectionMode`). Cross-backend
-> (Metal/D3D12/Vulkan) and performance baselines remain open, so the architecture is **not yet frozen**.
+> OVITO's `RenderThread` machinery, verified end to end (selection through `SelectionMode`). The frontend has been
+> exercised on **three** Qt Quick backends — OpenGL and Vulkan on Linux x86_64, Metal on macOS ARM64 — including hide/show,
+> resize, lifecycle and assertion-enabled runs, and a frame-rate baseline was measured against the classic frontend on
+> macOS. D3D12/Windows is the only target that could not be verified (no such machine is available), so the architecture
+> is **not yet frozen**.
+>
+> Environment recipes, traps and measurement instructions live in [UI_TEST_ENV.md](UI_TEST_ENV.md) — read that before
+> re-running any of the checks below.
 
 ---
 
@@ -136,7 +142,7 @@ thread free of waits. Measured first-pick latency: section 3.4.
 | Build | `cmake --preset native` (RelWithDebInfo, Clang, mold, ccache), `-DOVITO_BUILD_QML_FRONTEND=ON` |
 | QPA / RHI for the spike | `QT_QPA_PLATFORM=xcb` under `xvfb-run`, Qt Quick RHI backend **OpenGL** (Mesa llvmpipe, GL 4.5 compat profile) |
 | Data set | `lattice.xyz`: 512 argon atoms on an 8×8×8 simple-cubic lattice, a = 3.6 |
-| Evidence | `docs/design/evidence/phase1_multiviewport.png` (four viewports, no selection), `docs/design/evidence/phase1_picking.png` (captured after a successful synthetic click; identical to the former in the viewport region, PSNR = ∞ over x < 1000) |
+| Evidence | `evidence/phase1_multiviewport.png` (Linux/OpenGL, four viewports), `evidence/phase1_picking.png` (Linux/OpenGL, captured after a successful synthetic click; identical to the former in the viewport region, PSNR = ∞ over x < 1000), `evidence/phase1_macos_metal.png` (macOS/Metal, Retina 2560×1600) |
 
 The machine has no display server, so the window is driven through `Xvfb`. The `offscreen` QPA plugin cannot be used for
 this spike: it provides neither `createPlatformVulkanInstance()` nor a GL context, so Qt Quick cannot create a QRhi and
@@ -238,6 +244,75 @@ pixels) and scan a 5 × 5 grid of positions spaced 4 logical pixels apart:
 * Evidence: `docs/design/evidence/phase1_picking.png` is captured *after* the synthetic click; its viewport region is
   pixel-identical to the pre-picking baseline capture.
 
+### 3.5 Cross-backend results
+
+Each backend was exercised with the full check set (`--qml-pick`, `--qml-hide-show`, `--qml-resize`,
+`--qml-lifecycle-cycles`, `--qml-frame-stats`) and the 512-atom data set:
+
+| Platform | Qt Quick backend | Rendering | Picking / selection | Frame rate (4 viewports) |
+|----------|------------------|-----------|---------------------|--------------------------|
+| Linux x86_64 (`xvfb`) | OpenGL 4.5 (Mesa llvmpipe, software) | ✔ | ✔ 19/25 grid hits, click selects | 14.4–15.3 ms/frame (65–69 fps, vsync), 7.6 ms (basic loop) |
+| Linux x86_64 (`xvfb`) | Vulkan via lavapipe (software ICD) | ✔ | ✔ identical hits and hit locations | 19.7 ms/frame (50.7 fps) |
+| macOS ARM64 (Cocoa) | **Metal** | ✔ | ✔ 14/25 grid hits (Retina geometry), click selects | 16.95 ms/frame (59.0 fps, vsync) |
+| Windows x86_64 | D3D12 | — | — | not verified: no Windows machine available |
+
+* The picking results are **identical** between the Linux OpenGL and Linux Vulkan runs (same subobject id, same hit
+  location to within 10⁻³ Å), which is expected because the picking pass is rendered by OVITO's own renderer through
+  either backend.
+* The macOS run used the hardware Metal backend of both Qt Quick and OVITO's render thread (used for offscreen picking).
+* Qt Quick **Vulkan on RADV** could not be exercised: `Xvfb` has no DRI3, which Vulkan presentation requires. The exact
+  error messages and the working lavapipe recipe are in [UI_TEST_ENV.md](UI_TEST_ENV.md) section 2.1.
+
+### 3.6 Performance
+
+Frame times of the Qt Quick frontend, measured with `--qml-frame-stats` (frames are requested continuously, as animation
+playback does), four viewports, vsync disabled, software OpenGL unless noted:
+
+| Data set | Linux, default render loop | Linux, `basic` render loop | macOS/Metal, vsync (Retina) |
+|----------|---------------------------|----------------------------|------------------------------|
+| 512 atoms | 15.3 ms (65 fps) | 7.6 ms (131 fps) | 16.95 ms (59.0 fps) |
+| 4096 atoms | 19.2 ms (52 fps) | — | 17.05 ms (58.7 fps) |
+| 32768 atoms | 48.8 ms (20.5 fps) | 25.0 ms (40 fps) | 17.34 ms (57.7 fps) |
+| 262144 atoms | 285.7 ms (3.5 fps) | — | — |
+
+* The Linux numbers come from a *software* rasterizer (llvmpipe, 1280×800 window); they are a lower bound, not a statement
+  about GPU hardware. The macOS numbers are hardware Metal at 2× Retina resolution (the four viewports cover
+  ≈2000×1600 device pixels, i.e. ~3.2 Mpx per frame).
+* The `basic` (single-threaded) Qt Quick render loop is ~2× faster than the default (threaded) loop for this workload
+  (four independent `QQuickRhiItem`s). Frame-graph generation happens per frame in both cases, so this is
+  scene-graph/hand-off overhead, not renderer cost. Worth revisiting in Phase 2 (also see O4, one renderer service per
+  window).
+* 262144 atoms at 3.5 fps is the software-rasterizer limit for four simultaneous viewports of that size; the per-frame
+  cost scales with particles × viewports, exactly like the classic frontend.
+
+**Comparison with the classic frontend (macOS/Metal, same machine, same data sets).** The classic frontend exposes no
+frame-time counter, so a temporary instrumentation patch was applied locally and reverted afterwards (the exact diff is
+recorded in [UI_TEST_ENV.md](UI_TEST_ENV.md) section 6, which also explains why an unattended classic run is otherwise
+likely to measure an *empty* scene):
+
+| Frontend | Data set | Rendered surface | Frame rate |
+|----------|----------|------------------|------------|
+| Classic QtWidgets frontend (Metal) | 512 atoms, 4 viewports | 1386×1156 device px (1.6 Mpx) | 61.0 fps (vsync-limited) |
+| Qt Quick frontend (Metal) | 512 atoms, 4 viewports | ≈2000×1600 device px (3.2 Mpx) | 59.0 fps (vsync-limited) |
+
+Both frontends are limited by the 60 Hz display refresh at these data sets, and the Qt Quick frontend reaches the same
+frame rate while rendering **twice the number of pixels** (its window is larger and every viewport is rendered at Retina
+resolution). A pixel-exact comparison therefore favours the classic frontend, and the Qt Quick path still matches it; a
+frame-rate-limited statement beyond that is not possible without disabling vsync for the classic path, which OVITO does
+not expose.
+
+**Input responsiveness (picking).** Measured on Linux/OpenGL unless noted:
+
+| Scenario | Measured latency |
+|----------|------------------|
+| First pick after window creation (includes creating the render thread and its QRhi) | 99–150 ms |
+| Refresh after the picking buffer was invalidated by a resize (small viewport, warm pipelines) | ≤10 ms (one poll interval) |
+| Recovery after hide/show (GPU resources released and re-acquired) | 133–546 ms |
+| Probe during scene evaluation | returns immediately (0 ms), no deadlock |
+| 262144-atom scene, grid of 25 positions | 25/25 hits, first hit after 25 ms |
+
+---
+
 ## 4. Defects Found and Fixed During the Spike
 
 | # | Defect | Fix |
@@ -264,17 +339,18 @@ pixels) and scan a 5 × 5 grid of positions spaced 4 logical pixels apart:
 | Minimal executable renders real OVITO scene data through the candidate architecture | **Done** |
 | Composition, QRhi ownership, frame handoff documented | **Done** |
 | Multi-viewport (4 viewports, shared GPU work) | **Done** (independent renderer per item; cross-item buffer sharing is O4) |
-| Teardown, hide/show, scene graph invalidation | **Verified with assertions enabled** — four `QQuickWindow::releaseResources()` cycles plus a capture are reproducible in both the release and the `OVITO_DEBUG`/`QT_FORCE_ASSERTS` configuration, where no assertion fires (defect F4 was found this way). Closing the window itself is exercised at exit of every run. A true `Debug` configuration is not possible in this environment (no Qt debug libraries — see section 3.1). |
+| Teardown, hide/show, scene graph invalidation | **Verified, with assertions enabled** — `--qml-lifecycle-cycles N` (scene graph release/rebuild), `--qml-hide-show` (items hidden, GPU resources released, then shown again; picking recovers in 133–546 ms) and window teardown at process exit are reproducible in both the release and the `OVITO_DEBUG`/`QT_FORCE_ASSERTS` configuration, where no assertion fires (defect F4 was found this way). A true `Debug` configuration is not possible in this environment (no Qt debug libraries — see section 3.1 and UI_TEST_ENV.md section 4). |
 | Deadlock/circular wait elimination | **Done, and structurally enforced** — the interactive QML frame never touches a `RenderThread`; offscreen picking submits work through `RenderThread::renderPickingFrame()` and is answered from a cached buffer, so no GUI-thread wait exists that could interleave with a render-thread wait. The previously planned design (blocking `pick()`, `RenderThread::requestPick()`) was rejected for this reason. |
-| Picking and raycasting | **Done** — asynchronous offscreen picking (section 1.5), verified with hit/no-hit controls, HiDPI, three render loops, lifecycle cycles and an end-to-end synthetic click through `SelectionMode` (section 3.4, O3). |
-| HiDPI / resize | **Partially verified** — 2× scaling works with correct coordinate handling (section 3.4). Interactive resizing is forwarded (`geometryChange` → `handleResize` → `requestRerender`) and the picking buffer is dropped when the device size changes, but resizing and mixed-DPI multi-monitor setups were not measured. |
-| Cross-API smoke test (Vulkan, Metal, D3D12) | **Not verified** — only Qt Quick's OpenGL backend on Linux x86_64 was exercised (the picking pass, by contrast, runs on OVITO's Vulkan `RenderThread` with lavapipe/RADV). macOS ARM64 and Windows x86_64 remain completely unverified; the Linux Qt Quick Vulkan path is blocked by the missing QPA plugin (O1). |
-| Performance baseline vs classic (frame time, input responsiveness, data set sizes) | **Partially measured** — the first-pick latency after a fresh viewport is 110–150 ms (includes `RenderThread`/QRhi creation; section 3.4). Frame times, steady-state refresh cost and larger data sets are still unmeasured. |
+| Picking and raycasting | **Done** — asynchronous offscreen picking (section 1.5), verified on three Qt Quick backends with hit/no-hit controls, HiDPI/Retina, three render loops, lifecycle cycles, hiding/showing, resizing, a probe during scene evaluation, a 262144-atom scene and an end-to-end synthetic click through `SelectionMode` (sections 3.4–3.6, O3). |
+| HiDPI / resize | **Verified for 2× scaling and interactive resize** — `QT_SCALE_FACTOR=2` on Linux and Retina (`devicePixelRatio = 2`) on macOS both work with correct coordinate handling; `--qml-resize WxH` resizes the window at runtime and picking recovers once a buffer for the new device size exists (≤10 ms warm, and the buffer is discarded while the viewport geometry still belongs to the old size). Mixed-DPI multi-monitor setups remain unmeasured. |
+| Cross-API smoke test (Vulkan, Metal, D3D12) | **Partially verified** — Linux x86_64 with Qt Quick **OpenGL** (llvmpipe) and **Vulkan** (lavapipe ICD), macOS ARM64 with **Metal** (hardware), each with the full check set (section 3.5). Qt Quick Vulkan on the hardware RADV driver is blocked by `Xvfb`'s missing DRI3; **D3D12/Windows remains unverified** because no Windows machine is available. |
+| Performance baseline vs classic (frame time, input responsiveness, data set sizes) | **Done for the reachable configurations** — frame times for 512/4096/32768/262144 atoms and two render loops (section 3.6), picking latencies for cold/warm/resize/hide-show/during-evaluation, and a same-machine comparison against the classic frontend on macOS/Metal (61.0 fps vs 59.0 fps, vsync-limited, with the Qt Quick frontend rendering twice the pixels). Remaining gap: no vsync-free classic measurement is possible, and the Linux numbers come from software rasterizers. |
 | Document required changes to `core/rendering`/`core/viewport` | **Done** — `RendererService` extraction and the offscreen picking entry point, see [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) sections 2 and 4. |
 
-Consequently the rendering bridge and the picking path are validated on one Qt Quick backend (OpenGL under `xvfb`),
-with an assertion-enabled regression run; the design's architecture status therefore remains **proposed** until the
-cross-backend and performance gates above are recorded.
+Consequently the rendering bridge and the picking path are validated on three Qt Quick backends (OpenGL and Vulkan on
+Linux, Metal on macOS), with an assertion-enabled regression run and a measured performance baseline. What keeps the
+architecture status at **proposed** is the D3D12/Windows target, the missing `ovitoheadless` QPA plugin for the Linux Qt
+Quick Vulkan path (O1), and the prototype's macOS packaging gap (O9).
 
 ---
 
@@ -319,9 +395,9 @@ successful pick, a negative control on the empty background, and the object sele
 
 ## 7. Recommended Next Steps
 
-1. **Close the remaining Phase 1 gates**: the cross-API smoke test (a Qt Quick Vulkan session, plus macOS Metal and Windows
-   D3D12 runners) and a frame-time/performance baseline against the classic frontend, including the steady-state cost of a
-   picking refresh.
+1. **Close the last Phase 1 gaps where the environment allows it**: a D3D12/Windows runner, a Qt Quick Vulkan run on the
+   hardware driver (needs a machine with a real display server or DRI3), and fixing the macOS plugin lookup in the
+   prototype's CMake (O9) so that the documented macOS commands do not need `DYLD_LIBRARY_PATH`.
 2. **Decide and document the cross-backend validation plan**, including whether the `ovitoheadless` QPA plugin (O1) is
    implemented for Linux headless verification or the Linux gate is moved to a Vulkan-capable desktop session.
 3. **Move to Phase 2 only after those gates are recorded**, starting with the frontend-neutral application class and
