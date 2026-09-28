@@ -343,6 +343,26 @@ qualitative reference.
 | Probe during scene evaluation | returns immediately (0 ms), no deadlock |
 | 262144-atom scene, grid of 25 positions | 25/25 hits, first hit after 25 ms |
 
+### 3.7 Continuous-integration smoke test
+
+`.github/workflows/ci.yml` builds the prototype on all four target platforms and runs it against a generated 512-atom
+lattice with `--qml-frame-stats`, `--qml-lifecycle-cycles`, `--qml-hide-show` and `--qml-pick`; the spike exits non-zero
+when a check fails, so the step is an assertion instead of a log to grep (the recipes and the CI-specific traps are in
+[UI_TEST_ENV.md](UI_TEST_ENV.md) sections 1 and 6). This is the only automated regression net for the frontend, and it
+already earned its keep in its first runs:
+
+* **All four jobs failed in the smoke test** while the local runs passed. The checks were right, the reason was not
+  visible: the generated data set was handed to the **LAMMPS data importer** because its comment line happened to look
+  like a LAMMPS header, which produced an *empty* scene, so there was nothing to pick (see UI_TEST_ENV.md section 1 for
+  the one-line reproduction). Neither an import error nor a rendering problem occurred.
+* Fixing that exposed defect **F6**: a picking pass that fails leaves no trace at all, so "the picking buffer did not
+  become available" was the only message, for a reason that had nothing to do with the buffer. The spike now also prints
+  the imported pipelines with their detected format and the viewport state at the moment a check fails.
+* The picking checks wait 20 s rather than 5 s: a CI runner creates the render thread's graphics device and compiles its
+  pipelines far more slowly than a development machine, so the shorter timeout was measuring the runner, not the code.
+
+Published results of the four jobs: see section 3.5.
+
 ---
 
 ## 4. Defects Found and Fixed During the Spike
@@ -354,6 +374,7 @@ qualitative reference.
 | F3 | The classic frontend logs `VUID-VkApplicationInfo-apiVersion` (value 0) when creating its `QVulkanInstance`. Pre-existing, non-fatal, still open (O2). | Not fixed; recorded in the audit. |
 | F4 | The picking coroutine (`QuickViewportWindow::renderPickingBuffer()`) submitted its render-thread work from a Qt event handler, i.e. from a task without a `UserInterface`; with assertions active this aborted in `RenderThread::renderPickingFrame()` (`this_task::ui()`). | Attach the context after the coroutine's first suspension (`setUserInterface()`, `setIsInteractive()`), the pattern `WidgetViewportWindow::grabViewportImage()` already uses. Only found because the assert-enabled configuration exists — see O8 for the general QML-frontend consequence. |
 | F5 | After a resize, `QuickViewportWindow::pick()` kept answering from the picking buffer of the **previous** viewport size. `lookupPickResult()` normalizes the pick position with the buffer size it is given, so picks in the resized viewport were silently resolved in the old geometry (found because the harness's probes before and after the picking pass disagreed: 19/25 versus 13/25 at the same position, with different hit atoms). A second, narrower race let a pass be rendered whose frame graph projection came from a different viewport geometry than the buffer. | `pick()` rejects a buffer whose `bufferSize()` differs from the current viewport device size, and `renderPickingBuffer()` drops a pass whose `projectionParams().aspectRatio` does not match the size it would render at. The measured resize recovery time (section 3.4) became a real refresh time because of this; before, it was the instant answer of the stale buffer. |
+| F6 | A picking pass that terminated with an **error** was completely silent: the adapter connected only `FutureWatcher::completed`, so a failed pass left no trace and the next `pick()` merely started another attempt. The visible symptom was "picking does not work", with the reason nowhere in the log — which is how the CI smoke test failed on all four platforms at once (section 3.7). | The adapter also connects the watcher's `error` signal, reports the exception once per series of failures (a successful pass clears the flag) and marks the buffer stale so a later pick retries. The spike's checks additionally print the viewport state and the imported datasets when a check fails, because a check that fails without stating under which conditions it ran costs a debugging session. |
 
 ### 4.1 Design corrections (not defects, but recorded so they are not repeated)
 

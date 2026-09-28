@@ -33,6 +33,20 @@ lattice(64,  path="/tmp/lattice_262144.xyz")    # 262144 atoms
 EOF
 ```
 
+**The comment line of an XYZ file decides which importer gets it.** OVITO's importer autodetection hands a file to the
+LAMMPS **data** importer if the second line looks like a LAMMPS header — for example a comment containing the word
+"atoms" — and the resulting pipeline is an *empty* scene. The file extension does not win over that heuristic:
+
+```bash
+# only the comment line differs; the atom lines are identical
+echo '512 atoms, simple cubic lattice a=3.6'  > /tmp/c.xyz   # -> "c_*.xyz [LAMMPS Data]", no particles
+sed -i '2s/.*/simple cubic lattice, a=3.6/'   /tmp/c.xyz     # -> "c_*.xyz [XYZ]", 512 particles
+```
+
+The visible symptom is a picking check that finds nothing (there is nothing to pick), not an import error. The spike
+prints the imported pipelines and their detected format as `DATASET "… [XYZ]"` lines for exactly this reason — check
+them first when a picking check fails. The recipe above therefore uses `Lattice 8x8x8`, which imports as XYZ.
+
 ---
 
 ## 2. Linux: rendering a Qt Quick window without a display server
