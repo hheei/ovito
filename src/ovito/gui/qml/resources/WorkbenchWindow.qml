@@ -12,6 +12,26 @@ Rectangle {
 
     Theme { id: theme }
 
+    // Workbench-wide keyboard commands. The command layer of Phase 3 replaces them with the regular action system;
+    // until then, undo/redo and maximizing the active viewport are the commands the shell owes the user.
+    Shortcut {
+        sequences: [StandardKey.Undo]
+        enabled: viewportController.canUndo
+        onActivated: viewportController.undo()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Redo]
+        enabled: viewportController.canRedo
+        onActivated: viewportController.redo()
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+M"
+        enabled: viewportLayout.maximizable
+        onActivated: viewportLayout.toggleMaximize(viewportLayout.activeViewportIndex)
+    }
+
     // Status line at the bottom of the window.
     Text {
         id: statusLine
@@ -28,8 +48,9 @@ Rectangle {
         elide: Text.ElideRight
     }
 
-    // Central area hosting the 3D viewport items created by the C++ frontend.
-    // The prototype uses a 2x2 grid, mirroring the four default viewports of a new OVITO dataset.
+    // Central area hosting the viewport panes. The arrangement of the panes - including the handles the user can drag
+    // to resize them - follows the layout tree of the current dataset, i.e. the same tree the classic frontend lays out
+    // with widgets (see QmlViewportLayout).
     Item {
         id: viewportHost
         objectName: "viewportHost"
@@ -40,32 +61,29 @@ Rectangle {
         anchors.margins: theme.spacing
         anchors.bottomMargin: theme.spacing
 
-        Grid {
-            id: viewportGrid
-            anchors.fill: parent
-            columns: Math.min(2, Math.max(1, viewportController.viewportCount))
-            spacing: theme.spacing
+        // The layout model can only place the panes once it knows the size of the area they live in.
+        onWidthChanged: viewportLayout.setPanelSize(width, height)
+        onHeightChanged: viewportLayout.setPanelSize(width, height)
+        Component.onCompleted: viewportLayout.setPanelSize(width, height)
 
-            // One pane per viewport of the current dataset. A viewport item belongs to the viewport of one dataset,
-            // so the panes bind themselves again whenever the frontend reports a new set of viewports.
-            Repeater {
-                model: viewportController.viewportCount
+        // One pane per viewport of the current dataset. A viewport item belongs to the viewport of one dataset, so the
+        // panes are created anew whenever the frontend reports a different set of viewports.
+        Repeater {
+            model: viewportLayout.panes
 
-                Item {
-                    id: viewportPane
-                    width: Math.round((viewportGrid.width - viewportGrid.spacing) / 2)
-                    height: Math.round((viewportGrid.height - viewportGrid.spacing) / 2)
+            delegate: ViewportPane {
+                controller: viewportController
+                layout: viewportLayout
+            }
+        }
 
-                    function bindViewport() {
-                        viewportController.createViewportItem(viewportPane, index)
-                    }
-                    Component.onCompleted: bindViewport()
+        // The handles between the panes. They are placed on top of the panes, so that a drag reaches the handle
+        // instead of the viewport below it.
+        Repeater {
+            model: viewportLayout.splitters
 
-                    Connections {
-                        target: viewportController
-                        function onViewportConfigurationChanged() { viewportPane.bindViewport() }
-                    }
-                }
+            delegate: ViewportSplitter {
+                layout: viewportLayout
             }
         }
     }

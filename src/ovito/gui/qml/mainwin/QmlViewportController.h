@@ -28,6 +28,18 @@ class OVITO_GUIQML_EXPORT QmlViewportController : public QObject
     /// The number of viewports of the current dataset, i.e. the number of viewport items the QML scene should have.
     Q_PROPERTY(int viewportCount READ viewportCount NOTIFY viewportConfigurationChanged)
 
+    /// The label of the operation the Undo command would revert, or an empty string if there is nothing to undo.
+    Q_PROPERTY(QString undoText READ undoText NOTIFY undoAvailableChanged)
+
+    /// The label of the operation the Redo command would reapply.
+    Q_PROPERTY(QString redoText READ redoText NOTIFY undoAvailableChanged)
+
+    /// Whether there is an operation to undo.
+    Q_PROPERTY(bool canUndo READ canUndo NOTIFY undoAvailableChanged)
+
+    /// Whether there is an operation to redo.
+    Q_PROPERTY(bool canRedo READ canRedo NOTIFY undoAvailableChanged)
+
 public:
 
     /// Constructor.
@@ -53,6 +65,24 @@ public:
     /// Gives the input focus to the viewport item displaying the given viewport.
     void setViewportInputFocus(Viewport* viewport);
 
+    /// Reverts the last operation of the undo stack, e.g. the last change of the pane sizes.
+    Q_INVOKABLE void undo();
+
+    /// Reapplies the operation that was reverted last.
+    Q_INVOKABLE void redo();
+
+    /// Returns whether there is an operation to undo.
+    bool canUndo() const;
+
+    /// Returns whether there is an operation to redo.
+    bool canRedo() const;
+
+    /// Returns the label of the operation the Undo command would revert.
+    QString undoText() const;
+
+    /// Returns the label of the operation the Redo command would reapply.
+    QString redoText() const;
+
 Q_SIGNALS:
 
     /// Is emitted when the status message has changed.
@@ -60,6 +90,9 @@ Q_SIGNALS:
 
     /// Is emitted when the current dataset or its set of viewports has changed.
     void viewportConfigurationChanged();
+
+    /// Is emitted when the undo stack changed, i.e. when the Undo/Redo commands became (un)available or changed their label.
+    void undoAvailableChanged();
 
 private:
 

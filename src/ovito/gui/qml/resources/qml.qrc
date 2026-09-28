@@ -3,6 +3,8 @@
 <qresource prefix="/ovito/gui/qml">
 	<file>Theme.qml</file>
 	<file>WorkbenchWindow.qml</file>
+	<file>ViewportPane.qml</file>
+	<file>ViewportSplitter.qml</file>
 </qresource>
 
 </RCC>

@@ -6,6 +6,7 @@
 
 #include <ovito/gui/qml/QmlFrontend.h>
 #include <ovito/gui/qml/mainwin/QmlViewportController.h>
+#include <ovito/gui/qml/mainwin/QmlViewportLayout.h>
 #include <ovito/gui/base/app/WorkbenchUI.h>
 
 namespace Ovito {
@@ -40,6 +41,9 @@ public:
 
     /// Returns the object that exposes the frontend to the QML scene.
     QmlViewportController* qmlController() const { return _qmlController; }
+
+    /// Returns the model that lays the viewport panes of the workbench out.
+    QmlViewportLayout* viewportLayout() const { return _viewportLayout; }
 
     /// Returns the status message currently displayed in the workbench window.
     const QString& statusMessage() const { return _statusMessage; }
@@ -80,6 +84,9 @@ private:
 
     /// The object exposing this frontend to the QML scene.
     QPointer<QmlViewportController> _qmlController;
+
+    /// The layout of the viewport panes displayed by this window.
+    QPointer<QmlViewportLayout> _viewportLayout;
 
     /// The message currently shown in the status line.
     QString _statusMessage;

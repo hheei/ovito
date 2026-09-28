@@ -27,6 +27,7 @@
 #include <QMouseEvent>
 #include <QDateTime>
 #include <QElapsedTimer>
+#include <ovito/core/app/undo/UndoStack.h>
 #include <QTimer>
 
 #include <functional>
@@ -51,17 +52,6 @@ void reportVerificationFailure(const QString& message)
 {
     verificationFailures++;
     qWarning() << "VERIFY_FAILED" << message;
-}
-
-/// Saves the current contents of the workbench window to an image file and quits the application.
-void captureWindowAndQuit(QmlMainWindowUI* ui, const QString& file)
-{
-    QImage image = ui->view() ? ui->view()->grabWindow() : QImage();
-    if(image.isNull() || !image.save(file))
-        reportVerificationFailure(QStringLiteral("Failed to capture the workbench window to %1").arg(file));
-    else
-        qInfo() << "Saved workbench window contents to" << file;
-    QCoreApplication::exit(verificationFailures == 0 ? 0 : 1);
 }
 
 /// Runs the given function after the specified delay.
@@ -318,11 +308,20 @@ void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void(
             const QPointF clickPos(itemPos);
             const std::optional<ViewportWindow::PickResult> pickBeforeClick = viewportWindow->pick(clickPos);
             qInfo() << "PICK_TEST the pick before the synthetic click" << (pickBeforeClick ? "hit" : "missed");
-            const QPointF globalPos = item->mapToGlobal(clickPos);
+            // The click goes to the viewport item that exists now. The item the poll started with may have been
+            // replaced in the meantime, because the workbench rebuilds the panes of its viewport area when the
+            // layout changes, and sending an event to a destroyed item would crash the test.
+            QuickViewportItem* clickTarget = firstViewportItem(ui);
+            if(!clickTarget) {
+                reportVerificationFailure(QStringLiteral("synthetic click: the workbench has no viewport item"));
+                continuation();
+                return;
+            }
+            const QPointF globalPos = clickTarget->mapToGlobal(clickPos);
             QMouseEvent pressEvent(QEvent::MouseButtonPress, clickPos, globalPos, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-            QCoreApplication::sendEvent(item, &pressEvent);
+            QCoreApplication::sendEvent(clickTarget, &pressEvent);
             QMouseEvent releaseEvent(QEvent::MouseButtonRelease, clickPos, globalPos, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-            QCoreApplication::sendEvent(item, &releaseEvent);
+            QCoreApplication::sendEvent(clickTarget, &releaseEvent);
 
             if(Viewport* viewport = viewportWindow->viewport()) {
                 if(Scene* scene = viewport->scene()) {
@@ -393,6 +392,143 @@ void runResizeTest(QmlMainWindowUI* ui, const QSize& newSize, const QPoint& prob
     // Poll immediately: the picking buffer is only used once the viewport geometry has been updated, so the
     // measured time is the delay until a picking buffer exists for the resized viewport.
     waitForPickingBuffer(ui, probePos, QStringLiteral("after resize"), changeTime, continuation, previousItemSize);
+}
+
+/// Reports where the cameras of the viewports are looking from. The framing of a data set depends on the application
+/// of the importer's "zoom to scene extents" request, which is easy to lose when a viewport window does not exist yet
+/// at the time the request is made.
+void reportCameras(QmlMainWindowUI* ui, const QString& when)
+{
+    for(QuickViewportItem* item : viewportItems(ui)) {
+        QuickViewportWindow* viewportWindow = item->viewportWindow();
+        if(!viewportWindow || !viewportWindow->viewport())
+            continue;
+        const Vector3 cameraPosition = viewportWindow->viewport()->cameraTransformation().translation();
+        qInfo() << "CAMERA" << when << "item" << item->size() << "position" << cameraPosition << "distance" << cameraPosition.length();
+    }
+}
+
+/// A readable snapshot of the pane geometry of the viewport area, used to compare the layout before and after
+/// a splitter drag and an undo.
+QString layoutSnapshot(QmlViewportLayout* layout, QString* visiblePanes = nullptr)
+{
+    QStringList parts;
+    int visibleCount = 0;
+    for(const QVariant& entry : layout->panes()) {
+        auto* pane = qobject_cast<QmlViewportPane*>(entry.value<QObject*>());
+        if(!pane)
+            continue;
+        if(pane->isVisible())
+            visibleCount++;
+        parts << QStringLiteral("%1[%2,%3 %4x%5]%6")
+            .arg(pane->viewportIndex()).arg(pane->x()).arg(pane->y()).arg(pane->width()).arg(pane->height())
+            .arg(pane->isVisible() ? QString() : QStringLiteral(" hidden"));
+    }
+    if(visiblePanes)
+        *visiblePanes = QString::number(visibleCount);
+    return parts.join(QLatin1Char(' '));
+}
+
+/// Verifies the viewport area of the workbench shell: the panes come from the layout tree of the dataset, dragging a
+/// handle resizes them through the undo system, and maximizing a viewport keeps exactly one pane visible.
+void runLayoutTest(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    QmlViewportLayout* layout = ui->viewportLayout();
+    QQuickView* view = ui->view();
+    QQuickWindow* window = view;
+    // The viewport area is the item the layout model places the panes in; its coordinates are the ones the handles
+    // report, which is why the mouse events are translated into window coordinates through it.
+    QQuickItem* hostItem = view && view->rootObject() ?
+        view->rootObject()->findChild<QQuickItem*>(QStringLiteral("viewportHost")) : nullptr;
+    if(!layout || !window || !hostItem) {
+        reportVerificationFailure(QStringLiteral("layout check: the workbench exposes no viewport area"));
+        continuation();
+        return;
+    }
+
+    reportCameras(ui, QStringLiteral("in the layout check"));
+
+    const QVariantList panes = layout->panes();
+    const QVariantList splitters = layout->splitters();
+    qInfo() << "LAYOUT_TEST the viewport area holds" << panes.size() << "panes and" << splitters.size() << "handles"
+            << "in an area of" << hostItem->size();
+    for(QuickViewportItem* item : viewportItems(ui)) {
+        qInfo() << "LAYOUT_ITEM" << item->size() << item->mapToScene(QPointF(0, 0)) << "visible=" << item->isVisible()
+                << "viewportWindow=" << (item->viewportWindow() != nullptr);
+    }
+    for(int index = 0; index < panes.size(); index++) {
+        if(auto* pane = qobject_cast<QmlViewportPane*>(panes[index].value<QObject*>())) {
+            qInfo() << "LAYOUT_PANE" << index << QStringLiteral("rect=(%1,%2 %3x%4)").arg(pane->x()).arg(pane->y()).arg(pane->width()).arg(pane->height())
+                    << "active=" << pane->isActive() << "maximized=" << pane->isMaximized() << "visible=" << pane->isVisible();
+        }
+    }
+    for(int index = 0; index < splitters.size(); index++) {
+        if(auto* splitter = qobject_cast<QmlViewportSplitter*>(splitters[index].value<QObject*>())) {
+            qInfo() << "LAYOUT_SPLITTER" << index << (splitter->isHorizontal() ? "horizontal" : "vertical")
+                    << QStringLiteral("rect=(%1,%2 %3x%4)").arg(splitter->x()).arg(splitter->y()).arg(splitter->width()).arg(splitter->height());
+        }
+    }
+
+    // The panes must add up to the layout tree of the dataset and must not overlap the handles.
+    if(panes.size() < 2 || splitters.isEmpty()) {
+        reportVerificationFailure(QStringLiteral("layout check: the default viewport layout should have several panes and handles"));
+        continuation();
+        return;
+    }
+
+    const QString before = layoutSnapshot(layout);
+
+    // Drag the first handle with synthetic mouse events, i.e. through the QML mouse area a user would grab - not by
+    // calling the layout model directly, so that the QML wiring is part of what is verified.
+    auto* handle = qobject_cast<QmlViewportSplitter*>(splitters.front().value<QObject*>());
+    const QPointF handleCenter(handle->x() + 0.5 * handle->width(), handle->y() + 0.5 * handle->height());
+    const QPointF dragOffset = handle->isHorizontal() ? QPointF(100, 0) : QPointF(0, 100);
+    const auto sendMouseEvent = [ui, window, hostItem](QEvent::Type type, Qt::MouseButton button, Qt::MouseButtons buttons, const QPointF& panelPosition) {
+        const QPointF windowPosition = hostItem->mapToScene(panelPosition);
+        QMouseEvent event(type, windowPosition, window->mapToGlobal(windowPosition), button, buttons, Qt::NoModifier);
+        QCoreApplication::sendEvent(window, &event);
+    };
+    sendMouseEvent(QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton, handleCenter);
+    sendMouseEvent(QEvent::MouseMove, Qt::NoButton, Qt::LeftButton, handleCenter + 0.5 * dragOffset);
+    sendMouseEvent(QEvent::MouseMove, Qt::NoButton, Qt::LeftButton, handleCenter + dragOffset);
+    sendMouseEvent(QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton, handleCenter + dragOffset);
+
+    const QString afterDrag = layoutSnapshot(layout);
+    if(afterDrag == before)
+        reportVerificationFailure(QStringLiteral("layout check: dragging a handle did not change the pane sizes"));
+
+    // One drag is one undoable operation, and undoing it has to restore the exact pane sizes.
+    UndoStack* undoStack = ui->undoStack();
+    if(!undoStack || !undoStack->canUndo())
+        reportVerificationFailure(QStringLiteral("layout check: the drag was not recorded as an undoable operation"));
+    else
+        qInfo() << "LAYOUT_UNDO the drag produced the undo step" << undoStack->undoText();
+
+    ui->qmlController()->undo();
+    if(layoutSnapshot(layout) != before)
+        reportVerificationFailure(QStringLiteral("layout check: undo did not restore the pane sizes of the drag"));
+    ui->qmlController()->redo();
+    if(layoutSnapshot(layout) != afterDrag)
+        reportVerificationFailure(QStringLiteral("layout check: redo did not restore the dragged pane sizes"));
+    ui->qmlController()->undo();
+    if(layoutSnapshot(layout) != before)
+        reportVerificationFailure(QStringLiteral("layout check: a second undo did not return to the layout from before the drag"));
+    qInfo() << "LAYOUT_UNDO the drag was undone and redone with the pane sizes restored";
+
+    // Maximizing keeps exactly one pane visible and restores the layout afterwards.
+    const int activeIndex = layout->activeViewportIndex();
+    QString visiblePanes;
+    layout->toggleMaximize(activeIndex);
+    layoutSnapshot(layout, &visiblePanes);
+    if(visiblePanes != QStringLiteral("1"))
+        reportVerificationFailure(QStringLiteral("layout check: maximizing left %1 panes visible").arg(visiblePanes));
+    else
+        qInfo() << "LAYOUT_MAXIMIZE viewport" << activeIndex << "fills the viewport area while the other panes are hidden";
+    layout->toggleMaximize(activeIndex);
+    if(layoutSnapshot(layout) != before)
+        reportVerificationFailure(QStringLiteral("layout check: restoring the layout did not bring the pane sizes back"));
+
+    continuation();
 }
 
 /// Measures the frame rate the viewports achieve when frames are requested continuously, which is what animation
@@ -494,12 +630,13 @@ protected:
         // application class when the runtime frontend selection is implemented (Phase 2).
         parser.addOption(QCommandLineOption(QStringLiteral("noviewports"),
             tr("Do not create any viewports (for debugging purposes only).")));
-        parser.addOption(QCommandLineOption(QStringLiteral("qml-capture"),
-            tr("Render the workbench window and save it to the given image file, then quit."), QStringLiteral("FILE")));
-        parser.addOption(QCommandLineOption(QStringLiteral("qml-capture-delay"),
-            tr("Time in milliseconds to wait before capturing the window contents."), QStringLiteral("MS")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-hold-ms"),
+            tr("Keep the workbench window open for the given number of milliseconds after the verification steps, "
+               "so that a screenshot can be taken of it, and then quit."), QStringLiteral("MS")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-startup-delay"),
+            tr("Time in milliseconds to wait after startup before the verification steps begin."), QStringLiteral("MS")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-lifecycle-cycles"),
-            tr("Number of scene graph resource release/rebuild cycles to perform before capturing the window."), QStringLiteral("N")));
+            tr("Number of scene graph resource release/rebuild cycles to perform before the window is closed."), QStringLiteral("N")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-pick"),
             tr("Verify object picking at the given position (x,y) of the first viewport item and print the result."),
             QStringLiteral("X,Y")));
@@ -512,6 +649,8 @@ protected:
         parser.addOption(QCommandLineOption(QStringLiteral("qml-resize"),
             tr("Resize the workbench window to the given size (WxH) and verify that rendering and picking recover."),
             QStringLiteral("WxH")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-layout-check"),
+            tr("Verify the viewport layout: pane geometry, undoable splitter drags and maximizing a viewport.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-hide-show"),
             tr("Hide the viewport items for a moment and show them again, verifying that rendering and picking recover.")));
     }
@@ -556,6 +695,10 @@ protected:
             }
             importUrls.push_back(Application::instance()->fileManager().urlFromUserInput(argument));
         }
+        // The importer asks the viewports to zoom to the scene extents. That request reaches only viewport windows that
+        // exist at that moment, so this records whether the workbench had already created them.
+        qInfo() << "BOOTSTRAP the workbench holds" << viewportItems(mainWinUI).size() << "viewport items before the import";
+
         mainWinUI->handleExceptions([&]() {
             if(!importUrls.empty())
                 mainWinUI->importFiles(importUrls);
@@ -586,33 +729,42 @@ protected:
 
         // Optional capture mode: save the contents of the workbench window to an image file once all
         // verification steps are done.
-        const QString captureFile = cmdLineParser().value(QStringLiteral("qml-capture"));
         const bool verifyPicking = pickPosition.has_value();
         const int frameStatsDuration = cmdLineParser().value(QStringLiteral("qml-frame-stats")).toInt();
         const bool hideShowTest = cmdLineParser().isSet(QStringLiteral("qml-hide-show"));
+        const bool layoutCheck = cmdLineParser().isSet(QStringLiteral("qml-layout-check"));
         const int lifecycleCycles = cmdLineParser().value(QStringLiteral("qml-lifecycle-cycles")).toInt();
         QSize resizeSize;
         const QStringList resizeArguments = cmdLineParser().value(QStringLiteral("qml-resize")).split(QLatin1Char('x'));
         if(resizeArguments.size() == 2)
             resizeSize = QSize(resizeArguments[0].toInt(), resizeArguments[1].toInt());
 
-        // Interactive mode: without a capture request or a verification option, keep the window open.
-        if(captureFile.isEmpty() && !verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0)
+        // A screenshot of the workbench is taken from the X server while the window is held open; see
+        // docs/design/UI_TEST_ENV.md for the ffmpeg command. It cannot be taken from inside the process, because
+        // QQuickWindow::grabWindow() is not usable with the QQuickRhiItem viewports of the workbench.
+        const int holdMs = cmdLineParser().value(QStringLiteral("qml-hold-ms")).toInt();
+
+        // Interactive mode: without a verification option, keep the window open.
+        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck)
             return;
 
-        int delay = cmdLineParser().value(QStringLiteral("qml-capture-delay")).toInt();
+        int delay = cmdLineParser().value(QStringLiteral("qml-startup-delay")).toInt();
         if(delay <= 0)
             delay = 3000;
 
-        _verificationFinished = [ui = mainWinUI, captureFile]() {
-            if(captureFile.isEmpty())
+        _verificationFinished = [ui = mainWinUI, holdMs]() {
+            qInfo() << "VERIFICATION_DONE with" << verificationFailures << "failed check(s)";
+            if(holdMs <= 0) {
                 QCoreApplication::exit(verificationFailures == 0 ? 0 : 1);
-            else
-                captureWindowAndQuit(ui, captureFile);
+                return;
+            }
+            // Keep the window open, so that the caller can take a screenshot of it, and quit afterwards.
+            scheduleDelayed(ui, holdMs, []() { QCoreApplication::exit(verificationFailures == 0 ? 0 : 1); });
         };
 
         // Assemble the verification steps. The delay runs first, so that the imported data set and the initial
-        // frame graphs are ready before anything is measured.
+        // frame graphs are ready before anything is measured. The layout check comes before the steps that release and
+        // rebuild the graphics resources of the viewports, because those are the stress steps.
         if(verifyPicking) {
             // Pick as early as possible, while the imported scene is likely still being evaluated. The picking
             // pass is an asynchronous offscreen operation; it must neither block the GUI thread nor deadlock with
@@ -624,6 +776,7 @@ protected:
                         if(QuickViewportWindow* viewportWindow = item->viewportWindow()) {
                             const PickProbe probe = probePicking(viewportWindow, item->size(), pickPos);
                             reportPicking(probe, QStringLiteral("during scene evaluation"));
+                    reportCameras(ui, QStringLiteral("right after the import"));
                         }
                     }
                     qInfo() << "PICK_TEST the probe during scene evaluation returned after"
@@ -638,6 +791,11 @@ protected:
         if(frameStatsDuration > 0) {
             _verificationSteps.push_back([ui = mainWinUI, frameStatsDuration](std::function<void()> next) {
                 measureFrameRate(ui, frameStatsDuration, std::move(next));
+            });
+        }
+        if(layoutCheck) {
+            _verificationSteps.push_back([ui = mainWinUI](std::function<void()> next) {
+                runLayoutTest(ui, std::move(next));
             });
         }
         if(lifecycleCycles > 0) {

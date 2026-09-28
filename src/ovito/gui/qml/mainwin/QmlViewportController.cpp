@@ -6,6 +6,8 @@
 #include <ovito/gui/qml/mainwin/QmlViewportController.h>
 #include <ovito/gui/qml/viewport/QuickViewportItem.h>
 #include <ovito/gui/qml/viewport/QuickViewportWindow.h>
+#include <ovito/gui/base/app/GuiTaskScope.h>
+#include <ovito/core/app/undo/UndoStack.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
 #include <ovito/core/viewport/Viewport.h>
@@ -27,6 +29,14 @@ QmlViewportController::QmlViewportController(QmlMainWindowUI& ui, QObject* paren
         discardViewportItems();
         Q_EMIT viewportConfigurationChanged();
     });
+
+    // Undo and redo of the workbench are the same undo stack the pipeline and property commands will use in the later
+    // phases, so the QML scene is told whenever the stack changes.
+    if(UndoStack* undoStack = ui.undoStack()) {
+        connect(undoStack, &UndoStack::indexChanged, this, &QmlViewportController::undoAvailableChanged);
+        connect(undoStack, &UndoStack::undoTextChanged, this, &QmlViewportController::undoAvailableChanged);
+        connect(undoStack, &UndoStack::redoTextChanged, this, &QmlViewportController::undoAvailableChanged);
+    }
 }
 
 /******************************************************************************
@@ -61,19 +71,28 @@ int QmlViewportController::viewportCount() const
 QQuickItem* QmlViewportController::createViewportItem(QQuickItem* parentItem, int viewportIndex)
 {
     OVITO_ASSERT(parentItem);
-    OVITO_ASSERT(viewportIndex >= 0);
+
+    // QML calls this while it instantiates the workbench, which is a callback of the presentation layer and therefore
+    // has no task context of its own; creating the renderer and the viewport item needs one.
+    GuiTaskScope taskScope(_ui);
 
     ViewportConfiguration* viewportConfig = _ui.datasetContainer().activeViewportConfig();
-    if(!viewportConfig || viewportIndex >= viewportConfig->viewports().size())
+    // The index comes from the QML scene, so it is validated instead of trusted: an index that does not belong to the
+    // current set of viewports would otherwise be used to index into the list of viewport items.
+    if(!parentItem || !viewportConfig || viewportIndex < 0 || viewportIndex >= (int)viewportConfig->viewports().size())
         return nullptr;
 
     Viewport* viewport = viewportConfig->viewports()[viewportIndex].get();
 
-    // Discard a viewport item that is still showing another viewport (or another dataset).
-    if(auto* oldItem = viewportItem(viewportIndex)) {
+    // Replace the viewport item that is still showing another viewport, or that belongs to a pane delegate the scene
+    // has rebuilt. The item cannot simply be destroyed here: QML calls this while it creates the workbench or while it
+    // processes an event that may be delivered to the item being replaced, and destroying an object underneath its own
+    // event handling crashes the process. Retiring it with deleteLater() also keeps it alive long enough for the pane
+    // delegate that used to own it to be gone.
+    if(QuickViewportItem* existingItem = viewportItem(viewportIndex)) {
         _viewportItems[viewportIndex].clear();
-        oldItem->setParentItem(nullptr);
-        delete oldItem;
+        existingItem->setParentItem(nullptr);
+        existingItem->deleteLater();
     }
 
     auto* item = new QuickViewportItem(parentItem);
@@ -85,12 +104,13 @@ QQuickItem* QmlViewportController::createViewportItem(QQuickItem* parentItem, in
 
     item->initializeWindow(viewport, _ui, _interactiveRenderer);
 
-    // Keep the item sized to the area reserved for it in the QML layout.
+    // Keep the item sized to the area reserved for it in the QML layout. The item is the context of the connections, so
+    // that they die with it instead of leaving a dangling reference behind in a later resize of the pane.
     const auto resizeItem = [item, parentItem]() {
         item->setSize(parentItem->size());
     };
-    connect(parentItem, &QQuickItem::widthChanged, this, resizeItem);
-    connect(parentItem, &QQuickItem::heightChanged, this, resizeItem);
+    connect(parentItem, &QQuickItem::widthChanged, item, resizeItem);
+    connect(parentItem, &QQuickItem::heightChanged, item, resizeItem);
     resizeItem();
 
     if(_viewportItems.size() <= viewportIndex)
@@ -114,10 +134,13 @@ QuickViewportItem* QmlViewportController::viewportItem(int viewportIndex) const
 ******************************************************************************/
 void QmlViewportController::discardViewportItems()
 {
+    // The items are retired with deleteLater(): they are destroyed together with the dataset of the viewports they
+    // show, which may happen while an event is being delivered to one of them, and destroying such an item right away
+    // crashes the process.
     for(QPointer<QuickViewportItem>& item : _viewportItems) {
         if(QuickViewportItem* viewportItem = item.data()) {
             viewportItem->setParentItem(nullptr);
-            delete viewportItem;
+            viewportItem->deleteLater();
         }
     }
     _viewportItems.clear();
@@ -136,6 +159,62 @@ void QmlViewportController::setViewportInputFocus(Viewport* viewport)
             break;
         }
     }
+}
+
+/******************************************************************************
+* Reverts the last operation of the undo stack.
+******************************************************************************/
+void QmlViewportController::undo()
+{
+    GuiTaskScope taskScope(_ui);
+    if(UndoStack* undoStack = _ui.undoStack())
+        undoStack->undo();
+}
+
+/******************************************************************************
+* Reapplies the operation that was reverted last.
+******************************************************************************/
+void QmlViewportController::redo()
+{
+    GuiTaskScope taskScope(_ui);
+    if(UndoStack* undoStack = _ui.undoStack())
+        undoStack->redo();
+}
+
+/******************************************************************************
+* Returns whether there is an operation to undo.
+******************************************************************************/
+bool QmlViewportController::canUndo() const
+{
+    UndoStack* undoStack = _ui.undoStack();
+    return undoStack && undoStack->canUndo();
+}
+
+/******************************************************************************
+* Returns whether there is an operation to redo.
+******************************************************************************/
+bool QmlViewportController::canRedo() const
+{
+    UndoStack* undoStack = _ui.undoStack();
+    return undoStack && undoStack->canRedo();
+}
+
+/******************************************************************************
+* Returns the label of the operation the Undo command would revert.
+******************************************************************************/
+QString QmlViewportController::undoText() const
+{
+    UndoStack* undoStack = _ui.undoStack();
+    return undoStack ? undoStack->undoText() : QString();
+}
+
+/******************************************************************************
+* Returns the label of the operation the Redo command would reapply.
+******************************************************************************/
+QString QmlViewportController::redoText() const
+{
+    UndoStack* undoStack = _ui.undoStack();
+    return undoStack ? undoStack->redoText() : QString();
 }
 
 }   // End of namespace

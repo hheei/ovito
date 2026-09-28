@@ -1,0 +1,49 @@
+// SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
+// SPDX-License-Identifier: GPL-3.0-only OR MIT
+
+#pragma once
+
+
+#include <ovito/core/Core.h>
+#include <ovito/core/utilities/concurrent/MainThreadOperation.h>
+
+namespace Ovito {
+
+/**
+ * \brief Opens a task context for work that a callback of the presentation layer starts.
+ *
+ * Most of OVITO's core - creating objects, preparing the scene, reading the current animation time, changing properties
+ * through the undo system - expects to run inside a task that knows the UserInterface to report progress and errors to.
+ * The presentation layer, however, runs callbacks of the windowing toolkit: a Qt signal handler, a QML file that is
+ * being instantiated, or a timer. Those have no task context, and code that creates an object from such a callback -
+ * an interactive SceneRenderer, for instance - fails or crashes without one.
+ *
+ * Such a callback therefore opens a task context for the duration of its work:
+ *
+ * \code
+ * void SomeWidget::somethingHappened() {
+ *     GuiTaskScope taskScope(ui());
+ *     ...     // core calls that need a task context
+ * }
+ * \endcode
+ *
+ * The scope is bound to the task that is current when the callback runs, if there is one, so nesting it inside an
+ * operation that already has a context is harmless.
+ *
+ * See item O8 in docs/design/UI_PHASE0_AUDIT.md.
+ */
+class OVITO_GUIBASE_EXPORT GuiTaskScope
+{
+public:
+
+    /// Opens a task context for the given user interface.
+    explicit GuiTaskScope(UserInterface& userInterface, bool isInteractive = true) :
+        _operation(userInterface, MainThreadOperation::Bound, isInteractive) {}
+
+private:
+
+    /// The main-thread operation that provides the task context.
+    MainThreadOperation _operation;
+};
+
+}   // End of namespace

@@ -3,17 +3,41 @@
 
 #include <ovito/gui/qml/QmlFrontend.h>
 #include <ovito/gui/qml/mainwin/QmlViewportController.h>
+#include <ovito/gui/qml/mainwin/QmlViewportLayout.h>
 #include <ovito/gui/base/actions/ActionManager.h>
 #include <ovito/core/app/Application.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
 #include <ovito/core/viewport/Viewport.h>
 #include <ovito/core/viewport/ViewportConfiguration.h>
+#include <QtQml/qqml.h>
 #include "QmlMainWindowUI.h"
 
 namespace Ovito {
 
 IMPLEMENT_CREATABLE_OVITO_CLASS(QmlMainWindowUI);
+
+/******************************************************************************
+* Registers the C++ classes of the workbench shell with the QML type system.
+******************************************************************************/
+static void registerQmlTypes()
+{
+    // The classes are not creatable from QML: the workbench shell gets its panes, handles and controllers from the
+    // frontend. Registering them nevertheless makes the properties of the shell's QML components statically typed, so
+    // that a typo in a property name is an error instead of a silently broken binding.
+    static const bool registered = []() {
+        qmlRegisterUncreatableType<QmlViewportPane>("Ovito.Qml", 1, 0, "ViewportPane",
+            QStringLiteral("Panes are created by the viewport layout model."));
+        qmlRegisterUncreatableType<QmlViewportSplitter>("Ovito.Qml", 1, 0, "ViewportSplitter",
+            QStringLiteral("Handles are created by the viewport layout model."));
+        qmlRegisterUncreatableType<QmlViewportLayout>("Ovito.Qml", 1, 0, "ViewportLayout",
+            QStringLiteral("There is one viewport layout per workbench window."));
+        qmlRegisterUncreatableType<QmlViewportController>("Ovito.Qml", 1, 0, "ViewportController",
+            QStringLiteral("There is one viewport controller per workbench window."));
+        return true;
+    }();
+    Q_UNUSED(registered);
+}
 
 /******************************************************************************
 * Constructor.
@@ -48,11 +72,16 @@ void QmlMainWindowUI::initializeWindow()
     // gui/base module; the window owns them because it is a QObject.
     initializeWorkbench(view);
 
-    // Create the object that the QML scene talks to.
+    // Create the objects that the QML scene talks to: the controller that owns the viewport items, and the model that
+    // lays the panes of the viewport layout out.
     _qmlController = new QmlViewportController(*this, view);
+    _viewportLayout = new QmlViewportLayout(*this, view);
 
-    // Make the C++ side of the frontend available to QML.
+    // Make the C++ side of the frontend available to QML. The types have to be registered before the QML file that uses
+    // them is loaded.
+    registerQmlTypes();
     view->rootContext()->setContextProperty(QStringLiteral("viewportController"), _qmlController);
+    view->rootContext()->setContextProperty(QStringLiteral("viewportLayout"), _viewportLayout);
 
     // Create a default dataset if no dataset has been loaded yet, so that the workbench has viewports to display.
     initializeDataset();
