@@ -83,6 +83,27 @@ bool hasSystemVulkanDriver()
 #endif
 
 /******************************************************************************
+* Requests the Vulkan API version OVITO's instances are created with.
+*
+* A QVulkanInstance requests no particular API version by default, so the loader hands out the oldest one (1.0). That
+* is both wrong (the validation layers report VUID-VkApplicationInfo-apiVersion for the resulting all-zero struct) and
+* unusable on drivers whose 1.0 support is nominal, where vkCreateInstance() then fails with
+* VK_ERROR_INCOMPATIBLE_DRIVER - which is how the software rasterizer behaves. Ask for the newest version the loader
+* offers, capped at the version the shaders and QRhi are built for.
+******************************************************************************/
+static void configureVulkanApiVersion(QVulkanInstance& instance)
+{
+    const QVersionNumber maximumVersion(1, 3);
+
+    QVersionNumber version = instance.supportedApiVersion();
+    if(version.isNull() || version < QVersionNumber(1, 1))
+        version = QVersionNumber(1, 1);
+    else if(version > maximumVersion)
+        version = maximumVersion;
+    instance.setApiVersion(version);
+}
+
+/******************************************************************************
 * Makes OVITO's bundled software Vulkan driver available, but only on systems
 * that provide no Vulkan driver of their own.
 *
@@ -167,6 +188,7 @@ QList<QRhiDriverInfo> RenderThread::enumerateAdapters(QRhi::Implementation graph
         // A temporary Vulkan instance is needed for enumeration.
         QVulkanInstance tempInst;
         tempInst.setExtensions(QRhiVulkanInitParams::preferredInstanceExtensions());
+        configureVulkanApiVersion(tempInst);
         if(tempInst.create()) {
             QRhiVulkanInitParams params;
             params.inst = &tempInst;
@@ -257,6 +279,7 @@ RenderThread::RenderThread(UserInterface& ui, QRhi::Implementation graphicsApi)
         instExts.append(QByteArrayLiteral("VK_KHR_external_memory_capabilities"));
 #endif
         _vulkanInstance->setExtensions(instExts);
+        configureVulkanApiVersion(*_vulkanInstance);
 #ifdef OVITO_DEBUG
         _vulkanInstance->setLayers({ "VK_LAYER_KHRONOS_validation" });
 #endif
