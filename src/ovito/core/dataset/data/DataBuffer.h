@@ -20,6 +20,12 @@ enum class access_mode
 };
 
 namespace detail {
+    /// Helper for a static_assert() in a branch of an if constexpr that is never taken: the condition must depend
+    /// on a template parameter. A plain `static_assert(false, ...)` only became valid with the C++23 resolution of
+    /// CWG 2518, and compilers without it reject the discarded branch as well.
+    template<typename...>
+    inline constexpr bool always_false_v = false;
+
     // Forward declarations:
     template<typename BufferType, bool StrongReference, Ovito::access_mode accessmode> class BufferAccessBase;
     template<typename T, typename BufferType, bool StrongReference, Ovito::access_mode accessmode> class BufferAccessTyped;
@@ -702,7 +708,7 @@ inline void DataBuffer::copyTo(Iter iter) const
                 *iter++ = QString::number(*v++);
             }
             else {
-                static_assert(false, "DataBuffer::copyTo(): Cannot convert data type for output iterator.");
+                static_assert(detail::always_false_v<Iter>, "DataBuffer::copyTo(): Cannot convert data type for output iterator.");
             }
         }
     });
@@ -754,7 +760,7 @@ inline void DataBuffer::copyComponentTo(Iter iter, size_t component) const
                 *iter++ = QString::number(*v++);
             }
             else {
-                static_assert(false, "DataBuffer::copyComponentTo(): Cannot convert data type for output iterator.");
+                static_assert(detail::always_false_v<Iter>, "DataBuffer::copyComponentTo(): Cannot convert data type for output iterator.");
             }
         }
     });
