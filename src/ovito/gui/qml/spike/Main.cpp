@@ -25,6 +25,7 @@
 #include <ovito/core/utilities/Exception.h>
 
 #include <QMouseEvent>
+#include <QDateTime>
 #include <QElapsedTimer>
 #include <QTimer>
 
@@ -74,35 +75,104 @@ QList<QuickViewportItem*> viewportItems(QmlMainWindowUI* ui)
     return items;
 }
 
-/// Picks at a grid of positions around the given location and reports the outcome.
-void reportPickingResults(QuickViewportWindow* viewportWindow, const QSizeF& itemSize, const QPoint& itemPos, const char* passName)
+/// The outcome of probing the picking buffer at a set of positions.
+struct PickProbe
 {
-    int hitCount = 0, testedCount = 0;
-    std::optional<ViewportWindow::PickResult> firstHit;
-    for(int dy = -8; dy <= 8; dy += 4) {
-        for(int dx = -8; dx <= 8; dx += 4) {
-            const QPointF pos = QPointF(itemPos) + QPointF(dx, dy);
+    int tested = 0;
+    int hits = 0;
+    std::optional<ViewportWindow::PickResult> example;
+};
+
+/// Picks at a grid of positions around the given location of a viewport item.
+PickProbe probePicking(QuickViewportWindow* viewportWindow, const QSizeF& itemSize, const QPoint& center, int extent = 8, int spacing = 4)
+{
+    PickProbe probe;
+    for(int dy = -extent; dy <= extent; dy += spacing) {
+        for(int dx = -extent; dx <= extent; dx += spacing) {
+            const QPointF pos = QPointF(center) + QPointF(dx, dy);
             if(pos.x() < 0 || pos.y() < 0 || pos.x() >= itemSize.width() || pos.y() >= itemSize.height())
                 continue;
-            testedCount++;
+            probe.tested++;
             if(auto result = viewportWindow->pick(pos)) {
-                hitCount++;
-                if(!firstHit)
-                    firstHit = std::move(result);
+                probe.hits++;
+                if(!probe.example)
+                    probe.example = std::move(result);
             }
         }
     }
+    return probe;
+}
 
-    if(firstHit) {
-        const SceneNode* node = firstHit->sceneNode();
-        qInfo() << "PICK_TEST" << passName << ":" << hitCount << "of" << testedCount << "positions hit;"
+/// Prints the outcome of a picking probe.
+void reportPicking(const PickProbe& probe, const QString& what)
+{
+    if(probe.example) {
+        const SceneNode* node = probe.example->sceneNode();
+        qInfo() << "PICK_TEST" << what << ":" << probe.hits << "of" << probe.tested << "positions hit;"
                 << "example: node" << (node ? node->objectTitle() : QStringLiteral("<none>"))
-                << "subobject" << firstHit->subobjectId()
-                << "hit location" << firstHit->hitLocation().x() << firstHit->hitLocation().y() << firstHit->hitLocation().z();
+                << "subobject" << probe.example->subobjectId()
+                << "hit location" << probe.example->hitLocation().x() << probe.example->hitLocation().y() << probe.example->hitLocation().z();
     }
     else {
-        qInfo() << "PICK_TEST" << passName << ":" << hitCount << "of" << testedCount << "positions hit";
+        qInfo() << "PICK_TEST" << what << ":" << probe.hits << "of" << probe.tested << "positions hit";
     }
+}
+
+/// Returns the first viewport item of the QML scene, or null if the scene has none.
+QuickViewportItem* firstViewportItem(QmlMainWindowUI* ui)
+{
+    const QList<QuickViewportItem*> items = viewportItems(ui);
+    return items.isEmpty() ? nullptr : items.front();
+}
+
+/// Evaluates a condition on the GUI thread repeatedly until it becomes true or the timeout expires.
+/// \param done  Receives true when the condition was satisfied and false on timeout.
+void pollUntil(QmlMainWindowUI* ui, int intervalMs, int timeoutMs, std::function<bool()> condition, std::function<void(bool)> done)
+{
+    QQuickWindow* window = ui->view();
+    if(!window) {
+        done(false);
+        return;
+    }
+    auto* timer = new QTimer(window);
+    timer->setInterval(intervalMs);
+    QObject::connect(timer, &QTimer::timeout, window,
+        [timer, started = QDateTime::currentMSecsSinceEpoch(), timeoutMs, condition = std::move(condition), done = std::move(done)]() mutable {
+            if(!condition() && QDateTime::currentMSecsSinceEpoch() - started < timeoutMs)
+                return;
+            const bool satisfied = condition();
+            timer->stop();
+            timer->deleteLater();
+            done(satisfied);
+        });
+    timer->start();
+}
+
+/// Waits until the picking buffer has been re-rendered for the current viewport state after the viewport changed
+/// (a resize or a hide/show cycle) and reports how long that took, counted from the moment the change was made.
+void waitForPickingBuffer(QmlMainWindowUI* ui, const QPoint& probePos, const QString& what, QDateTime changeTime,
+                          std::function<void()> continuation, QSizeF previousItemSize = {})
+{
+    const QDateTime started = std::move(changeTime);
+    pollUntil(ui, 10, 5000,
+        [ui, probePos, previousItemSize]() {
+            if(QuickViewportItem* item = firstViewportItem(ui)) {
+                // After a resize the viewport geometry must have been updated before a picking buffer for the new
+                // size can exist; without this check the check below would be satisfied by the buffer of the old size.
+                if(previousItemSize.isValid() && item->size() == previousItemSize)
+                    return false;
+                if(QuickViewportWindow* viewportWindow = item->viewportWindow())
+                    return probePicking(viewportWindow, item->size(), probePos).hits > 0;
+            }
+            return false;
+        },
+        [what, started, continuation](bool satisfied) {
+            if(satisfied)
+                qInfo() << "PICK_TEST" << what << ": picking works again after" << started.msecsTo(QDateTime::currentDateTime()) << "ms";
+            else
+                qWarning() << "PICK_TEST" << what << ": no object was picked within 5 s";
+            continuation();
+        });
 }
 
 /// Verifies object picking at the given position of the first viewport item.
@@ -113,78 +183,158 @@ void reportPickingResults(QuickViewportWindow* viewportWindow, const QSizeF& ite
 /// through the regular input mode path.
 void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void()> continuation)
 {
-    const QList<QuickViewportItem*> items = viewportItems(ui);
-    if(items.isEmpty()) {
+    QuickViewportItem* item = firstViewportItem(ui);
+    QuickViewportWindow* viewportWindow = item ? item->viewportWindow() : nullptr;
+    if(!viewportWindow) {
         qWarning() << "PICK_TEST no viewport item found";
         continuation();
         return;
     }
 
-    QuickViewportItem* item = items.front();
-    QuickViewportWindow* viewportWindow = item->viewportWindow();
-    if(!viewportWindow) {
-        qWarning() << "PICK_TEST viewport item has no viewport window";
+    const QSizeF itemSize = item->size();
+    qInfo() << "PICK_TEST" << viewportItems(ui).size() << "viewport items; first item size" << itemSize
+            << "test position" << itemPos;
+
+    // First pass: the picking buffer has not been rendered yet, so this starts the picking pass.
+    reportPicking(probePicking(viewportWindow, itemSize, itemPos), QStringLiteral("before picking pass"));
+
+    // Measure how long the asynchronously rendered picking buffer takes to become available.
+    const QDateTime probeStart = QDateTime::currentDateTime();
+    pollUntil(ui, 25, 5000,
+        [viewportWindow, itemSize, itemPos]() {
+            return probePicking(viewportWindow, itemSize, itemPos).hits > 0;
+        },
+        [ui, item, viewportWindow, itemSize, itemPos, probeStart, continuation](bool satisfied) {
+            if(satisfied)
+                qInfo() << "PICK_TEST first successful pick after" << probeStart.msecsTo(QDateTime::currentDateTime()) << "ms";
+            else
+                qWarning() << "PICK_TEST the picking buffer did not become available within 5 s";
+
+            // Second pass: the picking pass has been rendered in the background in the meantime.
+            reportPicking(probePicking(viewportWindow, itemSize, itemPos), QStringLiteral("after picking pass"));
+
+            // Negative control: a corner of the viewport shows only the empty background.
+            if(std::optional<ViewportWindow::PickResult> backgroundPick = viewportWindow->pick(QPointF(2, 2))) {
+                const SceneNode* node = backgroundPick->sceneNode();
+                qInfo() << "PICK_TEST background control: picked" << (node ? node->objectTitle() : QStringLiteral("<none>"));
+            }
+            else {
+                qInfo() << "PICK_TEST background control: nothing picked";
+            }
+
+            // End-to-end check: a synthetic click must select an object through the regular input mode path.
+            const QPointF clickPos(itemPos);
+            const QPointF globalPos = item->mapToGlobal(clickPos);
+            QMouseEvent pressEvent(QEvent::MouseButtonPress, clickPos, globalPos, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(item, &pressEvent);
+            QMouseEvent releaseEvent(QEvent::MouseButtonRelease, clickPos, globalPos, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(item, &releaseEvent);
+
+            if(Viewport* viewport = viewportWindow->viewport()) {
+                if(Scene* scene = viewport->scene()) {
+                    if(SelectionSet* selection = scene->selection()) {
+                        if(const SceneNode* selectedNode = selection->firstNode())
+                            qInfo() << "PICK_TEST synthetic click selected" << selectedNode->objectTitle();
+                        else
+                            qWarning() << "PICK_TEST synthetic click selected nothing";
+                    }
+                }
+            }
+            continuation();
+        });
+}
+
+/// Hides the viewport items for a moment and shows them again. A hidden viewport releases its GPU resources and
+/// acquires them again when it reappears; rendering and picking must survive that.
+void runHideShowTest(QmlMainWindowUI* ui, const QPoint& probePos, std::function<void()> continuation)
+{
+    const QList<QuickViewportItem*> items = viewportItems(ui);
+    if(items.isEmpty()) {
+        qWarning() << "PICK_TEST hide/show: no viewport item found";
         continuation();
         return;
     }
 
-    const QSizeF itemSize = item->size();
-    qInfo() << "PICK_TEST" << items.size() << "viewport items; first item size" << itemSize
-            << "test position" << itemPos;
+    for(QuickViewportItem* item : items)
+        item->setVisible(false);
 
-    // First pass: the picking buffer has not been rendered yet, so this starts the picking pass.
-    reportPickingResults(viewportWindow, itemSize, itemPos, "before picking pass");
+    // While hidden, no picking pass is started and the cached buffer is retained.
+    if(QuickViewportItem* item = items.front()) {
+        if(QuickViewportWindow* viewportWindow = item->viewportWindow())
+            reportPicking(probePicking(viewportWindow, item->size(), probePos), QStringLiteral("while hidden"));
+    }
 
-    // Measure how long the asynchronously rendered picking buffer takes to become available.
-    auto probeStart = std::make_shared<QElapsedTimer>();
-    probeStart->start();
-    auto poll = std::make_shared<std::function<void()>>();
-    *poll = [ui, viewportWindow, itemPos, probeStart, poll]() {
-        if(viewportWindow->pick(QPointF(itemPos))) {
-            qInfo() << "PICK_TEST first successful pick after" << probeStart->elapsed() << "ms";
-            return;
+    const QDateTime changeTime = QDateTime::currentDateTime();
+    scheduleDelayed(ui, 500, [ui, items, probePos, changeTime, continuation]() {
+        for(QuickViewportItem* item : items)
+            item->setVisible(true);
+        waitForPickingBuffer(ui, probePos, QStringLiteral("after hide/show"), changeTime, continuation);
+    });
+}
+
+/// Resizes the workbench window. The picking buffer is tied to the viewport device size, so this also verifies
+/// that picking recovers after a resize, which may happen at any time in a real session.
+void runResizeTest(QmlMainWindowUI* ui, const QSize& newSize, const QPoint& probePos, std::function<void()> continuation)
+{
+    QQuickWindow* window = ui->view();
+    if(!window) {
+        continuation();
+        return;
+    }
+    // Remember the viewport geometry. The picking buffer of the old size must not be mistaken for one that
+    // belongs to the resized viewport.
+    QSizeF previousItemSize;
+    if(QuickViewportItem* item = firstViewportItem(ui))
+        previousItemSize = item->size();
+    qInfo() << "PICK_TEST resize:" << window->size() << "->" << newSize;
+    const QDateTime changeTime = QDateTime::currentDateTime();
+    window->resize(newSize);
+
+    // The picking buffer is tied to the viewport device size, so it must not be used for a resized viewport.
+    if(QuickViewportItem* item = firstViewportItem(ui)) {
+        if(QuickViewportWindow* viewportWindow = item->viewportWindow())
+            reportPicking(probePicking(viewportWindow, item->size(), probePos), QStringLiteral("immediately after resize"));
+    }
+
+    // Poll immediately: the picking buffer is only used once the viewport geometry has been updated, so the
+    // measured time is the delay until a picking buffer exists for the resized viewport.
+    waitForPickingBuffer(ui, probePos, QStringLiteral("after resize"), changeTime, continuation, previousItemSize);
+}
+
+/// Measures the frame rate the viewports achieve when frames are requested continuously, which is what animation
+/// playback does. The requests originate from a queued connection because QQuickWindow::frameSwapped is emitted
+/// on the render thread, while requesting frames is a GUI-thread operation.
+void measureFrameRate(QmlMainWindowUI* ui, int durationMs, std::function<void()> continuation)
+{
+    QQuickWindow* window = ui->view();
+    if(!window) {
+        continuation();
+        return;
+    }
+    const QList<QuickViewportItem*> items = viewportItems(ui);
+
+    auto frames = std::make_shared<int>(0);
+    auto requestNextFrame = [items]() {
+        for(QuickViewportItem* item : items) {
+            if(QuickViewportWindow* viewportWindow = item->viewportWindow())
+                viewportWindow->requestRerender(false);
         }
-        if(probeStart->elapsed() > 5000) {
-            qWarning() << "PICK_TEST the picking buffer did not become available within 5 s";
-            return;
-        }
-        scheduleDelayed(ui, 25, *poll);
     };
-    scheduleDelayed(ui, 25, *poll);
 
-    // Second pass: the picking pass has been rendered in the background in the meantime.
-    scheduleDelayed(ui, 500, [ui, item, viewportWindow, itemSize, itemPos, continuation]() {
-        reportPickingResults(viewportWindow, itemSize, itemPos, "after picking pass");
+    QMetaObject::Connection counter = QObject::connect(window, &QQuickWindow::frameSwapped, window,
+        [frames, requestNextFrame]() { (*frames)++; requestNextFrame(); }, Qt::QueuedConnection);
 
-        // Negative control: a corner of the viewport shows only the empty background.
-        if(std::optional<ViewportWindow::PickResult> backgroundPick = viewportWindow->pick(QPointF(2, 2))) {
-            const SceneNode* node = backgroundPick->sceneNode();
-            qInfo() << "PICK_TEST background control: picked" << (node ? node->objectTitle() : QStringLiteral("<none>"));
-        }
-        else {
-            qInfo() << "PICK_TEST background control: nothing picked";
-        }
-
-        // End-to-end check: a synthetic click must select an object through the regular input mode path.
-        const QPointF clickPos(itemPos);
-        const QPointF globalPos = item->mapToGlobal(clickPos);
-        QMouseEvent pressEvent(QEvent::MouseButtonPress, clickPos, globalPos, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-        QCoreApplication::sendEvent(item, &pressEvent);
-        QMouseEvent releaseEvent(QEvent::MouseButtonRelease, clickPos, globalPos, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-        QCoreApplication::sendEvent(item, &releaseEvent);
-
-        if(Viewport* viewport = viewportWindow->viewport()) {
-            if(Scene* scene = viewport->scene()) {
-                if(SelectionSet* selection = scene->selection()) {
-                    if(const SceneNode* selectedNode = selection->firstNode())
-                        qInfo() << "PICK_TEST synthetic click selected" << selectedNode->objectTitle();
-                    else
-                        qWarning() << "PICK_TEST synthetic click selected nothing";
-                }
-            }
-        }
+    auto* timer = new QTimer(window);
+    timer->setSingleShot(true);
+    QObject::connect(timer, &QTimer::timeout, window, [frames, counter, durationMs, items, continuation]() {
+        QObject::disconnect(counter);
+        const double fps = durationMs > 0 ? (*frames * 1000.0) / durationMs : 0.0;
+        qInfo() << "FRAME_STATS" << *frames << "frames in" << durationMs << "ms with" << items.size() << "viewports ->"
+                << QString::number(fps, 'f', 1) << "fps (" << QString::number(fps > 0.0 ? 1000.0 / fps : 0.0, 'f', 2) << "ms/frame)";
         continuation();
     });
+    timer->start(durationMs);
+    requestNextFrame();
 }
 
 /**
@@ -255,6 +405,17 @@ protected:
         parser.addOption(QCommandLineOption(QStringLiteral("qml-pick"),
             tr("Verify object picking at the given position (x,y) of the first viewport item and print the result."),
             QStringLiteral("X,Y")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-frame-stats"),
+            tr("Measure the frame rate of the viewport for the given number of milliseconds and print the result."),
+            QStringLiteral("MS")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-window-size"),
+            tr("Resize the workbench window to the given size (WxH) before anything is measured."),
+            QStringLiteral("WxH")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-resize"),
+            tr("Resize the workbench window to the given size (WxH) and verify that rendering and picking recover."),
+            QStringLiteral("WxH")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-hide-show"),
+            tr("Hide the viewport items for a moment and show them again, verifying that rendering and picking recover.")));
     }
 
     /// Prepares the application to start running.
@@ -296,56 +457,129 @@ protected:
             mainWinUI->importFile(Application::instance()->fileManager().urlFromUserInput(argument));
         }
 
-        // Optional capture mode: save the contents of the workbench window to an image file and quit.
-        // This is used for automated verification of the prototype in headless environments.
-        const QString captureFile = cmdLineParser().value(QStringLiteral("qml-capture"));
-
         // Optional picking verification: perform picking operations and print the outcome.
         std::optional<QPoint> pickPosition;
         const QStringList pickCoordinates = cmdLineParser().value(QStringLiteral("qml-pick")).split(QLatin1Char(','));
         if(pickCoordinates.size() == 2)
             pickPosition = QPoint(pickCoordinates[0].toInt(), pickCoordinates[1].toInt());
 
-        if(captureFile.isEmpty() && !pickPosition)
+        // Optional initial window size: measurements are taken at this size, e.g. to match the viewport area of
+        // another frontend for a frame rate comparison.
+        const QStringList initialSize = cmdLineParser().value(QStringLiteral("qml-window-size")).split(QLatin1Char('x'));
+        if(initialSize.size() == 2)
+            mainWinUI->view()->resize(initialSize[0].toInt(), initialSize[1].toInt());
+
+        // Optional capture mode: save the contents of the workbench window to an image file once all
+        // verification steps are done.
+        const QString captureFile = cmdLineParser().value(QStringLiteral("qml-capture"));
+        const bool verifyPicking = pickPosition.has_value();
+        const int frameStatsDuration = cmdLineParser().value(QStringLiteral("qml-frame-stats")).toInt();
+        const bool hideShowTest = cmdLineParser().isSet(QStringLiteral("qml-hide-show"));
+        const int lifecycleCycles = cmdLineParser().value(QStringLiteral("qml-lifecycle-cycles")).toInt();
+        QSize resizeSize;
+        const QStringList resizeArguments = cmdLineParser().value(QStringLiteral("qml-resize")).split(QLatin1Char('x'));
+        if(resizeArguments.size() == 2)
+            resizeSize = QSize(resizeArguments[0].toInt(), resizeArguments[1].toInt());
+
+        // Interactive mode: without a capture request or a verification option, keep the window open.
+        if(captureFile.isEmpty() && !verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0)
             return;
 
         int delay = cmdLineParser().value(QStringLiteral("qml-capture-delay")).toInt();
         if(delay <= 0)
             delay = 3000;
 
-        // After the optional lifecycle cycles and the delay, verify picking (if requested) and then capture the
-        // window contents (if requested) before quitting.
-        const QString captureTarget = captureFile;
-        auto finish = [ui = mainWinUI, captureTarget]() {
-            if(captureTarget.isEmpty())
+        _verificationFinished = [ui = mainWinUI, captureFile]() {
+            if(captureFile.isEmpty())
                 QCoreApplication::quit();
             else
-                captureWindowAndQuit(ui, captureTarget);
-        };
-        auto verify = [ui = mainWinUI, pickPosition, finish]() {
-            if(pickPosition)
-                runPickTest(ui, *pickPosition, finish);
-            else
-                finish();
+                captureWindowAndQuit(ui, captureFile);
         };
 
-        int lifecycleCycles = cmdLineParser().value(QStringLiteral("qml-lifecycle-cycles")).toInt();
-        if(lifecycleCycles > 0) {
-            // Exercise the resource lifecycle before verifying the window contents.
-            scheduleLifecycleCycles(mainWinUI, lifecycleCycles, [ui = mainWinUI, delay, verify]() {
-                scheduleDelayed(ui, delay, verify);
+        // Assemble the verification steps. The delay runs first, so that the imported data set and the initial
+        // frame graphs are ready before anything is measured.
+        if(verifyPicking) {
+            // Pick as early as possible, while the imported scene is likely still being evaluated. The picking
+            // pass is an asynchronous offscreen operation; it must neither block the GUI thread nor deadlock with
+            // the evaluation of the pipeline that it renders.
+            _verificationSteps.push_back([ui = mainWinUI, pickPos = *pickPosition](std::function<void()> next) {
+                scheduleDelayed(ui, 100, [ui, pickPos, next = std::move(next)]() {
+                    const QDateTime started = QDateTime::currentDateTime();
+                    if(QuickViewportItem* item = firstViewportItem(ui)) {
+                        if(QuickViewportWindow* viewportWindow = item->viewportWindow()) {
+                            const PickProbe probe = probePicking(viewportWindow, item->size(), pickPos);
+                            reportPicking(probe, QStringLiteral("during scene evaluation"));
+                        }
+                    }
+                    qInfo() << "PICK_TEST the probe during scene evaluation returned after"
+                            << started.msecsTo(QDateTime::currentDateTime()) << "ms";
+                    next();
+                });
             });
         }
-        else {
-            scheduleDelayed(mainWinUI, delay, verify);
+        _verificationSteps.push_back([ui = mainWinUI, delay](std::function<void()> next) {
+            scheduleDelayed(ui, delay, std::move(next));
+        });
+        if(frameStatsDuration > 0) {
+            _verificationSteps.push_back([ui = mainWinUI, frameStatsDuration](std::function<void()> next) {
+                measureFrameRate(ui, frameStatsDuration, std::move(next));
+            });
         }
+        if(lifecycleCycles > 0) {
+            // Exercise the resource lifecycle (scene graph teardown and recreation) of the viewport items.
+            _verificationSteps.push_back([ui = mainWinUI, lifecycleCycles](std::function<void()> next) {
+                scheduleLifecycleCycles(ui, lifecycleCycles, std::move(next));
+            });
+        }
+        if(hideShowTest) {
+            _verificationSteps.push_back([ui = mainWinUI, probePos = pickPosition.value_or(QPoint(0, 0))](std::function<void()> next) {
+                runHideShowTest(ui, probePos, std::move(next));
+            });
+        }
+        if(resizeSize.isValid()) {
+            _verificationSteps.push_back([ui = mainWinUI, resizeSize, probePos = pickPosition.value_or(QPoint(0, 0))](std::function<void()> next) {
+                runResizeTest(ui, resizeSize, probePos, std::move(next));
+            });
+        }
+        if(verifyPicking) {
+            _verificationSteps.push_back([ui = mainWinUI, pickPos = *pickPosition](std::function<void()> next) {
+                runPickTest(ui, pickPos, std::move(next));
+            });
+        }
+
+        runNextVerificationStep();
     }
 
 private:
 
+    /// A single verification step of the prototype. It receives the continuation to invoke when it is done.
+    using VerificationStep = std::function<void(std::function<void()>)>;
+
+    /// Runs the next verification step of  _verificationSteps.
+    void runNextVerificationStep()
+    {
+        if(_verificationSteps.empty()) {
+            std::function<void()> finished = std::move(_verificationFinished);
+            _verificationFinished = {};
+            if(finished)
+                finished();
+            return;
+        }
+        VerificationStep step = std::move(_verificationSteps.front());
+        _verificationSteps.erase(_verificationSteps.begin());
+        step([this]() { runNextVerificationStep(); });
+    }
+
     /// The user interface of the Qt Quick frontend. Not owning; the user interface is kept alive by the
     /// main thread operation returned from startupApplication().
     QmlMainWindowUI* mainWinUI = nullptr;
+
+    /// Verification steps to execute one after another before the window contents are captured and the
+    /// application quits. The application object outlives the steps, so the sequence needs no extra ownership.
+    std::vector<VerificationStep> _verificationSteps;
+
+    /// Invoked when all verification steps have been executed.
+    std::function<void()> _verificationFinished;
 };
 
 }   // End of namespace
