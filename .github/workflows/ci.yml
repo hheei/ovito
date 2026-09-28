@@ -93,6 +93,7 @@ jobs:
               --qml-hide-show \
               --qml-layout-check \
               --qml-pick 300,300 \
+              --qml-import-check \
               "$RUNNER_TEMP/lattice_512.xyz"
 
   # ---------------------------------------------------------------------------
@@ -170,6 +171,7 @@ jobs:
               --qml-lifecycle-cycles 2 \
               --qml-layout-check \
               --qml-pick 300,300 \
+              --qml-import-check \
               "$RUNNER_TEMP/lattice_512.xyz"
 
   # ---------------------------------------------------------------------------
@@ -238,6 +240,7 @@ jobs:
             --qml-lifecycle-cycles 2 \
             --qml-layout-check \
             --qml-pick 300,300 \
+            --qml-import-check \
             "$RUNNER_TEMP/lattice_512.xyz"
 
   # ---------------------------------------------------------------------------
@@ -381,6 +384,7 @@ jobs:
               --qml-lifecycle-cycles 2 `
               --qml-layout-check `
               --qml-pick 300,300 `
+              --qml-import-check `
               $dataset
           if($LASTEXITCODE -ne 0) {
             throw "The Qt Quick smoke test failed with exit code $LASTEXITCODE"
