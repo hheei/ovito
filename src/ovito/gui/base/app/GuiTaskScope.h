@@ -38,6 +38,8 @@ namespace Ovito {
  */
 class OVITO_GUIBASE_EXPORT GuiTaskScope
 {
+    Q_DISABLE_COPY_MOVE(GuiTaskScope)
+
 public:
 
     /// Opens a task context for the given user interface.

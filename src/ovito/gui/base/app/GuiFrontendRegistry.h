@@ -19,6 +19,13 @@ class OVITO_GUIBASE_EXPORT GuiFrontendRegistry
 {
 public:
 
+    /// The registry is a process-global singleton and owns the frontends; it must not be copied. Declaring this
+    /// explicitly also keeps MSVC from instantiating the implicitly declared copy constructor, which cannot work
+    /// with the map of unique_ptrs the registry holds.
+    GuiFrontendRegistry() = default;
+    GuiFrontendRegistry(const GuiFrontendRegistry&) = delete;
+    GuiFrontendRegistry& operator=(const GuiFrontendRegistry&) = delete;
+
     /// Returns the global registry instance.
     static GuiFrontendRegistry& instance();
 
