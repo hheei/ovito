@@ -84,23 +84,16 @@ jobs:
           lines += [f"Ar {i*a} {j*a} {k*a}" for i in range(n) for j in range(n) for k in range(n)]
           pathlib.Path(os.environ["RUNNER_TEMP"], "lattice_512.xyz").write_text("\n".join(lines) + "\n")
           PY
-          mkdir -p artifacts
           xvfb-run -a --server-args='-screen 0 1280x800x24' \
             build/bin/ovito-qml-spike \
               --qml-window-size 1280x800 \
+              --qml-startup-delay 3000 \
               --qml-frame-stats 2000 \
               --qml-lifecycle-cycles 2 \
               --qml-hide-show \
+              --qml-layout-check \
               --qml-pick 300,300 \
-              --qml-capture artifacts/qml-smoke-linux-x64.png --qml-capture-delay 4000 \
               "$RUNNER_TEMP/lattice_512.xyz"
-
-      - name: Upload the Qt Quick smoke test screenshot
-        uses: actions/upload-artifact@v4
-        with:
-          name: qml-smoke-linux-x64
-          path: artifacts/qml-smoke-linux-x64.png
-          if-no-files-found: error
 
   # ---------------------------------------------------------------------------
   # Linux ARM64
@@ -173,9 +166,10 @@ jobs:
           xvfb-run -a --server-args='-screen 0 1280x800x24' \
             build/bin/ovito-qml-spike \
               --qml-window-size 1280x800 \
+              --qml-startup-delay 3000 \
               --qml-lifecycle-cycles 2 \
+              --qml-layout-check \
               --qml-pick 300,300 \
-              --qml-capture-delay 4000 \
               "$RUNNER_TEMP/lattice_512.xyz"
 
   # ---------------------------------------------------------------------------
@@ -240,9 +234,10 @@ jobs:
           PY
           build/Ovito.app/Contents/MacOS/ovito-qml-spike \
             --qml-window-size 1280x800 \
+            --qml-startup-delay 3000 \
             --qml-lifecycle-cycles 2 \
+            --qml-layout-check \
             --qml-pick 300,300 \
-            --qml-capture-delay 4000 \
             "$RUNNER_TEMP/lattice_512.xyz"
 
   # ---------------------------------------------------------------------------
@@ -378,22 +373,15 @@ jobs:
             $lines += "Ar $($i*3.6) $($j*3.6) $($k*3.6)" } } }
           $lines | Out-File -FilePath $dataset -Encoding ascii
 
-          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           $env:PATH = "${{ github.workspace }}\build\lib\ovito\plugins;$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin;$env:PATH"
           & "${{ github.workspace }}\build\bin\ovito-qml-spike.exe" `
               --qml-window-size 1280x800 `
+              --qml-startup-delay 3000 `
               --qml-frame-stats 2000 `
               --qml-lifecycle-cycles 2 `
+              --qml-layout-check `
               --qml-pick 300,300 `
-              --qml-capture "artifacts/qml-smoke-windows-d3d12.png" --qml-capture-delay 4000 `
               $dataset
           if($LASTEXITCODE -ne 0) {
             throw "The Qt Quick smoke test failed with exit code $LASTEXITCODE"
           }
-
-      - name: Upload the Qt Quick smoke test screenshot
-        uses: actions/upload-artifact@v4
-        with:
-          name: qml-smoke-windows-d3d12
-          path: artifacts/qml-smoke-windows-d3d12.png
-          if-no-files-found: error
