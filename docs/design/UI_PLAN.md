@@ -1,206 +1,175 @@
 # OVITO Modern Workbench UI Implementation Plan
 
-> **Scope**: Phased migration to modern Qt Quick / QML frontend  
-> **Guiding Principle**: Non-destructive, incremental, side-by-side coexistence  
-> **Status**: Approved Roadmap
+> **Scope**: Spike-driven, phased migration to modern Qt Quick / QML frontend  
+> **Guiding Principle**: Validate high risks first, interaction parity before redesign  
+> **Status**: Source-Grounded Roadmap
 
 ---
 
-## 1. Principles & Non-Negotiable Rules
+## 1. Core Engineering Principles
 
-1. **Zero Core Disruption**:
-   - The numerical engine, pipeline evaluator, file I/O loaders, and `QRhi` render thread under `src/ovito/core/`, `src/ovito/particles/`, and `src/ovito/stdobj/` must remain unchanged and unpolluted by QML details.
-2. **Dual-Frontend Coexistence**:
-   - The battle-tested QtWidgets frontend (`src/ovito/gui/desktop/`) remains 100% intact and default during the transition.
-   - The new QML frontend lives in a dedicated module (`src/ovito/gui/qml/`).
-   - The user selects the frontend via command line flag (`ovito --gui=qml`) or CMake build option (`OVITO_BUILD_QML_FRONTEND=ON`).
-3. **Milestone-Gated Deliverables**:
-   - Each phase delivers an executable, testable milestone that can be verified natively on Linux, macOS, and Windows.
-4. **No Code Before Consensus**:
-   - Architecture and component API contracts are locked before substantive C++/QML implementation begins.
+1. **Validate High-Risk Integration Points Before Freezing Interfaces (Spike-Driven)**:
+   - Do not commit to unproven assumptions. The greatest technical risk is the 3D viewport rendering bridge (`QQuickRhiItem` vs. `RenderThread` QRhi ownership). This must be rigorously evaluated in an isolated technical spike before locking production architecture.
+2. **Strict Architectural Seam (No Desktop Entanglement)**:
+   - Dependency rule: `gui/qml -> gui/base -> core`.
+   - **`gui/qml` must never depend on `gui/desktop`**. If a feature or logic currently resides in `gui/desktop`, it must be refactored into `gui/base` as a shared service before QML consumes it.
+3. **Zero Core Disruption**:
+   - Numerical pipelines, asynchronous evaluation (`TaskScope`), file readers, and mathematical abstractions in `core/`, `particles/`, and `stdobj/` remain completely untouched.
+4. **Interaction & Feature Parity Before Workflow Redesign**:
+   - First priority is 1:1 behavioral equivalence with classic OVITO (modifier stack ergonomics, viewport navigation, timeline behavior).
+   - VS Code aesthetic is an inspiration for visual clarity, not an excuse to reinvent user workflow prematurely.
+5. **No QML-Ready Model Assumptions**:
+   - All presentation models (`QmlPipelineModel`, `QmlSceneModel`, `QmlAnimationModel`) are authored fresh in `src/ovito/gui/qml/models/`. Never couple QML directly to legacy QtWidgets models.
+6. **Pragmatic Qt Baseline**:
+   - Minimum required Qt version is determined strictly by required APIs (initially Qt 6.8+ for mature `QQuickRhiItem` support). Do not lock to 6.10 unless a concrete API makes it mandatory.
 
 ---
 
-## 2. Phase Breakdown & Milestones
+## 2. Component Migration Matrix (Phase 0 Audit)
+
+| Classic QtWidgets Component | Modern QML Target | Strategy | Migration Seam |
+| :--- | :--- | :--- | :--- |
+| `MainWindow` (`gui/desktop`) | `WorkbenchWindow.qml` | **REWRITE** | Wraps `ViewportGrid` + right command panel in QML. |
+| `ViewportsPanel` (`gui/desktop`) | `ViewportGrid.qml` | **REWRITE** | Manages 1x1, 2x2, 1+2 layouts in pure QML splitters. |
+| `WidgetViewportWindow` (`gui/vpwindow`) | `QuickViewportItem` | **ADAPT** | Subclasses `QQuickRhiItem` and `BaseViewportWindow`. |
+| `BaseViewportWindow` (`gui/base`) | `BaseViewportWindow` | **REUSE AS-IS** | Provides battle-tested mouse/keyboard navigation modes. |
+| Pipeline Command Page (`gui/desktop`) | `PipelineView.qml` | **REWRITE** | Connected via new `QmlPipelineModel`. |
+| `PropertiesEditor` & `ParameterUI` | `ModifierEditorRegistry` | **ADAPT** | Specialized QML editors + generic reflected fallback. |
+| `AnimationTrackBar` (`gui/desktop`) | `TimelineView.qml` | **REWRITE** | Connected via new `QmlAnimationModel`. |
+| Data Inspector (`gui/desktop`) | `DataInspectorView.qml` | **DEFER** | Targeted for Phase 7 once core parity is achieved. |
+| Render Settings Dialog | `RenderSettingsView.qml` | **DEFER** | Targeted for Phase 7. |
+
+---
+
+## 3. Phased Execution Roadmap
 
 ```
-  ┌────────────────────────────────────────────────────────────────────────────────┐
-  │                               PHASE ROADMAP                                    │
-  └────────────────────────────────────────────────────────────────────────────────┘
-    Phase 0: Build Infrastructure & Module Setup
-        │
-        ▼
-    Phase 1: 3D Viewport RHI Bridge (`QuickViewportItem`)
-        │
-        ▼
-    Phase 2: Modern Workbench Shell (VS Code Layout & Design Tokens)
-        │
-        ▼
-    Phase 3: Pipeline Stack & Command Palette (`Ctrl+P`)
-        │
-        ▼
-    Phase 4: Animation Timeline & Collapsible Bottom Panel
-        │
-        ▼
-    Phase 5: Dynamic Property Reflection Inspector (Parameter Controls)
-        │
-        ▼
-    Phase 6: Multi-Platform Validation & Polish
+Phase 0: Repository & Architecture Audit
+   │
+   ▼
+Phase 1: Viewport Technical Spike (QQuickRhiItem Feasibility)
+   │
+   ▼
+Phase 2: Minimal QML Shell & Build Scaffolding
+   │
+   ▼
+Phase 3: Presentation Models & Command Layer
+   │
+   ▼
+Phase 4: Pipeline Stack & Basic Property Inspector
+   │
+   ▼
+Phase 5: Animation Timeline & Viewport Interaction Parity
+   │
+   ▼
+Phase 6: Specialized Property Editors (High-Frequency Modifiers)
+   │
+   ▼
+Phase 7: Remaining Desktop Feature Parity & Regression Testing
+   │
+   ▼
+Phase 8: UX Modernization (Command Palette, Activity Bar)
+   │
+   ▼
+Phase 9: Classic Frontend Retirement (Long-term, optional)
 ```
 
 ---
 
-### Phase 0: Build Infrastructure & Module Setup
-**Goal**: Integrate QML build dependencies into CMake without breaking existing compilation.
-
-- **Tasks**:
-  1. Add CMake option `OVITO_BUILD_QML_FRONTEND` (default `ON` when Qt6Quick is available).
-  2. Create source directory tree:
-     ```
-     src/ovito/gui/qml/
-     ├── CMakeLists.txt
-     ├── QmlGuiPlugin.cpp / .h
-     ├── components/         # Shared atomic QML controls (Buttons, Sliders, Cards)
-     ├── shell/              # Workbench layout (ActivityBar, Sidebars, Status)
-     ├── viewport/           # 3D Viewport QQuickRhiItem bridge & HUD overlays
-     ├── pipeline/           # Pipeline stack view and modifier delegates
-     ├── inspector/          # Dynamic property reflection panels
-     ├── timeline/           # Animation playback and track scrubber
-     └── themes/             # Design tokens (Dark Modern / Light Modern)
-     ```
-  3. Configure Qt 6 QML module registration via `qt_add_qml_module`.
-  4. Implement CLI dispatch flag: `ovito --gui=qml` loads the QML workbench shell; standard `ovito` opens classic QtWidgets.
-- **Deliverable / Verification**:
-  - `cmake --build --preset native --target ovito` succeeds with zero warnings.
-  - Running `ovito --gui=qml --version` prints version info and exits cleanly.
+### Phase 0: Repository & Architecture Audit
+- **Objective**: Establish exact component boundaries and identify code that must be promoted to `gui/base`.
+- **Deliverables**:
+  1. Full mapping of all action handlers, viewport gizmos, and modifier UI entry points.
+  2. Audit `gui/desktop` to ensure no hidden shared dependencies exist.
+  3. Formulate the initial property editor priority list (Slice, CNA, Color Coding, Polyhedral Template Matching).
 
 ---
 
-### Phase 1: 3D Viewport RHI Bridge (`QuickViewportItem`)
-**Goal**: Prove hardware-accelerated 3D scene rendering inside Qt Quick with zero visual artifacts.
-
-- **Tasks**:
-  1. Subclass `QQuickRhiItem` to create `QuickViewportItem`.
-  2. Implement `QuickViewportRenderer : public QQuickRhiItemRenderer`:
-     - Bind OVITO's existing `RenderThread` and `SceneRenderer` to the `QRhiRenderTarget` provided by `QQuickRhiItem`.
-     - Implement swapchain synchronization (ensuring GPU commands finish before the scene graph samples the texture).
-  3. Implement pointer event dispatch:
-     - Map QML mouse/wheel/gesture events into OVITO's `ViewportInputMode` (Orbit, Pan, Zoom, Selection Marquee).
-  4. Test with large particle datasets (100k+ atoms) to verify 60+ FPS stability.
-- **Deliverable / Verification**:
-  - A standalone test window displaying a 3D simulation cell and rotating/zooming smoothly via mouse drag inside a QML scene.
+### Phase 1: Viewport Technical Spike (Critical Risk First)
+- **Objective**: Prove the feasibility of rendering OVITO scenes inside `QQuickRhiItem` without UI freezes, crashes, or deadlocks.
+- **Key Investigations**:
+  1. **QRhi Ownership**: Can OVITO's `FrameGraph` and `SceneRenderer` execute using the `QRhiRenderTarget` and command buffer provided by the Qt Quick Scene Graph, or must `RenderThread` be modified/bypassed?
+  2. **Teardown & Deadlock Validation**: Test rapid window closing, tab switching, and hide/show cycles to verify that GPU resource destruction does not deadlock with the GUI thread.
+  3. **Multi-Viewport Concurrency**: Verify that 4 simultaneous viewports (Top, Front, Right, Perspective) render reliably with shared geometry buffers.
+  4. **Picking & Interaction**: Verify hardware/software object picking and raycasting against the texture-backed viewport.
+  5. **HiDPI & Resize**: Verify crisp subpixel scaling on 4K/Retina displays without framebuffer lag.
+  6. **Cross-API Smoke Test**: Validate on Linux (Vulkan), macOS (Metal), and Windows (D3D12/Vulkan).
+- **Exit Gate**: A standalone, minimal executable running an interactive 3D viewport in QML. If `QQuickRhiItem` encounters insurmountable threading blockers, evaluate fallback approaches (e.g. Vulkan texture sharing or `QQuickWindow` composition) before proceeding.
 
 ---
 
-### Phase 2: Modern Workbench Shell (VS Code Layout & Tokens)
-**Goal**: Establish the full visual frame, design tokens, and multi-viewport layout.
-
-- **Tasks**:
-  1. **Theme System (`Theme.qml`)**:
-     - Implement VS Code Dark Modern (`#181818`, `#1f1f1f`, `#2b2b2b`, `#0078d4`) and Light Modern palettes.
-     - Support runtime theme switching and system preference auto-detection.
-  2. **Shell Structure**:
-     - `ActivityBar.qml`: Left vertical icon rail (Pipeline, Overlays, Rendering, Data, Settings).
-     - `PrimarySidebar.qml`: Resizable pane with accordion section headers.
-     - `SecondarySidebar.qml`: Right-side inspector pane with collapse toggle.
-     - `StatusBar.qml`: Sleek 24px bottom bar with live state chips.
-  3. **Viewport Grid Layout**:
-     - Implement responsive splitters allowing 1x1, 2x2, 1+2, and 1x2 viewport configurations.
-     - Viewport maximization toggle (double-click viewport or press `1`-`4`).
-  4. **Floating Viewport HUD**:
-     - Semi-transparent glass pill anchored in the viewport top-left: view mode dropdown, projection toggle, fit-to-view button.
-- **Deliverable / Verification**:
-  - Full application window renders with the VS Code aesthetic, collapsible panels, and a live 2x2 viewport grid.
+### Phase 2: Minimal QML Shell & Build Scaffolding
+- **Objective**: Integrate QML build pipeline cleanly into CMake and create the basic window frame.
+- **Deliverables**:
+  1. CMake option `OVITO_BUILD_QML_FRONTEND=ON`.
+  2. CLI runtime flag: `ovito --gui=qml` launches QML shell; standard `ovito` launches classic QtWidgets.
+  3. Base directory: `src/ovito/gui/qml/`.
+  4. `WorkbenchWindow.qml` reproducing classic OVITO spatial layout (central viewport area + right-hand command panel).
+  5. `Theme.qml` encoding VS Code Dark/Light Modern palettes.
 
 ---
 
-### Phase 3: Pipeline Stack & Command Palette (`Ctrl+P`)
-**Goal**: Enable viewing, toggling, reordering, and adding modifiers via modern declarative UI.
-
-- **Tasks**:
-  1. **Pipeline View**:
-     - Bind QML `ListView` directly to the existing `PipelineListModel`.
-     - Create modern modifier card delegates: icon, title, active checkbox/eye, delete button, drag handle.
-     - Implement drag-and-drop reordering with smooth list layout transitions.
-  2. **Modifier Command Palette (`Ctrl+P` / `Ctrl+Shift+P`)**:
-     - Floating modal search bar with blurred backdrop.
-     - Real-time fuzzy query over all registered OVITO modifier classes (CNA, Slice, Cluster Analysis, etc.).
-     - Pressing `Enter` instantiates and appends the modifier to the active pipeline.
-  3. **Scene Tree Explorer**:
-     - Tree view showing data sources, simulation cell, particles, and visual elements.
-- **Deliverable / Verification**:
-  - User can press `Ctrl+P`, type `slice`, press `Enter`, and see the *Slice Modifier* appear in the pipeline stack with its effect immediately visible in the 3D viewport.
+### Phase 3: Presentation Models & Command Layer
+- **Objective**: Create clean, decoupled C++ presentation adapters for QML.
+- **Deliverables**:
+  1. `src/ovito/gui/qml/models/QmlPipelineModel`: Wraps scene pipeline into a clean `QAbstractListModel` with roles for name, type, enabled state, and error flags.
+  2. `src/ovito/gui/qml/models/QmlAnimationModel`: Exposes frame count, current frame, play/pause state.
+  3. `src/ovito/gui/qml/models/QmlModifierRegistryModel`: Discovers available modifiers for instantiation.
 
 ---
 
-### Phase 4: Animation Timeline & Collapsible Bottom Panel
-**Goal**: Deliver a fluid animation scrubbing and data exploration experience.
-
-- **Tasks**:
-  1. **Timeline Controls**:
-     - Play / Pause, Next Frame, Previous Frame, First/Last Frame buttons.
-     - FPS setting and playback mode (Loop / Once).
-  2. **Scrubber Track**:
-     - Smooth draggable thumb with magnetic snapping to keyframes.
-     - Numeric frame counter (`Current / Total`).
-  3. **Bottom Panel Tab Container**:
-     - Tabs for *Timeline*, *Data Table*, *Python Console*, and *Output Log*.
-     - Quick toggle hotkey (`Ctrl+J`) with smooth slide animation.
-- **Deliverable / Verification**:
-  - Scrubbing the timeline smoothly updates the multi-frame trajectory in all active viewports at interactive speeds.
+### Phase 4: Pipeline Stack & Basic Property Inspector
+- **Objective**: View, toggle, reorder modifiers, and inspect simple reflected parameters.
+- **Deliverables**:
+  1. `PipelineView.qml`: Card list with eye-toggle checkboxes, drag reordering, and modifier deletion.
+  2. `ModifierEditorRegistry`: C++ registry dispatching to specialized QML editors or generic fallback.
+  3. `AutoPropertyEditor.qml`: Reflected controls for numeric floats, booleans, and colors.
 
 ---
 
-### Phase 5: Dynamic Property Reflection Inspector (Parameter Controls)
-**Goal**: Enable parameter tuning for all modifiers without writing monolithic manual UI forms.
-
-- **Tasks**:
-  1. **C++ Reflection Bridge (`QmlPropertyBridge`)**:
-     - Inspects `RefTarget` and exposes property values, limits, steps, and units to QML.
-  2. **Atomic Control Library**:
-     - `NumericSlider.qml`: Combined drag slider and direct-edit number box.
-     - `ToggleSwitch.qml`: Sleek iOS/Fluent toggle switch.
-     - `ColorPickerField.qml`: Color chip opening an inline palette/picker.
-     - `Vector3Input.qml`: Inline X, Y, Z grouped input fields.
-     - `EnumDropdown.qml`: Dropdown menu for enumerated types.
-  3. **Inspector Container**:
-     - Automatically generates categorized accordion cards based on the selected modifier's reflected fields.
-     - Two-way binding: changing a slider immediately marks pipeline cache dirty and updates the 3D view.
-- **Deliverable / Verification**:
-  - Selecting *Slice Modifier* displays its plane normal, distance slider, and invert checkbox in the inspector; adjusting the distance slider interactively cuts the particles in the viewport.
+### Phase 5: Animation Timeline & Viewport Interaction Parity
+- **Objective**: Achieve 100% parity for scene navigation and animation playback.
+- **Deliverables**:
+  1. Connect `QuickViewportItem` to `BaseViewportWindow` input modes (Orbit, Pan, Zoom, Selection Marquee).
+  2. `TimelineView.qml`: Smooth scrubbing track bar, frame step buttons, play/pause loop.
+  3. Interactive viewport HUD: Camera projection switcher (Perspective vs Orthographic), View presets (Top, Front, Right).
 
 ---
 
-### Phase 6: Multi-Platform Validation & Polish
-**Goal**: Ensure tier-1 quality across Linux, macOS, and Windows.
-
-- **Tasks**:
-  1. **Vulkan Backend Testing (Linux x86_64 & ARM64)**:
-     - Verify on Wayland and X11 without flickering or driver crashes.
-  2. **Metal Backend Testing (macOS Apple Silicon)**:
-     - Verify Retina display scaling and Metal 3 swapchain integration.
-  3. **Direct3D 12 Testing (Windows x64)**:
-     - Verify D3D12 device sharing between `RenderThread` and Qt Quick scene graph.
-  4. **Performance & Memory Audit**:
-     - Ensure idle CPU usage is < 1%.
-     - Benchmark frame rate during rapid slider interaction.
-- **Deliverable / Verification**:
-  - CI passes on all platforms; UI is responsive, robust, and visually cohesive.
+### Phase 6: Specialized Property Editors
+- **Objective**: Deliver bespoke QML editors for OVITO's highest-frequency modifiers.
+- **Deliverables**:
+  1. `SliceModifierEditor.qml`: Normal vector inputs, slice plane distance slider, reverse toggle.
+  2. `CnaEditor.qml`: Structure type checklist, cutoff selection, adaptive mode.
+  3. `ColorCodingEditor.qml`: Gradient selector, range min/max inputs, property chooser.
+  4. `PolyhedralTemplateMatchingEditor.qml`: Structure checkboxes, RMSD cutoff slider.
 
 ---
 
-## 3. Risk Management & Mitigations
-
-| Risk | Probability | Impact | Mitigation Strategy |
-| :--- | :---: | :---: | :--- |
-| **GPU context sharing conflicts** between `RenderThread` and Qt Quick Scene Graph | Medium | High | `QQuickRhiItem` was specifically designed by the Qt team for this exact pattern; texture-level sharing avoids raw driver context entanglement. |
-| **Huge modifier parameter diversity** difficult to reflect generically | Medium | Medium | Implement the generic reflection bridge for 90% of standard fields; provide an escape-hatch mechanism for specialized custom delegates when necessary. |
-| **Large dataset UI thread blocking** | Low | High | OVITO's pipeline already computes asynchronously on worker threads via `TaskScope`. The UI thread only receives finished visual geometry. |
-| **User resistance to UI change** | Medium | Medium | Keep classic QtWidgets accessible via `--gui=classic` indefinitely until the QML workbench achieves feature parity and user acclaim. |
+### Phase 7: Remaining Desktop Feature Parity
+- **Objective**: Reach complete feature parity with the classic QtWidgets interface.
+- **Deliverables**:
+  1. Menu bar actions (File Import/Export, Scene Reset, Viewport Config).
+  2. Overlays & Visual Elements (Simulation Cell display, Coordinate Tripod, Color Legend).
+  3. Data Inspector panel (spreadsheet table view of particle properties).
+  4. Direct regression testing: execute standard workflows side-by-side in `ovito` and `ovito --gui=qml`.
 
 ---
 
-## 4. Next Step Recommendation
+### Phase 8: UX Modernization (Post-Parity Enhancements)
+- **Objective**: Introduce advanced workflow accelerators once parity is guaranteed.
+- **Deliverables**:
+  1. Global Command Palette (`Ctrl+P` fuzzy search for any modifier, action, or preset).
+  2. Activity Bar for swift view toggling.
+  3. Integrated multi-tab bottom panel (Timeline + Data Inspector + Python Console).
 
-With this plan and design formally approved:
-- Begin **Phase 0**: Set up the CMake scaffolding and directory layout for `src/ovito/gui/qml/` without touching existing QtWidgets runtime logic.
+---
+
+### Phase 9: Classic Frontend Retirement (Long-Term)
+- Deprecate QtWidgets interface only after QML frontend has matured across multiple release cycles and received community consensus.
+
+---
+
+## 4. Immediate Next Step
+
+Proceed directly to **Phase 0 (Repository & Architecture Audit)** and **Phase 1 (Viewport Technical Spike)** in an isolated prototype branch, focusing exclusively on validating `QQuickRhiItem` lifecycle and threading against OVITO's `RenderThread`.
