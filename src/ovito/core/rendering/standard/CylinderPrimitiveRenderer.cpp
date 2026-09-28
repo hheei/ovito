@@ -1,24 +1,5 @@
-////////////////////////////////////////////////////////////////////////////////////////
-//
-//  Copyright 2026 OVITO GmbH, Germany
-//
-//  This file is part of OVITO (Open Visualization Tool).
-//
-//  OVITO is free software; you can redistribute it and/or modify it either under the
-//  terms of the GNU General Public License version 3 as published by the Free Software
-//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
-//  If you do not alter this notice, a recipient may use your version of this
-//  file under either the GPL or the MIT License.
-//
-//  You should have received a copy of the GPL along with this program in a
-//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
-//  with this program in a file LICENSE.MIT.txt
-//
-//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
-//  either express or implied. See the GPL or the MIT License for the specific language
-//  governing rights and limitations.
-//
-////////////////////////////////////////////////////////////////////////////////////////
+// SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
+// SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/core/Core.h>
 #include <ovito/core/viewport/ViewProjectionParameters.h>
@@ -129,7 +110,7 @@ void CylinderPrimitiveRenderer::buildDrawCalls(const CylinderPrimitive& primitiv
     if(!primitive.vertexPositions() || primitive.vertexPositions()->size() == 0)
         return;
     if(primitive.vertexPositions()->size() % 2 != 0) {
-        rt()->reportWarning("CylinderPrimitiveRenderer: vertexPositions buffer size must be a multiple of 2 (two endpoints per cylinder).");
+        service()->reportWarning("CylinderPrimitiveRenderer: vertexPositions buffer size must be a multiple of 2 (two endpoints per cylinder).");
         return;
     }
 
@@ -169,7 +150,7 @@ void CylinderPrimitiveRenderer::buildDrawCalls(const CylinderPrimitive& primitiv
     // Allocate picking object ID once for this primitive.
     uint32_t objectId = 0;
     if(isPickingPass && pickingMap) {
-        objectId = pickingMap->registerObjectId(rt()->objectIdAllocator().allocate(), command);
+        objectId = pickingMap->registerObjectId(service()->objectIdAllocator().allocate(), command);
     }
 
     // Capture these before emplace_back calls that could invalidate any reference to dc.
@@ -224,7 +205,7 @@ void CylinderPrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBatch* 
     if(!_drawParamsUBO) {
         _drawParamsUBO.reset(rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, requiredSize));
         if(!_drawParamsUBO->create()) {
-            rt()->reportWarning("CylinderPrimitiveRenderer: Failed to create draw params UBO.");
+            service()->reportWarning("CylinderPrimitiveRenderer: Failed to create draw params UBO.");
             _drawParamsUBO.reset();
             return;
         }
@@ -232,7 +213,7 @@ void CylinderPrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBatch* 
     else if(_drawParamsUBO->size() < requiredSize) {
         _drawParamsUBO->setSize(requiredSize);
         if(!_drawParamsUBO->create()) {
-            rt()->reportWarning("CylinderPrimitiveRenderer: Failed to resize draw params UBO.");
+            service()->reportWarning("CylinderPrimitiveRenderer: Failed to resize draw params UBO.");
             _drawParamsUBO.reset();
             return;
         }
@@ -348,7 +329,7 @@ void CylinderPrimitiveRenderer::uploadInstanceData(QRhiResourceUpdateBatch* batc
                     dc.colorMapTexture, sampler),
             });
             if(!dc.vboBindings->create()) {
-                rt()->reportWarning("CylinderPrimitiveRenderer: Failed to create pseudo-color bindings.");
+                service()->reportWarning("CylinderPrimitiveRenderer: Failed to create pseudo-color bindings.");
                 dc.vboBindings.reset();
             }
         }
@@ -559,7 +540,7 @@ void CylinderPrimitiveRenderer::uploadInstanceDataSorted(QRhiResourceUpdateBatch
             QRhiShaderResourceBinding::bufferLoad(10, QRhiShaderResourceBinding::VertexStage, dc.sorted.sortedIndexBuffer),
         });
         if(!dc.sorted.shaderResourceBindings->create()) {
-            rt()->reportWarning("CylinderPrimitiveRenderer: Failed to create sorted bindings.");
+            service()->reportWarning("CylinderPrimitiveRenderer: Failed to create sorted bindings.");
             dc.sorted.shaderResourceBindings.reset();
         }
     }
@@ -794,7 +775,7 @@ QRhiShaderResourceBindings* CylinderPrimitiveRenderer::ensureShaderResourceBindi
                 _drawParamsUBO.get(), sizeof(CylinderDrawParamsData)),
         });
         if(!_bindings->create()) {
-            rt()->reportWarning("CylinderPrimitiveRenderer: Failed to create shader resource bindings.");
+            service()->reportWarning("CylinderPrimitiveRenderer: Failed to create shader resource bindings.");
             _bindings.reset();
         }
     }
@@ -813,7 +794,7 @@ QRhiGraphicsPipeline* CylinderPrimitiveRenderer::ensurePipeline(
         bool operator==(const PipelineCacheKey&) const = default;
     };
 
-    return rt()->ensureGraphicsPipeline(rpd, PipelineCacheKey{variant, flags}, [&]() -> std::unique_ptr<QRhiGraphicsPipeline> {
+    return service()->ensureGraphicsPipeline(rpd, PipelineCacheKey{variant, flags}, [&]() -> std::unique_ptr<QRhiGraphicsPipeline> {
         if(!impl()->sceneParamsUBO() || !_drawParamsUBO)
             return {};
 
@@ -913,8 +894,8 @@ QRhiGraphicsPipeline* CylinderPrimitiveRenderer::ensurePipeline(
                 return {};
         }
 
-        QShader vs = rt()->loadShader(vsPath);
-        QShader fs = rt()->loadShader(fsPath);
+        QShader vs = service()->loadShader(vsPath);
+        QShader fs = service()->loadShader(fsPath);
         if(!vs.isValid() || !fs.isValid())
             return {};
 
@@ -1029,7 +1010,7 @@ QRhiGraphicsPipeline* CylinderPrimitiveRenderer::ensurePipeline(
         pipeline->setRenderPassDescriptor(rpd);
 
         if(!pipeline->create()) {
-            rt()->reportWarning("CylinderPrimitiveRenderer: Failed to create pipeline.");
+            service()->reportWarning("CylinderPrimitiveRenderer: Failed to create pipeline.");
             return {};
         }
         return pipeline;

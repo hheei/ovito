@@ -1,30 +1,12 @@
-////////////////////////////////////////////////////////////////////////////////////////
-//
-//  Copyright 2026 OVITO GmbH, Germany
-//
-//  This file is part of OVITO (Open Visualization Tool).
-//
-//  OVITO is free software; you can redistribute it and/or modify it either under the
-//  terms of the GNU General Public License version 3 as published by the Free Software
-//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
-//  If you do not alter this notice, a recipient may use your version of this
-//  file under either the GPL or the MIT License.
-//
-//  You should have received a copy of the GPL along with this program in a
-//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
-//  with this program in a file LICENSE.MIT.txt
-//
-//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
-//  either express or implied. See the GPL or the MIT License for the specific language
-//  governing rights and limitations.
-//
-////////////////////////////////////////////////////////////////////////////////////////
+// SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
+// SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #pragma once
 
 #include <ovito/core/Core.h>
 #include <ovito/core/rendering/FrameGraph.h>
 #include <ovito/core/rendering/SceneRenderer.h>
+#include <ovito/core/rendering/RendererService.h>
 #include <ovito/core/rendering/ObjectPickingMap.h>
 #include <ovito/core/rendering/ObjectIdAllocator.h>
 #include <ovito/core/rendering/RendererResourceCache.h>
@@ -51,6 +33,7 @@ class RenderTarget;
 class OVITO_CORE_EXPORT RenderThread
 	: public QThread
 	, public std::enable_shared_from_this<RenderThread>
+	, public RendererService
 	, private UserInterfaceComponent<UserInterface, false>
 {
 	Q_OBJECT
@@ -87,61 +70,19 @@ public:
 	[[nodiscard]] RenderTarget createOffscreenTarget(const QSize& size, bool forAmbientOcclusion = false);
 
 	/// Returns the QRhi instance owned by this render thread. May only be called from a renderer implementation on the render thread.
-	QRhi* rhi() const { return _rhi.get(); }
+	QRhi* rhi() const override { return _rhi.get(); }
 
 	/// Returns the object ID allocator for this render thread.
-	ObjectIdAllocator& objectIdAllocator() { return _objectIdAllocator; }
+	ObjectIdAllocator& objectIdAllocator() override { return _objectIdAllocator; }
 
 	/// Returns the shared cache for QRhi resources such as vertex buffers and textures.
-	RendererResourceCache& rhiResourceCache() { return *_rhiResourceCache; }
+	RendererResourceCache& rhiResourceCache() override { return *_rhiResourceCache; }
 
-	/// Finds a shared rendering device associated with this RenderThread matching the given predicate. Returns nullptr if no matching device is found.
-	/// May only be called from a renderer implementation on the render thread. The predicate is a callable that takes a pointer to
-	/// a SceneRenderer::Device and returns a bool indicating whether the device matches the search criteria.
-	template<typename DeviceType, typename Predicate>
-	std::shared_ptr<DeviceType> findSharedRenderingDevice(Predicate&& predicate) {
-		OVITO_ASSERT(QThread::currentThread() == this);
-		for(const auto& weakDevice : _sharedRenderingDevices) {
-			if(auto device = std::dynamic_pointer_cast<DeviceType>(weakDevice.lock())) {
-				if(predicate(device.get())) {
-					_sharedRenderingDeviceCache = device;  // Cache the most recently accessed device to keep it alive across successive offscreen rendering requests.
-					return device;
-				}
-			}
-		}
-		return {};
-	}
-
-	/// Adds a shared rendering device to the list of devices associated with this RenderThread.
-	/// The device is typically created by a renderer implementation and shared with other renderers running on the same thread.
-	void addSharedRenderingDevice(const std::shared_ptr<SceneRenderer::Device>& device) {
-		OVITO_ASSERT(QThread::currentThread() == this);
-		// Remove expired devices from the list before adding the new one.
-		std::erase_if(_sharedRenderingDevices, [](const std::weak_ptr<SceneRenderer::Device>& d) { return d.expired(); });
-		// Cache the most recently accessed device to keep it alive across successive offscreen rendering requests.
-		_sharedRenderingDeviceCache = device;
-		_sharedRenderingDevices.emplace_back(device);
-	}
-
-	/// Looks up a graphics pipeline in the cache matching the given render pass descriptor and caller-provided cache key. If no compatible pipeline is found, a new one is created by invoking the initializer.
-	/// The cache key is an arbitrary value that is used to distinguish different pipeline configurations at the call site (e.g. shader variant, primitive type). The render pass descriptor is used to check
-	/// compatibility of cached pipelines with the current render pass (e.g. attachment formats, sample count).
-	/// The initializer is a callable that is invoked when no compatible pipeline is found in the cache. It is supposed to create and return a unique_ptr to a new pipeline.
-    template<typename CacheKey, typename Initializer>
-    QRhiGraphicsPipeline* ensureGraphicsPipeline(QRhiRenderPassDescriptor* rpd, CacheKey&& key, Initializer&& initializer) {
-		for(const auto& [cachedRpdData, cachedKey, cachedPipeline] : _graphicsPipelineCache) {
-			if(cachedKey.type() == typeid(CacheKey) && any_cast<const CacheKey&>(cachedKey) == key && cachedRpdData == rpd->serializedFormat())
-				return cachedPipeline.get();
-		}
-		std::unique_ptr<QRhiGraphicsPipeline> pipeline = initializer();
-		if(!pipeline)
-			return nullptr;
-		const auto& entry = _graphicsPipelineCache.emplace_back(rpd->serializedFormat(), std::forward<CacheKey>(key), std::move(pipeline));
-		return std::get<2>(entry).get();
-	}
+	/// Indicates whether the calling thread is the render thread that owns this service's GPU resources.
+	bool isRendererThread() const override { return QThread::currentThread() == this; }
 
 	/// Returns the graphics API used by this render thread.
-	QRhi::Implementation graphicsApi() const { return _graphicsApi; }
+	QRhi::Implementation graphicsApi() const override { return _graphicsApi; }
 
 #if QT_CONFIG(vulkan) && defined(Q_OS_LINUX)
 	/// Returns the Vulkan instance used by this render thread (if using Vulkan).
@@ -151,11 +92,11 @@ public:
 
 	/// Loads a compiled .qsb shader from the Qt resource system.
 	/// May only be called from a renderer implementation on the render thread.
-	[[nodiscard]] QShader loadShader(const QString& resourcePath);
+	[[nodiscard]] QShader loadShader(const QString& resourcePath) override;
 
 	/// Records a non-fatal warning encountered during rendering.
 	/// May be called from the renderFrame() method of a renderer implementation on the render thread.
-	void reportWarning(const QString& message);
+	void reportWarning(const QString& message) override;
 
 	/// Picks the platform-specific graphics API for the current platform.
 	static QRhi::Implementation pickGraphicsApi();
@@ -534,27 +475,9 @@ private:
 	/// Cache for QRhi resources such as vertex buffers and textures. Shared by all active render targets.
     std::shared_ptr<RendererResourceCache> _rhiResourceCache = std::make_shared<RendererResourceCache>();
 
-	/// Cache for QRhi graphics pipelines used by the \c ensureGraphicsPipeline() method. Managed on the render thread and used by all render targets.
-	/// Each entry consists of:
-	/// - A serialized format of the render pass descriptor (e.g. attachment formats, sample count) for pipeline compatibility checks.
-	/// - A call site-specific cache key (e.g. shader variant, primitive type) to distinguish different pipeline configurations at the call site.
-	/// - The QRhiGraphicsPipeline.
-	std::vector<std::tuple<
-			QVector<quint32>,
-			boost::anys::unique_any,
-			std::unique_ptr<QRhiGraphicsPipeline>>>
-		_graphicsPipelineCache;
-
 	/// Warning messages from the renderer implementation collected during the last render pass
 	/// and to be displayed as an overlay in the viewport.
 	QStringList _warnings;
-
-	/// Weak pointers to all rendering devices created and shared by renderers running on this thread.
-	std::vector<std::weak_ptr<SceneRenderer::Device>> _sharedRenderingDevices;
-
-	/// A strong pointer to the most recently accessed shared rendering device, used to keep it alive
-	/// across successive offscreen rendering requests.
-	std::shared_ptr<SceneRenderer::Device> _sharedRenderingDeviceCache;
 };
 
 /**

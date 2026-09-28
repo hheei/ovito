@@ -1,24 +1,5 @@
-////////////////////////////////////////////////////////////////////////////////////////
-//
-//  Copyright 2026 OVITO GmbH, Germany
-//
-//  This file is part of OVITO (Open Visualization Tool).
-//
-//  OVITO is free software; you can redistribute it and/or modify it either under the
-//  terms of the GNU General Public License version 3 as published by the Free Software
-//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
-//  If you do not alter this notice, a recipient may use your version of this
-//  file under either the GPL or the MIT License.
-//
-//  You should have received a copy of the GPL along with this program in a
-//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
-//  with this program in a file LICENSE.MIT.txt
-//
-//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
-//  either express or implied. See the GPL or the MIT License for the specific language
-//  governing rights and limitations.
-//
-////////////////////////////////////////////////////////////////////////////////////////
+// SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
+// SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/core/Core.h>
 #include <ovito/core/viewport/ViewProjectionParameters.h>
@@ -91,7 +72,7 @@ void TextBillboardPrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBa
     if(!_drawParamsUBO) {
         _drawParamsUBO.reset(rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, requiredSize));
         if(!_drawParamsUBO->create()) {
-            rt()->reportWarning("TextBillboardPrimitiveRenderer: Failed to create draw params UBO.");
+            service()->reportWarning("TextBillboardPrimitiveRenderer: Failed to create draw params UBO.");
             _drawParamsUBO.reset();
             return;
         }
@@ -99,7 +80,7 @@ void TextBillboardPrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBa
     else if(_drawParamsUBO->size() < requiredSize) {
         _drawParamsUBO->setSize(requiredSize);
         if(!_drawParamsUBO->create()) {
-            rt()->reportWarning("TextBillboardPrimitiveRenderer: Failed to resize draw params UBO.");
+            service()->reportWarning("TextBillboardPrimitiveRenderer: Failed to resize draw params UBO.");
             _drawParamsUBO.reset();
             return;
         }
@@ -111,7 +92,7 @@ void TextBillboardPrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBa
             QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None,
             QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge));
         if(!_sampler->create()) {
-            rt()->reportWarning("TextBillboardPrimitiveRenderer: Failed to create atlas sampler.");
+            service()->reportWarning("TextBillboardPrimitiveRenderer: Failed to create atlas sampler.");
             _sampler.reset();
             return;
         }
@@ -153,7 +134,7 @@ void TextBillboardPrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBa
             [&](std::unique_ptr<QRhiTexture>& texture) {
                 texture.reset(rhi()->newTexture(QRhiTexture::RGBA8, dc.primitive->atlasImage().size(), 1));
                 if(!texture->create()) {
-                    rt()->reportWarning("TextBillboardPrimitiveRenderer: Failed to create atlas texture.");
+                    service()->reportWarning("TextBillboardPrimitiveRenderer: Failed to create atlas texture.");
                     texture.reset();
                     return;
                 }
@@ -182,7 +163,7 @@ void TextBillboardPrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBa
                     dc.texture, _sampler.get()),
             });
             if(!dc.bindings->create()) {
-                rt()->reportWarning("TextBillboardPrimitiveRenderer: Failed to create shader resource bindings.");
+                service()->reportWarning("TextBillboardPrimitiveRenderer: Failed to create shader resource bindings.");
                 dc.bindings.reset();
                 dc.boundTexture = nullptr;
                 continue;
@@ -242,11 +223,11 @@ QRhiGraphicsPipeline* TextBillboardPrimitiveRenderer::ensurePipeline(QRhiRenderP
 
     using PipelineCacheKey = RendererResourceKey<struct TextBillboardPipelineCache, bool>;
 
-    return rt()->ensureGraphicsPipeline(rpd, PipelineCacheKey{depthTest}, [&]() -> std::unique_ptr<QRhiGraphicsPipeline> {
+    return service()->ensureGraphicsPipeline(rpd, PipelineCacheKey{depthTest}, [&]() -> std::unique_ptr<QRhiGraphicsPipeline> {
 
         // Load compiled shader binaries.
-        QShader vs = rt()->loadShader(QStringLiteral(":/ovito/core/rendering/standard/shaders/text_billboard.vert.qsb"));
-        QShader fs = rt()->loadShader(QStringLiteral(":/ovito/core/rendering/standard/shaders/text_billboard.frag.qsb"));
+        QShader vs = service()->loadShader(QStringLiteral(":/ovito/core/rendering/standard/shaders/text_billboard.vert.qsb"));
+        QShader fs = service()->loadShader(QStringLiteral(":/ovito/core/rendering/standard/shaders/text_billboard.frag.qsb"));
         if(!vs.isValid() || !fs.isValid())
             return {};
 
@@ -303,7 +284,7 @@ QRhiGraphicsPipeline* TextBillboardPrimitiveRenderer::ensurePipeline(QRhiRenderP
         pipeline->setRenderPassDescriptor(rpd);
 
         if(!pipeline->create()) {
-            rt()->reportWarning("TextBillboardPrimitiveRenderer: Failed to create graphics pipeline.");
+            service()->reportWarning("TextBillboardPrimitiveRenderer: Failed to create graphics pipeline.");
             return {};
         }
         return pipeline;

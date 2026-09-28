@@ -1,24 +1,5 @@
-////////////////////////////////////////////////////////////////////////////////////////
-//
-//  Copyright 2026 OVITO GmbH, Germany
-//
-//  This file is part of OVITO (Open Visualization Tool).
-//
-//  OVITO is free software; you can redistribute it and/or modify it either under the
-//  terms of the GNU General Public License version 3 as published by the Free Software
-//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
-//  If you do not alter this notice, a recipient may use your version of this
-//  file under either the GPL or the MIT License.
-//
-//  You should have received a copy of the GPL along with this program in a
-//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
-//  with this program in a file LICENSE.MIT.txt
-//
-//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
-//  either express or implied. See the GPL or the MIT License for the specific language
-//  governing rights and limitations.
-//
-////////////////////////////////////////////////////////////////////////////////////////
+// SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
+// SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/core/Core.h>
 #include <ovito/core/dataset/data/BufferAccess.h>
@@ -136,7 +117,7 @@ void MeshPrimitiveRenderer::buildDrawCalls(const MeshPrimitive& primitive,
     uint32_t objectId = 0;
     if(isPickingPass && pickingMap) {
         size_t idCount = isInstanced ? primitive.perInstanceTMs()->size() : (size_t)primitive.mesh()->faceCount();
-        objectId = pickingMap->registerObjectId(rt()->objectIdAllocator().allocate(idCount), command);
+        objectId = pickingMap->registerObjectId(service()->objectIdAllocator().allocate(idCount), command);
     }
 
     DrawCall& dc = _drawCalls.emplace_back();
@@ -175,7 +156,7 @@ void MeshPrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBatch* batc
     if(!_drawParamsUBO) {
         _drawParamsUBO.reset(rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, requiredSize));
         if(!_drawParamsUBO->create()) {
-            rt()->reportWarning("MeshPrimitiveRenderer: Failed to create draw params UBO.");
+            service()->reportWarning("MeshPrimitiveRenderer: Failed to create draw params UBO.");
             _drawParamsUBO.reset();
             return;
         }
@@ -183,7 +164,7 @@ void MeshPrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBatch* batc
     else if(_drawParamsUBO->size() < requiredSize) {
         _drawParamsUBO->setSize(requiredSize);
         if(!_drawParamsUBO->create()) {
-            rt()->reportWarning("MeshPrimitiveRenderer: Failed to resize draw params UBO.");
+            service()->reportWarning("MeshPrimitiveRenderer: Failed to resize draw params UBO.");
             _drawParamsUBO.reset();
             return;
         }
@@ -375,7 +356,7 @@ void MeshPrimitiveRenderer::uploadFaceData(QRhiResourceUpdateBatch* batch, DrawC
                     QRhiShaderResourceBinding::bufferLoad(5, QRhiShaderResourceBinding::VertexStage, dc.bufs.instanceColorsSSBO),
                 });
                 if(!dc.sortedInstanceBindings->create()) {
-                    rt()->reportWarning("MeshPrimitiveRenderer: Failed to create sorted instance bindings.");
+                    service()->reportWarning("MeshPrimitiveRenderer: Failed to create sorted instance bindings.");
                     dc.sortedInstanceBindings.reset();
                 }
             }
@@ -448,7 +429,7 @@ void MeshPrimitiveRenderer::uploadFaceData(QRhiResourceUpdateBatch* batch, DrawC
                         dc.colorMapTexture, sampler),
                 });
                 if(!dc.pseudoColorBindings->create()) {
-                    rt()->reportWarning("MeshPrimitiveRenderer: Failed to create pseudo-color bindings.");
+                    service()->reportWarning("MeshPrimitiveRenderer: Failed to create pseudo-color bindings.");
                     dc.pseudoColorBindings.reset();
                 }
             }
@@ -899,7 +880,7 @@ QRhiShaderResourceBindings* MeshPrimitiveRenderer::ensureShaderResourceBindings(
                 _drawParamsUBO.get(), sizeof(MeshDrawParamsData)),
         });
         if(!_bindings->create()) {
-            rt()->reportWarning("MeshPrimitiveRenderer: Failed to create shader resource bindings.");
+            service()->reportWarning("MeshPrimitiveRenderer: Failed to create shader resource bindings.");
             _bindings.reset();
         }
     }
@@ -920,7 +901,7 @@ QRhiGraphicsPipeline* MeshPrimitiveRenderer::ensurePipeline(QRhiRenderPassDescri
         bool operator==(const PipelineCacheKey&) const = default;
     };
 
-    return rt()->ensureGraphicsPipeline(rpd, PipelineCacheKey{variant, flags}, [&]() -> std::unique_ptr<QRhiGraphicsPipeline> {
+    return service()->ensureGraphicsPipeline(rpd, PipelineCacheKey{variant, flags}, [&]() -> std::unique_ptr<QRhiGraphicsPipeline> {
         if(!impl()->sceneParamsUBO() || !_drawParamsUBO)
             return {};
 
@@ -1016,8 +997,8 @@ QRhiGraphicsPipeline* MeshPrimitiveRenderer::ensurePipeline(QRhiRenderPassDescri
                 return {};
         }
 
-        QShader vs = rt()->loadShader(vsPath);
-        QShader fs = rt()->loadShader(fsPath);
+        QShader vs = service()->loadShader(vsPath);
+        QShader fs = service()->loadShader(fsPath);
         if(!vs.isValid() || !fs.isValid())
             return {};
 
@@ -1231,7 +1212,7 @@ QRhiGraphicsPipeline* MeshPrimitiveRenderer::ensurePipeline(QRhiRenderPassDescri
         pipeline->setRenderPassDescriptor(rpd);
 
         if(!pipeline->create()) {
-            rt()->reportWarning("MeshPrimitiveRenderer: Failed to create graphics pipeline.");
+            service()->reportWarning("MeshPrimitiveRenderer: Failed to create graphics pipeline.");
             return {};
         }
         return pipeline;

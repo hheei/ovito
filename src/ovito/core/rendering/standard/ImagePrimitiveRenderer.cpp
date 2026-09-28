@@ -1,24 +1,5 @@
-////////////////////////////////////////////////////////////////////////////////////////
-//
-//  Copyright 2026 OVITO GmbH, Germany
-//
-//  This file is part of OVITO (Open Visualization Tool).
-//
-//  OVITO is free software; you can redistribute it and/or modify it either under the
-//  terms of the GNU General Public License version 3 as published by the Free Software
-//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
-//  If you do not alter this notice, a recipient may use your version of this
-//  file under either the GPL or the MIT License.
-//
-//  You should have received a copy of the GPL along with this program in a
-//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
-//  with this program in a file LICENSE.MIT.txt
-//
-//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
-//  either express or implied. See the GPL or the MIT License for the specific language
-//  governing rights and limitations.
-//
-////////////////////////////////////////////////////////////////////////////////////////
+// SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
+// SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/core/Core.h>
 #include <ovito/core/rendering/RenderThread.h>
@@ -97,7 +78,7 @@ void ImagePrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBatch* bat
     if(!_imageParamsUBO) {
         _imageParamsUBO.reset(rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, requiredSize));
         if(!_imageParamsUBO->create()) {
-            rt()->reportWarning("ImagePrimitiveRenderer: Failed to create image params UBO.");
+            service()->reportWarning("ImagePrimitiveRenderer: Failed to create image params UBO.");
             _imageParamsUBO.reset();
             return;
         }
@@ -105,7 +86,7 @@ void ImagePrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBatch* bat
     else if(_imageParamsUBO->size() < requiredSize) {
         _imageParamsUBO->setSize(requiredSize);
         if(!_imageParamsUBO->create()) {
-            rt()->reportWarning("ImagePrimitiveRenderer: Failed to resize image params UBO.");
+            service()->reportWarning("ImagePrimitiveRenderer: Failed to resize image params UBO.");
             _imageParamsUBO.reset();
             return;
         }
@@ -117,7 +98,7 @@ void ImagePrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBatch* bat
             QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None,
             QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge));
         if(!_sampler->create()) {
-            rt()->reportWarning("ImagePrimitiveRenderer: Failed to create sampler.");
+            service()->reportWarning("ImagePrimitiveRenderer: Failed to create sampler.");
             _sampler.reset();
             return;
         }
@@ -144,7 +125,7 @@ void ImagePrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBatch* bat
         if(!dc.texture) {
             dc.texture.reset(rhi()->newTexture(QRhiTexture::RGBA8, imageSize, 1));
             if(!dc.texture->create()) {
-                rt()->reportWarning("ImagePrimitiveRenderer: Failed to create image texture.");
+                service()->reportWarning("ImagePrimitiveRenderer: Failed to create image texture.");
                 dc.texture.reset();
                 continue;
             }
@@ -152,7 +133,7 @@ void ImagePrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBatch* bat
         else if(dc.texture->pixelSize() != imageSize) {
             dc.texture->setPixelSize(imageSize);
             if(!dc.texture->create()) {
-                rt()->reportWarning("ImagePrimitiveRenderer: Failed to resize image texture.");
+                service()->reportWarning("ImagePrimitiveRenderer: Failed to resize image texture.");
                 dc.texture.reset();
                 continue;
             }
@@ -176,7 +157,7 @@ void ImagePrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBatch* bat
                     dc.texture.get(), _sampler.get()),
             });
             if(!dc.bindings->create()) {
-                rt()->reportWarning("ImagePrimitiveRenderer: Failed to create shader resource bindings for draw call.");
+                service()->reportWarning("ImagePrimitiveRenderer: Failed to create shader resource bindings for draw call.");
                 dc.bindings.reset();
             }
         }
@@ -220,11 +201,11 @@ QRhiGraphicsPipeline* ImagePrimitiveRenderer::ensurePipeline(QRhiRenderPassDescr
     using PipelineCacheKey = RendererResourceKey<struct Tag>; // No variant flags for now, but we might add some in the future.
 
     // Check if a compatible pipeline already exists in the cache.
-    return rt()->ensureGraphicsPipeline(rpd, PipelineCacheKey{}, [&]() -> std::unique_ptr<QRhiGraphicsPipeline> {
+    return service()->ensureGraphicsPipeline(rpd, PipelineCacheKey{}, [&]() -> std::unique_ptr<QRhiGraphicsPipeline> {
 
         // Load compiled shader binaries.
-        QShader vs = rt()->loadShader(QStringLiteral(":/ovito/core/rendering/standard/shaders/image_quad.vert.qsb"));
-        QShader fs = rt()->loadShader(QStringLiteral(":/ovito/core/rendering/standard/shaders/image_quad.frag.qsb"));
+        QShader vs = service()->loadShader(QStringLiteral(":/ovito/core/rendering/standard/shaders/image_quad.vert.qsb"));
+        QShader fs = service()->loadShader(QStringLiteral(":/ovito/core/rendering/standard/shaders/image_quad.frag.qsb"));
         if(!vs.isValid() || !fs.isValid())
             return {};
 
@@ -264,7 +245,7 @@ QRhiGraphicsPipeline* ImagePrimitiveRenderer::ensurePipeline(QRhiRenderPassDescr
         pipeline->setRenderPassDescriptor(rpd);
 
         if(!pipeline->create()) {
-            rt()->reportWarning("ImagePrimitiveRenderer: Failed to create graphics pipeline.");
+            service()->reportWarning("ImagePrimitiveRenderer: Failed to create graphics pipeline.");
             return {};
         }
         return pipeline;

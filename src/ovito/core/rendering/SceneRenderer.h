@@ -1,24 +1,5 @@
-////////////////////////////////////////////////////////////////////////////////////////
-//
-//  Copyright 2026 OVITO GmbH, Germany
-//
-//  This file is part of OVITO (Open Visualization Tool).
-//
-//  OVITO is free software; you can redistribute it and/or modify it either under the
-//  terms of the GNU General Public License version 3 as published by the Free Software
-//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
-//  If you do not alter this notice, a recipient may use your version of this
-//  file under either the GPL or the MIT License.
-//
-//  You should have received a copy of the GPL along with this program in a
-//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
-//  with this program in a file LICENSE.MIT.txt
-//
-//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
-//  either express or implied. See the GPL or the MIT License for the specific language
-//  governing rights and limitations.
-//
-////////////////////////////////////////////////////////////////////////////////////////
+// SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
+// SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 /**
  * \file SceneRenderer.h
@@ -87,17 +68,17 @@ public:
 	{
 	public:
 		/// Constructor.
-		explicit Device(RenderThread* rt) : _renderThread(rt) {}
+		explicit Device(RendererService* service) : _service(service) {}
 
 		/// Destructor.
 		virtual ~Device() = default;
 
-		/// Returns the RenderThread this device is associated with.
-		RenderThread* renderThread() const { return _renderThread; }
+		/// Returns the renderer service this device is associated with.
+		RendererService* rendererService() const { return _service; }
 
 	private:
-		/// The render thread this device is associated with.
-		RenderThread* _renderThread;
+		/// The renderer service this device is associated with.
+		RendererService* _service;
 	};
 
 	/**
@@ -113,15 +94,15 @@ public:
 	public:
 
 		/// Constructor.
-		explicit Implementation(RenderThread* rt);
+		explicit Implementation(RendererService* service);
 
 		/// Destructor.
 		virtual ~Implementation() = default;
 
-		/// Returns the RenderThread that owns this implementation.
-		RenderThread* rt() const { return _rt; }
+		/// Returns the renderer service that owns this implementation and supplies its GPU resources.
+		RendererService* service() const { return _service; }
 
-		/// Returns the QRhi instance provided by the RenderThread.
+		/// Returns the QRhi instance provided by the renderer service.
 		QRhi* rhi() const { return _rhi; }
 
 		/// Called BEFORE beginPass().
@@ -197,10 +178,10 @@ public:
 
 	private:
 
-		/// Non-owning pointer to the render thread that created this implementation.
-		RenderThread* _rt;
+		/// Non-owning pointer to the renderer service that created this implementation.
+		RendererService* _service;
 
-		/// The QRhi instance to use for rendering. Provided by the RenderThread when creating the implementation.
+		/// The QRhi instance to use for rendering. Provided by the renderer service when creating the implementation.
 		QRhi* _rhi;
 	};
 
@@ -222,11 +203,11 @@ public:
 		/// Destructor.
 		virtual ~Configuration() = default;
 
-		/// Creates an implementation object that can be used by the RenderThread to render a visual image.
-		virtual std::unique_ptr<Implementation> createImplementationForVisual(RenderThread* rt, std::unique_ptr<Implementation> existingImpl) const = 0;
+		/// Creates an implementation object that can be used to render a visual image.
+		virtual std::unique_ptr<Implementation> createImplementationForVisual(RendererService* service, std::unique_ptr<Implementation> existingImpl) const = 0;
 
-		/// Creates an implementation object that can be used by the RenderThread to render a object picking image (if supported by the renderer).
-		virtual std::unique_ptr<Implementation> createImplementationForPicking(RenderThread* rt, std::unique_ptr<Implementation> existingImpl) const { return {}; }
+		/// Creates an implementation object that can be used to render a object picking image (if supported by the renderer).
+		virtual std::unique_ptr<Implementation> createImplementationForPicking(RendererService* service, std::unique_ptr<Implementation> existingImpl) const { return {}; }
 
 		/// Depth-aware outline post-processing settings. Populated by the renderer's createConfiguration() method.
 		OutlineSettings outlineSettings;

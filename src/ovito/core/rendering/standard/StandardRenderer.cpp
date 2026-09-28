@@ -1,24 +1,5 @@
-////////////////////////////////////////////////////////////////////////////////////////
-//
-//  Copyright 2026 OVITO GmbH, Germany
-//
-//  This file is part of OVITO (Open Visualization Tool).
-//
-//  OVITO is free software; you can redistribute it and/or modify it either under the
-//  terms of the GNU General Public License version 3 as published by the Free Software
-//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
-//  If you do not alter this notice, a recipient may use your version of this
-//  file under either the GPL or the MIT License.
-//
-//  You should have received a copy of the GPL along with this program in a
-//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
-//  with this program in a file LICENSE.MIT.txt
-//
-//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
-//  either express or implied. See the GPL or the MIT License for the specific language
-//  governing rights and limitations.
-//
-////////////////////////////////////////////////////////////////////////////////////////
+// SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
+// SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/core/Core.h>
 #include <ovito/core/utilities/units/UnitsManager.h>
@@ -72,25 +53,25 @@ std::unique_ptr<SceneRenderer::Configuration> StandardRenderer::createConfigurat
 /******************************************************************************
 * Creates an implementation object for visual rendering.
 ******************************************************************************/
-std::unique_ptr<SceneRenderer::Implementation> StandardRenderer::Configuration::createImplementationForVisual(RenderThread* rt, std::unique_ptr<Implementation> existingImpl) const
+std::unique_ptr<SceneRenderer::Implementation> StandardRenderer::Configuration::createImplementationForVisual(RendererService* service, std::unique_ptr<Implementation> existingImpl) const
 {
     // Reuse the existing implementation if it's already a StandardRendererImplementation.
     if(auto* existing = dynamic_cast<StandardRendererImplementation*>(existingImpl.get())) {
         existing->setOrderIndependentTransparency(_orderIndependentTransparency);
         return existingImpl;
     }
-    return std::make_unique<StandardRendererImplementation>(rt, _orderIndependentTransparency);
+    return std::make_unique<StandardRendererImplementation>(service, _orderIndependentTransparency);
 }
 
 /******************************************************************************
 * Creates an implementation object for picking rendering.
 ******************************************************************************/
-std::unique_ptr<SceneRenderer::Implementation> StandardRenderer::Configuration::createImplementationForPicking(RenderThread* rt, std::unique_ptr<Implementation> existingImpl) const
+std::unique_ptr<SceneRenderer::Implementation> StandardRenderer::Configuration::createImplementationForPicking(RendererService* service, std::unique_ptr<Implementation> existingImpl) const
 {
     // Reuse the existing implementation if it's already a StandardRendererImplementation.
     if(auto* existing = dynamic_cast<StandardRendererImplementation*>(existingImpl.get()))
         return existingImpl;
-    return std::make_unique<StandardRendererImplementation>(rt);
+    return std::make_unique<StandardRendererImplementation>(service);
 }
 
 /******************************************************************************

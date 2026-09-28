@@ -1,24 +1,5 @@
-////////////////////////////////////////////////////////////////////////////////////////
-//
-//  Copyright 2026 OVITO GmbH, Germany
-//
-//  This file is part of OVITO (Open Visualization Tool).
-//
-//  OVITO is free software; you can redistribute it and/or modify it either under the
-//  terms of the GNU General Public License version 3 as published by the Free Software
-//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
-//  If you do not alter this notice, a recipient may use your version of this
-//  file under either the GPL or the MIT License.
-//
-//  You should have received a copy of the GPL along with this program in a
-//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
-//  with this program in a file LICENSE.MIT.txt
-//
-//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
-//  either express or implied. See the GPL or the MIT License for the specific language
-//  governing rights and limitations.
-//
-////////////////////////////////////////////////////////////////////////////////////////
+// SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
+// SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/core/Core.h>
 #include <ovito/core/viewport/ViewProjectionParameters.h>
@@ -65,7 +46,7 @@ void MarkerPrimitiveRenderer::buildDrawCalls(const MarkerPrimitive& primitive,
     // Assign a picking ID block if needed.
     uint32_t objectId = 0;
     if(isPickingPass && pickingMap) {
-        objectId = pickingMap->registerObjectId(rt()->objectIdAllocator().allocate(), command);
+        objectId = pickingMap->registerObjectId(service()->objectIdAllocator().allocate(), command);
     }
 
     DrawCall& dc = _drawCalls.emplace_back();
@@ -96,7 +77,7 @@ void MarkerPrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBatch* ba
     if(!_drawParamsUBO) {
         _drawParamsUBO.reset(rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, requiredSize));
         if(!_drawParamsUBO->create()) {
-            rt()->reportWarning("MarkerPrimitiveRenderer: Failed to create draw params UBO.");
+            service()->reportWarning("MarkerPrimitiveRenderer: Failed to create draw params UBO.");
             _drawParamsUBO.reset();
             return;
         }
@@ -104,7 +85,7 @@ void MarkerPrimitiveRenderer::prepareResourceUpdates(QRhiResourceUpdateBatch* ba
     else if(_drawParamsUBO->size() < requiredSize) {
         _drawParamsUBO->setSize(requiredSize);
         if(!_drawParamsUBO->create()) {
-            rt()->reportWarning("MarkerPrimitiveRenderer: Failed to resize draw params UBO.");
+            service()->reportWarning("MarkerPrimitiveRenderer: Failed to resize draw params UBO.");
             _drawParamsUBO.reset();
             return;
         }
@@ -197,7 +178,7 @@ QRhiShaderResourceBindings* MarkerPrimitiveRenderer::ensureShaderResourceBinding
                 _drawParamsUBO.get(), sizeof(MarkerDrawParamsData)),
         });
         if(!_bindings->create()) {
-            rt()->reportWarning("MarkerPrimitiveRenderer: Failed to create shader resource bindings.");
+            service()->reportWarning("MarkerPrimitiveRenderer: Failed to create shader resource bindings.");
             _bindings.reset();
         }
     }
@@ -218,7 +199,7 @@ QRhiGraphicsPipeline* MarkerPrimitiveRenderer::ensurePipeline(QRhiRenderPassDesc
         bool operator==(const PipelineCacheKey& other) const = default;
     };
 
-    return rt()->ensureGraphicsPipeline(rpd, PipelineCacheKey{variant, depthTest, depthWrite},
+    return service()->ensureGraphicsPipeline(rpd, PipelineCacheKey{variant, depthTest, depthWrite},
                                         [&]() -> std::unique_ptr<QRhiGraphicsPipeline> {
 
         if(!impl()->sceneParamsUBO() || !_drawParamsUBO)
@@ -237,8 +218,8 @@ QRhiGraphicsPipeline* MarkerPrimitiveRenderer::ensurePipeline(QRhiRenderPassDesc
             fsPath = QStringLiteral(":/ovito/core/rendering/standard/shaders/marker_box_picking.frag.qsb");
         }
 
-        QShader vs = rt()->loadShader(vsPath);
-        QShader fs = rt()->loadShader(fsPath);
+        QShader vs = service()->loadShader(vsPath);
+        QShader fs = service()->loadShader(fsPath);
         if(!vs.isValid() || !fs.isValid())
             return {};
 
@@ -279,7 +260,7 @@ QRhiGraphicsPipeline* MarkerPrimitiveRenderer::ensurePipeline(QRhiRenderPassDesc
 
         QRhiShaderResourceBindings* bindings = ensureShaderResourceBindings();
         if(!bindings) {
-            rt()->reportWarning("MarkerPrimitiveRenderer: Failed to get shader resource bindings for pipeline creation.");
+            service()->reportWarning("MarkerPrimitiveRenderer: Failed to get shader resource bindings for pipeline creation.");
             return {};
         }
 
@@ -287,7 +268,7 @@ QRhiGraphicsPipeline* MarkerPrimitiveRenderer::ensurePipeline(QRhiRenderPassDesc
         pipeline->setRenderPassDescriptor(rpd);
 
         if(!pipeline->create()) {
-            rt()->reportWarning("MarkerPrimitiveRenderer: Failed to create graphics pipeline.");
+            service()->reportWarning("MarkerPrimitiveRenderer: Failed to create graphics pipeline.");
             return {};
         }
         return pipeline;

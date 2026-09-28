@@ -1,24 +1,5 @@
-////////////////////////////////////////////////////////////////////////////////////////
-//
-//  Copyright 2026 OVITO GmbH, Germany
-//
-//  This file is part of OVITO (Open Visualization Tool).
-//
-//  OVITO is free software; you can redistribute it and/or modify it either under the
-//  terms of the GNU General Public License version 3 as published by the Free Software
-//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
-//  If you do not alter this notice, a recipient may use your version of this
-//  file under either the GPL or the MIT License.
-//
-//  You should have received a copy of the GPL along with this program in a
-//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
-//  with this program in a file LICENSE.MIT.txt
-//
-//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
-//  either express or implied. See the GPL or the MIT License for the specific language
-//  governing rights and limitations.
-//
-////////////////////////////////////////////////////////////////////////////////////////
+// SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
+// SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 // #define EXPORT_BUFFERS
 
@@ -44,8 +25,8 @@ namespace Ovito {
 /******************************************************************************
 * Constructor.
 ******************************************************************************/
-StandardRendererImplementation::StandardRendererImplementation(RenderThread* rt, bool orderIndependentTransparency)
-    : Implementation(rt), _cylinderRenderer(this), _imageRenderer(this), _lineRenderer(this), _markerRenderer(this), _meshRenderer(this), _particleRenderer(this), _textBillboardRenderer(this), _orderIndependentTransparency(orderIndependentTransparency)
+StandardRendererImplementation::StandardRendererImplementation(RendererService* service, bool orderIndependentTransparency)
+    : Implementation(service), _cylinderRenderer(this), _imageRenderer(this), _lineRenderer(this), _markerRenderer(this), _meshRenderer(this), _particleRenderer(this), _textBillboardRenderer(this), _orderIndependentTransparency(orderIndependentTransparency)
 {
 }
 
@@ -66,7 +47,7 @@ void StandardRendererImplementation::renderFrame(const FrameGraph& frameGraph, c
     _textBillboardRenderer.clear();
 
     // Open a new resource cache frame.
-    _previousResourceFrame = std::exchange(_currentResourceFrame, rt()->rhiResourceCache().acquireResourceFrame());
+    _previousResourceFrame = std::exchange(_currentResourceFrame, service()->rhiResourceCache().acquireResourceFrame());
 
     bool isYUpInNDC = rhi()->isYUpInNDC();
 
@@ -224,7 +205,7 @@ void StandardRendererImplementation::prepareResourceUpdates(QRhiRenderTarget* re
     if(!_sceneParamsUBO) {
         _sceneParamsUBO.reset(rhi()->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(SceneParamsData)));
         if(!_sceneParamsUBO->create()) {
-            rt()->reportWarning("StandardRendererImplementation: Failed to create scene params UBO.");
+            service()->reportWarning("StandardRendererImplementation: Failed to create scene params UBO.");
             _sceneParamsUBO.reset();
             return;
         }
@@ -430,7 +411,7 @@ bool StandardRendererImplementation::ensureIntermediateResources(
         _intermediateState.colorTexture.reset(rhi()->newTexture(
             QRhiTexture::RGBA8, size, 1, QRhiTexture::RenderTarget));
         if(!_intermediateState.colorTexture->create()) {
-            rt()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create intermediate color texture."));
+            service()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create intermediate color texture."));
             _intermediateState.colorTexture.reset();
             return false;
         }
@@ -441,7 +422,7 @@ bool StandardRendererImplementation::ensureIntermediateResources(
         _intermediateState.depthTexture.reset(rhi()->newTexture(
             QRhiTexture::D32F, size, 1, QRhiTexture::RenderTarget));
         if(!_intermediateState.depthTexture->create()) {
-            rt()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create intermediate depth texture."));
+            service()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create intermediate depth texture."));
             _intermediateState.colorTexture.reset();
             _intermediateState.depthTexture.reset();
             return false;
@@ -456,7 +437,7 @@ bool StandardRendererImplementation::ensureIntermediateResources(
             _intermediateState.rpd.reset(_intermediateState.target->newCompatibleRenderPassDescriptor());
             _intermediateState.target->setRenderPassDescriptor(_intermediateState.rpd.get());
             if(!_intermediateState.target->create()) {
-                rt()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create intermediate render target."));
+                service()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create intermediate render target."));
                 _intermediateState.colorTexture.reset();
                 _intermediateState.depthTexture.reset();
                 _intermediateState.target.reset();
@@ -469,7 +450,7 @@ bool StandardRendererImplementation::ensureIntermediateResources(
         _intermediateState.highlightColorTexture.reset(rhi()->newTexture(
             QRhiTexture::RGBA8, size, 1, QRhiTexture::RenderTarget));
         if(!_intermediateState.highlightColorTexture->create()) {
-            rt()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create highlight silhouette texture."));
+            service()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create highlight silhouette texture."));
             _intermediateState.highlightColorTexture.reset();
             return false;
         }
@@ -482,7 +463,7 @@ bool StandardRendererImplementation::ensureIntermediateResources(
         _intermediateState.highlightDepthTexture.reset(rhi()->newTexture(
             QRhiTexture::D32F, size, 1, QRhiTexture::RenderTarget));
         if(!_intermediateState.highlightDepthTexture->create()) {
-            rt()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create highlight silhouette depth texture."));
+            service()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create highlight silhouette depth texture."));
             _intermediateState.highlightColorTexture.reset();
             _intermediateState.highlightDepthTexture.reset();
             return false;
@@ -497,7 +478,7 @@ bool StandardRendererImplementation::ensureIntermediateResources(
             _intermediateState.highlightRpd.reset(_intermediateState.highlightTarget->newCompatibleRenderPassDescriptor());
             _intermediateState.highlightTarget->setRenderPassDescriptor(_intermediateState.highlightRpd.get());
             if(!_intermediateState.highlightTarget->create()) {
-                rt()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create highlight silhouette render target."));
+                service()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create highlight silhouette render target."));
                 _intermediateState.highlightColorTexture.reset();
                 _intermediateState.highlightDepthTexture.reset();
                 _intermediateState.highlightTarget.reset();
@@ -511,7 +492,7 @@ bool StandardRendererImplementation::ensureIntermediateResources(
         _intermediateState.excludedDepthTexture.reset(rhi()->newTexture(
             QRhiTexture::D32F, size, 1, QRhiTexture::RenderTarget));
         if(!_intermediateState.excludedDepthTexture->create()) {
-            rt()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create excluded-depth texture."));
+            service()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create excluded-depth texture."));
             _intermediateState.excludedDepthTexture.reset();
             return false;
         }
@@ -524,7 +505,7 @@ bool StandardRendererImplementation::ensureIntermediateResources(
             _intermediateState.excludedDepthRpd.reset(_intermediateState.excludedDepthTarget->newCompatibleRenderPassDescriptor());
             _intermediateState.excludedDepthTarget->setRenderPassDescriptor(_intermediateState.excludedDepthRpd.get());
             if(!_intermediateState.excludedDepthTarget->create()) {
-                rt()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create excluded-depth render target."));
+                service()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create excluded-depth render target."));
                 _intermediateState.excludedDepthTexture.reset();
                 _intermediateState.excludedDepthTarget.reset();
                 _intermediateState.excludedDepthRpd.reset();
@@ -550,7 +531,7 @@ bool StandardRendererImplementation::ensureIntermediateResources(
         _intermediateState.postProcessParamsUBO.reset(rhi()->newBuffer(
             QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 96));
         if(!_intermediateState.postProcessParamsUBO->create()) {
-            rt()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create post-process params UBO."));
+            service()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create post-process params UBO."));
             _intermediateState.postProcessParamsUBO.reset();
             return false;
         }
@@ -562,7 +543,7 @@ bool StandardRendererImplementation::ensureIntermediateResources(
             QRhiSampler::Nearest, QRhiSampler::Nearest, QRhiSampler::None,
             QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge));
         if(!_intermediateState.sampler->create()) {
-            rt()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create post-process sampler."));
+            service()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create post-process sampler."));
             _intermediateState.sampler.reset();
             return false;
         }
@@ -595,7 +576,7 @@ bool StandardRendererImplementation::ensureIntermediateResources(
                 _intermediateState.sampler.get()),
         });
         if(!_intermediateState.outlineBindings->create()) {
-            rt()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create outline/highlight post-process bindings."));
+            service()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create outline/highlight post-process bindings."));
             _intermediateState.outlineBindings.reset();
             return false;
         }
@@ -783,13 +764,13 @@ void StandardRendererImplementation::runPostProcess(QRhiCommandBuffer* cb, QRhiR
     struct OutlineCacheKey {
         bool operator==(const OutlineCacheKey&) const = default;
     };
-    QRhiGraphicsPipeline* pipeline = rt()->ensureGraphicsPipeline(
+    QRhiGraphicsPipeline* pipeline = service()->ensureGraphicsPipeline(
         finalTarget->renderPassDescriptor(), OutlineCacheKey{},
         [&]() -> std::unique_ptr<QRhiGraphicsPipeline>
     {
-        QShader vs = rt()->loadShader(QStringLiteral(
+        QShader vs = service()->loadShader(QStringLiteral(
             ":/ovito/core/rendering/standard/shaders/postprocess_outline.vert.qsb"));
-        QShader fs = rt()->loadShader(QStringLiteral(
+        QShader fs = service()->loadShader(QStringLiteral(
             ":/ovito/core/rendering/standard/shaders/postprocess_outline.frag.qsb"));
         if(!vs.isValid() || !fs.isValid())
             return {};
@@ -809,7 +790,7 @@ void StandardRendererImplementation::runPostProcess(QRhiCommandBuffer* cb, QRhiR
         p->setRenderPassDescriptor(finalTarget->renderPassDescriptor());
 
         if(!p->create()) {
-            rt()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create outline/highlight post-process pipeline."));
+            service()->reportWarning(QStringLiteral("StandardRendererImplementation: Failed to create outline/highlight post-process pipeline."));
             return {};
         }
         return p;
@@ -896,7 +877,7 @@ bool StandardRendererImplementation::ensureOITResources(QSize size)
     _oitState.accumTexture.reset(rhi()->newTexture(QRhiTexture::RGBA16F, size, 1,
         QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
     if(!_oitState.accumTexture->create()) {
-        rt()->reportWarning("StandardRendererImplementation: Failed to create OIT accum texture.");
+        service()->reportWarning("StandardRendererImplementation: Failed to create OIT accum texture.");
         _oitState.accumTexture.reset();
         return false;
     }
@@ -904,7 +885,7 @@ bool StandardRendererImplementation::ensureOITResources(QSize size)
     _oitState.revealTexture.reset(rhi()->newTexture(QRhiTexture::RGBA8, size, 1,
         QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
     if(!_oitState.revealTexture->create()) {
-        rt()->reportWarning("StandardRendererImplementation: Failed to create OIT reveal texture.");
+        service()->reportWarning("StandardRendererImplementation: Failed to create OIT reveal texture.");
         _oitState.revealTexture.reset();
         return false;
     }
@@ -913,7 +894,7 @@ bool StandardRendererImplementation::ensureOITResources(QSize size)
     // PreserveDepthStencilContents works correctly on the reveal render target.
     _oitState.depthTexture.reset(rhi()->newTexture(QRhiTexture::D32F, size, 1, QRhiTexture::RenderTarget));
     if(!_oitState.depthTexture->create()) {
-        rt()->reportWarning("StandardRendererImplementation: Failed to create OIT depth texture.");
+        service()->reportWarning("StandardRendererImplementation: Failed to create OIT depth texture.");
         _oitState.depthTexture.reset();
         return false;
     }
@@ -926,7 +907,7 @@ bool StandardRendererImplementation::ensureOITResources(QSize size)
     _oitState.accumRpd.reset(_oitState.accumTarget->newCompatibleRenderPassDescriptor());
     _oitState.accumTarget->setRenderPassDescriptor(_oitState.accumRpd.get());
     if(!_oitState.accumTarget->create()) {
-        rt()->reportWarning("StandardRendererImplementation: Failed to create OIT accum render target.");
+        service()->reportWarning("StandardRendererImplementation: Failed to create OIT accum render target.");
         _oitState.accumTarget.reset();
         return false;
     }
@@ -941,7 +922,7 @@ bool StandardRendererImplementation::ensureOITResources(QSize size)
     _oitState.revealRpd.reset(_oitState.revealTarget->newCompatibleRenderPassDescriptor());
     _oitState.revealTarget->setRenderPassDescriptor(_oitState.revealRpd.get());
     if(!_oitState.revealTarget->create()) {
-        rt()->reportWarning("StandardRendererImplementation: Failed to create OIT reveal render target.");
+        service()->reportWarning("StandardRendererImplementation: Failed to create OIT reveal render target.");
         _oitState.revealTarget.reset();
         return false;
     }
@@ -952,7 +933,7 @@ bool StandardRendererImplementation::ensureOITResources(QSize size)
             QRhiSampler::Nearest, QRhiSampler::Nearest, QRhiSampler::None,
             QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge));
         if(!_oitState.sampler->create()) {
-            rt()->reportWarning("StandardRendererImplementation: Failed to create OIT sampler.");
+            service()->reportWarning("StandardRendererImplementation: Failed to create OIT sampler.");
             _oitState.sampler.reset();
             return false;
         }
@@ -975,7 +956,7 @@ bool StandardRendererImplementation::ensureOITResources(QSize size)
             _oitState.revealTexture.get(), _oitState.sampler.get()),
     });
     if(!_oitState.compositeBindings->create()) {
-        rt()->reportWarning("StandardRendererImplementation: Failed to create OIT composite bindings.");
+        service()->reportWarning("StandardRendererImplementation: Failed to create OIT composite bindings.");
         _oitState.compositeBindings.reset();
         return false;
     }
@@ -993,9 +974,9 @@ QRhiGraphicsPipeline* StandardRendererImplementation::ensureOITCompositePipeline
         bool operator==(const OITCompositeCacheKey&) const = default;
     };
 
-    return rt()->ensureGraphicsPipeline(rpd, OITCompositeCacheKey{}, [&]() -> std::unique_ptr<QRhiGraphicsPipeline> {
-        QShader vs = rt()->loadShader(QStringLiteral(":/ovito/core/rendering/standard/shaders/oit_compose.vert.qsb"));
-        QShader fs = rt()->loadShader(QStringLiteral(":/ovito/core/rendering/standard/shaders/oit_compose.frag.qsb"));
+    return service()->ensureGraphicsPipeline(rpd, OITCompositeCacheKey{}, [&]() -> std::unique_ptr<QRhiGraphicsPipeline> {
+        QShader vs = service()->loadShader(QStringLiteral(":/ovito/core/rendering/standard/shaders/oit_compose.vert.qsb"));
+        QShader fs = service()->loadShader(QStringLiteral(":/ovito/core/rendering/standard/shaders/oit_compose.frag.qsb"));
         if(!vs.isValid() || !fs.isValid())
             return {};
 
@@ -1026,7 +1007,7 @@ QRhiGraphicsPipeline* StandardRendererImplementation::ensureOITCompositePipeline
         pipeline->setRenderPassDescriptor(rpd);
 
         if(!pipeline->create()) {
-            rt()->reportWarning("StandardRendererImplementation: Failed to create OIT composite pipeline.");
+            service()->reportWarning("StandardRendererImplementation: Failed to create OIT composite pipeline.");
             return {};
         }
         return pipeline;
@@ -1139,7 +1120,7 @@ std::pair<QRhiTexture*, QRhiSampler*> StandardRendererImplementation::ensureColo
 
             texture.reset(rhi()->newTexture(QRhiTexture::RGBA8, QSize(resolution, 1), 1));
             if(!texture->create()) {
-                rt()->reportWarning("StandardRendererImplementation: Failed to create colorMap texture.");
+                service()->reportWarning("StandardRendererImplementation: Failed to create colorMap texture.");
                 texture.reset();
                 return;
             }
@@ -1155,7 +1136,7 @@ std::pair<QRhiTexture*, QRhiSampler*> StandardRendererImplementation::ensureColo
                 QRhiSampler::Nearest, QRhiSampler::Nearest, QRhiSampler::None,
                 QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge));
             if(!_colorMapSamplerNearest->create()) {
-                rt()->reportWarning("StandardRendererImplementation: Failed to create nearest colorMap sampler.");
+                service()->reportWarning("StandardRendererImplementation: Failed to create nearest colorMap sampler.");
                 _colorMapSamplerNearest.reset();
             }
         }
@@ -1167,7 +1148,7 @@ std::pair<QRhiTexture*, QRhiSampler*> StandardRendererImplementation::ensureColo
                 QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None,
                 QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge));
             if(!_colorMapSamplerLinear->create()) {
-                rt()->reportWarning("StandardRendererImplementation: Failed to create linear colorMap sampler.");
+                service()->reportWarning("StandardRendererImplementation: Failed to create linear colorMap sampler.");
                 _colorMapSamplerLinear.reset();
             }
         }
