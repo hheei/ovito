@@ -119,6 +119,7 @@ SET(SourceFiles
     rendering/ObjectPickingMap.cpp
     rendering/OpacityFunction.cpp
     rendering/RenderThread.cpp
+    rendering/FrameGraphRenderPass.cpp
     rendering/WarningIndicatorRenderer.cpp
 )
 if(OVITO_BUILD_BASIC)

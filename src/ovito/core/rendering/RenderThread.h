@@ -7,6 +7,7 @@
 #include <ovito/core/rendering/FrameGraph.h>
 #include <ovito/core/rendering/SceneRenderer.h>
 #include <ovito/core/rendering/RendererService.h>
+#include <ovito/core/rendering/FrameGraphRenderPass.h>
 #include <ovito/core/rendering/ObjectPickingMap.h>
 #include <ovito/core/rendering/ObjectPickingBuffer.h>
 #include <ovito/core/rendering/ObjectIdAllocator.h>
@@ -369,11 +370,11 @@ private:
 		std::unique_ptr<QRhiTextureRenderTarget> offscreenRenderTarget;
 		std::unique_ptr<QRhiRenderPassDescriptor> offscreenRenderPassDesc;
 
-		// --- Renderer-specific implementation object ---
-		std::unique_ptr<SceneRenderer::Implementation> rendererImplVisual;  ///< Created by the SceneRenderer::Configuration for visual rendering.
-		std::unique_ptr<SceneRenderer::Implementation> rendererImplPicking; ///< Created by the SceneRenderer::Configuration for picking rendering (if supported by the renderer).
-		                                                                    ///  A separate implementation is needed to avoid interference between progressive refinement rendering (visual) and picking passes,
-																			///  which may be requested at any time.
+		/// The renderer implementations of this target, created by its SceneRenderer::Configuration: one for
+		/// visual rendering and, if the renderer supports it, one for picking. Two implementations are needed to
+		/// avoid interference between progressive refinement rendering (visual) and picking passes, which may be
+		/// requested at any time.
+		FrameGraphRenderPass::Implementations renderers;
 	};
 
 	/// Creates the QRhi instance on the render thread.

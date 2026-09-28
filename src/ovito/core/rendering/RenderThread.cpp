@@ -1072,8 +1072,7 @@ void RenderThread::handleSurfaceGoingAway(SurfaceGoingAwayEvent* event)
         it->second.pendingFrameGraph.reset();
         it->second.lastRenderedFrameGraph.reset();
         it->second.refinementIteration = 0;
-        it->second.rendererImplVisual.reset();
-        it->second.rendererImplPicking.reset();
+        it->second.renderers.reset();
         it->second.pickObjectIdData.clear();
         it->second.pickPrimitiveIdData.clear();
         it->second.pickDepthData.clear();
@@ -1111,8 +1110,7 @@ void RenderThread::handleSuspendTarget(SuspendTargetEvent* event)
         it->second.pendingFrameGraph.reset();
         it->second.lastRenderedFrameGraph.reset();
         it->second.refinementIteration = 0;
-        it->second.rendererImplVisual.reset();
-        it->second.rendererImplPicking.reset();
+        it->second.renderers.reset();
         it->second.pickObjectIdData.clear();
         it->second.pickPrimitiveIdData.clear();
         it->second.pickDepthData.clear();
@@ -1295,7 +1293,7 @@ void RenderThread::renderOnscreen(TargetState& state)
     }
 
     // Decide whether to schedule another refinement iteration.
-    if(frameGraph && state.rendererConfig && state.rendererImplVisual && state.rendererImplVisual->refinementIterationNeeded(*frameGraph, *state.rendererConfig, refinementIteration)) {
+    if(frameGraph && state.rendererConfig && state.renderers.visual && state.renderers.visual->refinementIterationNeeded(*frameGraph, *state.rendererConfig, refinementIteration)) {
         state.refinementIteration++;
         state.needsRender = true;   // Run loop will render next iteration.
     }
@@ -1394,8 +1392,8 @@ void RenderThread::renderOffscreen(TargetState& state, RenderOffscreenFrameEvent
 
             refinementIteration++;
         }
-        while(state.rendererImplVisual &&
-            state.rendererImplVisual->refinementIterationNeeded(*event->frameGraph, *state.rendererConfig, refinementIteration) &&
+        while(state.renderers.visual &&
+            state.renderers.visual->refinementIterationNeeded(*event->frameGraph, *state.rendererConfig, refinementIteration) &&
             !event->promise.task()->isCanceled());
 
         // Hold on to the last rendered frame graph to keep cached resources alive until the next animation frame is being rendered.
@@ -1589,167 +1587,62 @@ void RenderThread::renderFrameGraph(QRhiCommandBuffer* cb, QRhiRenderTarget* ren
     OVITO_ASSERT(renderTarget);
     OVITO_ASSERT(frameGraph);
 
-    // Collect non-fatal warnings from the renderer (only for visual passes — picking passes
-    // do not generate warnings, and we intentionally leave the warning store untouched so that
-    // the visual-pass indicator remains visible while a picking pass is in flight).
+    // Collect non-fatal warnings from the renderer while the pass is recorded. A picking pass generates no
+    // warnings, and the warning store of the visual pass is deliberately left untouched while one is in flight,
+    // because it holds the messages the indicator of the viewport currently displays.
     _warnings.clear();
 
-    // Preprocess frame graph:
-    //   - Replace all text primitives with image primitives.
-    //   - Compute effective wireframe line widths based on the current DPI.
-    frameGraph->finalizeForRendering();
+    // The pass sequence itself is shared with the Qt Quick frontend; what is specific to the classic frontend
+    // is added through the two callbacks: the warning indicator icon and, in the Basic edition, the watermark.
+    FrameGraphRenderPass::Arguments args{
+        /* service */ *this,
+        /* cb */ *cb,
+        /* renderTarget */ *renderTarget,
+        /* frameGraph */ *frameGraph,
+        /* configuration */ config,
+        /* implementations */ state.renderers,
+        /* progress */ progress,
+        /* isPickingPass */ isPickingPass,
+        /* pickingMap */ isPickingPass ? &state.pickingMap : nullptr,
+        /* refinementIteration */ refinementIteration,
+        /* prepareScenePass */ [&](QRhiResourceUpdateBatch* updates) {
 
-    // Create or update the active scene renderer implementation.
-    // The renderer's configuration object decides whether the existing implementation
-    // needs to be replaced (because it came from a different renderer) or can be updated in place.
-    SceneRenderer::Implementation* rendererImpl;
-    if(!isPickingPass) {
-        state.rendererImplVisual = config.createImplementationForVisual(this, std::move(state.rendererImplVisual));
-        rendererImpl = state.rendererImplVisual.get();
-    }
-    else {
-        state.rendererImplPicking = config.createImplementationForPicking(this, std::move(state.rendererImplPicking));
-        rendererImpl = state.rendererImplPicking.get();
-    }
-
-#ifdef OVITO_BUILD_BASIC
-    // Create or tear down the watermark renderer depending on whether the active renderer requests watermarking.
-    if(!isPickingPass && rendererImpl) {
-        if(rendererImpl->isWatermarked()) {
-            if(!state.watermarkRenderer)
-                state.watermarkRenderer = std::make_unique<WatermarkRenderer>(this, SceneRenderer::watermark());
-        } else {
-            state.watermarkRenderer.reset();
-        }
-    }
-#endif
-
-    // Total progress reporting for refinement iterations, if supported by the renderer implementation.
-    bool finalProgressiveRefinementPass = false;
-    if(!isPickingPass && state.rendererImplVisual && frameGraph) {
-        int totalRefinementIterations = state.rendererImplVisual->totalRefinementIterations(*frameGraph, config);
-        if(totalRefinementIterations > 0) {
-            finalProgressiveRefinementPass = (refinementIteration+1 >= totalRefinementIterations);
-            OVITO_ASSERT(refinementIteration < totalRefinementIterations);
-            if(refinementIteration == 0)
-                progress.beginSubSteps(totalRefinementIterations);
-            else
-                progress.nextSubStep();
-        }
-    }
-
-    // Determine the pixel size from the final render target.
-    const QSize pixelSize = renderTarget->pixelSize();
-
-    // Renderer-specific pre-pass, which externally renders an image (must happen BEFORE beginPass).
-    if(rendererImpl)
-        rendererImpl->renderFrame(*frameGraph, config, pixelSize, progress, isPickingPass, refinementIteration, isPickingPass ? &state.pickingMap : nullptr);
-
-    // Check if an intermediate color+depth target is needed for post-processing (e.g. outlines).
-    // This must happen before prepareResourceUpdates() so the impl can create/resize the
-    // intermediate resources and receive the final RPD for post-process pipeline creation.
-    // Intermediate targets are only used for visual (non-picking) passes.
-    QRhiRenderTarget* sceneTarget = renderTarget;
-    if(!isPickingPass && rendererImpl) {
-        if(QRhiRenderTarget* intermediate = rendererImpl->prepareIntermediateTarget(
-                renderTarget->renderPassDescriptor(), pixelSize))
-            sceneTarget = intermediate;
-    }
-    const bool useIntermediate = (sceneTarget != renderTarget);
-
-    // Determine the device-pixel ratio for the warning indicator.
-    // QRhiRenderTarget::devicePixelRatio() returns 1.0 for offscreen targets automatically.
-    const qreal dpr = qreal(renderTarget->devicePixelRatio());
-
-    // Prepare a resource update batch for uploading vertex data, textures, etc.
-    QRhiResourceUpdateBatch* resourceUpdates = rhi()->nextResourceUpdateBatch();
-
-    // Enqueue texture uploads from external renderer BEFORE beginPass().
-    // Pass sceneTarget so sub-renderers build pipelines compatible with the scene RPD
-    // (which may differ from the final target's RPD when an intermediate target is in use).
-    if(rendererImpl)
-        rendererImpl->prepareResourceUpdates(sceneTarget, resourceUpdates, pixelSize, isPickingPass, *frameGraph);
-
-    // Prepare warning indicator resources (lazy texture upload + UBO update) BEFORE beginPass().
-    if(!isPickingPass && !_warnings.empty() && state.warningIndicator)
-        state.warningIndicator->prepareResourceUpdates(resourceUpdates, renderTarget, dpr);
+            // Prepare the warning indicator's lazy texture upload and uniform buffer update before beginPass().
+            if(!isPickingPass && !_warnings.empty() && state.warningIndicator)
+                state.warningIndicator->prepareResourceUpdates(updates, renderTarget, qreal(renderTarget->devicePixelRatio()));
 
 #ifdef OVITO_BUILD_BASIC
-    // Prepare watermark resources (lazy texture upload + UBO update) BEFORE beginPass().
-    if(!isPickingPass && state.watermarkRenderer)
-        state.watermarkRenderer->prepareResourceUpdates(resourceUpdates, renderTarget);
+            // Create or tear down the watermark renderer depending on what the active renderer requests.
+            if(!isPickingPass) {
+                if(SceneRenderer::Implementation* implementation = state.renderers.get(false)) {
+                    if(implementation->isWatermarked()) {
+                        if(!state.watermarkRenderer)
+                            state.watermarkRenderer = std::make_unique<WatermarkRenderer>(this, SceneRenderer::watermark());
+                    }
+                    else {
+                        state.watermarkRenderer.reset();
+                    }
+                }
+                if(state.watermarkRenderer)
+                    state.watermarkRenderer->prepareResourceUpdates(updates, renderTarget);
+            }
 #endif
-
-    // Allow the renderer to run additional compute or graphics passes before the main render pass
-    // (e.g. GPU depth sort for transparent particles, OIT accumulation passes).
-    // The pending resource batch is passed by pointer so the pre-passes can commit it as needed
-    // (e.g. via a minimal compute pass) to make uploaded data available to compute shaders.
-    if(rendererImpl)
-        rendererImpl->performPrePasses(cb, pixelSize, isPickingPass, resourceUpdates);
-
-    // Determine the clear color from the frame graph.
-    QColor clearColor = isPickingPass ? QColor(0, 0, 0, 0) : static_cast<QColor>(frameGraph->clearColor());
-
-    // Record the main scene render pass, committing any pending resource uploads.
-    // When an intermediate target is active, the scene renders into it; OverLayer is skipped
-    // so it can be drawn separately into the final target after post-processing.
-    cb->beginPass(sceneTarget, clearColor, { 1.0f, 0 }, resourceUpdates);
-
-    // Set the viewport to cover the entire render target.
-    cb->setViewport(QRhiViewport(0, 0, float(pixelSize.width()), float(pixelSize.height())));
-    // Workaround for Qt's Vulkan backend: also set the scissor rect to the full viewport size,
-    // because setViewport() won't do it if no graphics pipeline is currently bound.
-    cb->setScissor(QRhiScissor(0, 0, pixelSize.width(), pixelSize.height()));
-
-    // Composite output from external renderer as the first operation in the render pass.
-    // When useIntermediate, OverLayer is skipped here and drawn after post-processing.
-    if(rendererImpl)
-        rendererImpl->compositeInPass(cb, sceneTarget, isPickingPass, /*skipOverLayer=*/useIntermediate);
-
+        },
+        /* extendScenePass */ [&](QRhiCommandBuffer* passCb, QRhiRenderTarget* passTarget) {
 #ifdef OVITO_BUILD_BASIC
-    // Draw the tiled watermark overlay (visual passes only, non-intermediate path).
-    if(!isPickingPass && !useIntermediate && state.watermarkRenderer)
-        state.watermarkRenderer->compositeInPass(cb, renderTarget->renderPassDescriptor());
+            // Draw the tiled watermark overlay, if the active renderer requests one.
+            if(!isPickingPass && state.watermarkRenderer)
+                state.watermarkRenderer->compositeInPass(passCb, passTarget->renderPassDescriptor());
 #endif
-
-    // Draw the warning indicator icon (visual passes only) and update the shared warning store.
-    // When an intermediate target is in use, defer this step to the final pass below.
-    if(!isPickingPass && !useIntermediate)
-        updateWarningStore(cb, renderTarget, state);
-
-    cb->endPass();
-
-    // When an intermediate target was used, run the post-process pass and draw the OverLayer
-    // into the final target (so it appears on top of all effects).
-    if(useIntermediate) {
-        // Build the post-process UBO upload batch BEFORE beginPass: D3D11 forbids
-        // resourceUpdate() calls while a render pass is active.
-        QRhiResourceUpdateBatch* postUpdates = rendererImpl->preparePostProcess(cb);
-        cb->beginPass(renderTarget, clearColor, { 1.0f, 0 }, postUpdates);
-        cb->setViewport(QRhiViewport(0, 0, float(pixelSize.width()), float(pixelSize.height())));
-        cb->setScissor(QRhiScissor(0, 0, pixelSize.width(), pixelSize.height()));
-
-        rendererImpl->runPostProcess(cb, renderTarget);
-        rendererImpl->renderOverLayerOnly(cb, renderTarget);
-
-#ifdef OVITO_BUILD_BASIC
-        // Draw the tiled watermark overlay in the final pass (intermediate-target path).
-        if(!isPickingPass && state.watermarkRenderer)
-            state.watermarkRenderer->compositeInPass(cb, renderTarget->renderPassDescriptor());
-#endif
-
-        // Draw the warning indicator icon and update the shared warning store in the final pass.
-        if(!isPickingPass)
-            updateWarningStore(cb, renderTarget, state);
-
-        cb->endPass();
-    }
+            // Draw the warning indicator icon and update the shared warning store. Called once for the scene pass,
+            // and once more for the final target when the frame graph was post-processed.
+            if(!isPickingPass)
+                updateWarningStore(passCb, passTarget, state);
+        },
+    };
+    FrameGraphRenderPass::execute(args);
 
     _warnings.clear();
-
-    // Report progress for this refinement iteration, if supported by the renderer implementation.
-    if(finalProgressiveRefinementPass)
-        progress.endSubSteps();
 }
 
 /******************************************************************************
