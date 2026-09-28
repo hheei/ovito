@@ -251,15 +251,25 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      # geogram (Delaunay plugin) needs the Boost headers, which the runner image does not provide.
-      - name: Install the Boost headers
+      # The runner image provides neither Boost (geogram) nor HDF5/NetCDF-C (the Particles plugin's
+      # netcdf_integration module) outside of the bundled release packages, so they come from vcpkg.
+      - name: Restore the vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: C:\Users\runneradmin\AppData\Local\vcpkg\archives
+          key: vcpkg-x64-windows-boost-hdf5-netcdf-v1
+
+      - name: Install the Boost headers and the HDF5/NetCDF libraries
         shell: pwsh
         run: |
-          vcpkg install boost-headers:x64-windows
+          # netcdf-c[netcdf-4] pulls the HDF5 high-level library it needs; the default features dap and nczarr
+          # would additionally build curl for remote access, which OVITO does not use.
+          vcpkg install boost-headers:x64-windows "hdf5[hl]:x64-windows" "netcdf-c[netcdf-4]:x64-windows"
           # vcpkg installs into the vcpkg root, which is a machine-level environment variable of the runner image
-          # and therefore not part of the Actions env context. Export the Boost root explicitly for later steps.
+          # and therefore not part of the Actions env context. Export the paths explicitly for the later steps.
           $root = if($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:\vcpkg" }
           "BOOST_ROOT=$root/installed/x64-windows" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "VCPKG_TOOLCHAIN=$root/scripts/buildsystems/vcpkg.cmake" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       # Qt pre-compiles the HLSL shaders to DXIL with dxc, which must be on the PATH - and whose absence is a
       # fatal error at configure time (see src/ovito/core/CMakeLists.txt).
@@ -290,6 +300,7 @@ jobs:
         run: |
           cmake -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_TOOLCHAIN" `
             -DCMAKE_PREFIX_PATH="$env:Qt6_DIR" `
             -DBOOST_ROOT="$env:BOOST_ROOT" `
             -DOVITO_BUILD_CPP_TESTS=ON `
