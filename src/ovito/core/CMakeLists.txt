@@ -677,14 +677,30 @@ ENDIF()
 
 IF(ZLIB_FOUND AND NOT EMSCRIPTEN)
     IF(WIN32 AND NOT OVITO_BUILD_CONDA)
-        # Deploy the zlib runtime DLL next to the executable. Its file name depends on the packaging layout of the
-        # library: conda-style installs provide bin/zlib.dll, a vcpkg tree provides bin/zlib1.dll. Look for the
-        # DLL under both names instead of assuming one of them, and fail if the layout is unknown.
-        GET_TARGET_PROPERTY(ZLIB_LIBRARY_LOCATION ZLIB::ZLIB LOCATION)
-        GET_FILENAME_COMPONENT(ZLIB_LIBRARY_PATH "${ZLIB_LIBRARY_LOCATION}" PATH)
-        FILE(GLOB ZLIB_RUNTIME_DLL "${ZLIB_LIBRARY_PATH}/../bin/zlib.dll" "${ZLIB_LIBRARY_PATH}/../bin/zlib1.dll")
+        # Deploy the zlib runtime DLL next to the executable. Its name is derived from the import library, because
+        # the packaging layouts disagree about it: an upstream zlib build installs the import library as
+        # lib/z.lib next to the runtime library bin/z.dll, while conda-style packages use lib/zlib.lib and
+        # bin/zlib.dll, and older packages shipped bin/zlib1.dll.
+        GET_TARGET_PROPERTY(ZLIB_IMPORT_LIBRARY ZLIB::ZLIB LOCATION)
+        # The property can be a list with per-configuration entries, e.g. "optimized;<release>;debug;<debug>".
+        LIST(FILTER ZLIB_IMPORT_LIBRARY INCLUDE REGEX "\\.[Ll][Ii][Bb]$")
+        IF(ZLIB_IMPORT_LIBRARY)
+            LIST(GET ZLIB_IMPORT_LIBRARY 0 ZLIB_IMPORT_LIBRARY)
+            GET_FILENAME_COMPONENT(ZLIB_LIBRARY_PATH "${ZLIB_IMPORT_LIBRARY}" DIRECTORY)
+            GET_FILENAME_COMPONENT(ZLIB_LIBRARY_NAME "${ZLIB_IMPORT_LIBRARY}" NAME_WE)
+        ELSE()
+            SET(ZLIB_LIBRARY_PATH "")
+            SET(ZLIB_LIBRARY_NAME "zlib")
+        ENDIF()
+        FILE(GLOB ZLIB_RUNTIME_DLL
+            "${ZLIB_LIBRARY_PATH}/../bin/${ZLIB_LIBRARY_NAME}.dll"
+            "${ZLIB_LIBRARY_PATH}/../bin/${ZLIB_LIBRARY_NAME}1.dll"
+            "${ZLIB_LIBRARY_PATH}/${ZLIB_LIBRARY_NAME}.dll")
         IF(NOT ZLIB_RUNTIME_DLL)
-            MESSAGE(FATAL_ERROR "Did not find the zlib runtime library. Expected zlib.dll or zlib1.dll in ${ZLIB_LIBRARY_PATH}/../bin")
+            FILE(GLOB ZLIB_RUNTIME_DLLS_PRESENT "${ZLIB_LIBRARY_PATH}/../bin/*.dll")
+            MESSAGE(FATAL_ERROR "Did not find the zlib runtime library belonging to ${ZLIB_IMPORT_LIBRARY}. Looked for "
+                                "${ZLIB_LIBRARY_NAME}.dll and ${ZLIB_LIBRARY_NAME}1.dll in ${ZLIB_LIBRARY_PATH} and "
+                                "${ZLIB_LIBRARY_PATH}/../bin. Runtime libraries found in the latter directory: ${ZLIB_RUNTIME_DLLS_PRESENT}")
         ENDIF()
         OVITO_INSTALL_SHARED_LIB("${ZLIB_RUNTIME_DLL}" EXACT)
     ENDIF()
