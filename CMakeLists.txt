@@ -1,24 +1,5 @@
-#######################################################################################
-#
-#  Copyright 2026 OVITO GmbH, Germany
-#
-#  This file is part of OVITO (Open Visualization Tool).
-#
-#  OVITO is free software; you can redistribute it and/or modify it either under the
-#  terms of the GNU General Public License version 3 as published by the Free Software
-#  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
-#  If you do not alter this notice, a recipient may use your version of this
-#  file under either the GPL or the MIT License.
-#
-#  You should have received a copy of the GPL along with this program in a
-#  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
-#  with this program in a file LICENSE.MIT.txt
-#
-#  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
-#  either express or implied. See the GPL or the MIT License for the specific language
-#  governing rights and limitations.
-#
-#######################################################################################
+# SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
+# SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 # Make sure we have a recent version of CMake.
 CMAKE_MINIMUM_REQUIRED(VERSION 3.25.0 FATAL_ERROR)
@@ -112,6 +93,7 @@ INCLUDE(cmake/Cuda.cmake)
 
 # Define build options.
 OPTION(OVITO_BUILD_APP "Build the OVITO desktop application with a GUI." "ON")
+OPTION(OVITO_BUILD_QML_FRONTEND "Build the experimental Qt Quick / QML frontend module and its prototype application." "OFF")
 OPTION(OVITO_BUILD_MONOLITHIC "Build the application as a monolithic executable, statically linking in all plugins." "OFF")
 OPTION(OVITO_REDISTRIBUTABLE_PACKAGE "Create a redistributable program package that includes third-party libraries." "OFF")
 SET(OVITO_VULKAN_FALLBACK_DIR "/opt/vulkan-fallback" CACHE PATH

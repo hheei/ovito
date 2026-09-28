@@ -1,24 +1,5 @@
-////////////////////////////////////////////////////////////////////////////////////////
-//
-//  Copyright 2026 OVITO GmbH, Germany
-//
-//  This file is part of OVITO (Open Visualization Tool).
-//
-//  OVITO is free software; you can redistribute it and/or modify it either under the
-//  terms of the GNU General Public License version 3 as published by the Free Software
-//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
-//  If you do not alter this notice, a recipient may use your version of this
-//  file under either the GPL or the MIT License.
-//
-//  You should have received a copy of the GPL along with this program in a
-//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
-//  with this program in a file LICENSE.MIT.txt
-//
-//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
-//  either express or implied. See the GPL or the MIT License for the specific language
-//  governing rights and limitations.
-//
-////////////////////////////////////////////////////////////////////////////////////////
+// SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
+// SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/gui/desktop/GUI.h>
 #include <ovito/core/app/Application.h>
@@ -149,9 +130,11 @@ void UpdateNotificationService::applicationStarting()
     if(Application::runMode() != Application::AppMode)
         return;
 
-    // Get a pointer to the current main window.
+    // Get a pointer to the current main window. Note that the running user interface is not necessarily the
+    // classic desktop frontend; the Qt Quick frontend, for instance, has no MainWindow to attach this dialog to.
     const MainWindowUI* ui = dynamic_object_cast<MainWindowUI>(this_task::ui().get());
-    OVITO_ASSERT(ui);
+    if(ui == nullptr)
+        return;
     _mainWindow = ui->mainWindow();
 
     // Get operating system
