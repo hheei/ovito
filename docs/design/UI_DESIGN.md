@@ -6,8 +6,9 @@
 >
 > **Visual Inspiration**: VS Code Modern Theme (Clean, focused, dark/light modern)
 >
-> **Status**: Proposed Design; the Qt Quick viewport rendering bridge is validated on the Linux/OpenGL backend
-> (see [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md)); cross-backend, picking and HiDPI validation are still open
+> **Status**: Proposed Design; the Qt Quick viewport rendering bridge and the asynchronous picking path are validated on
+> the Linux/OpenGL backend (see [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md)); cross-backend and performance validation are
+> still open
 >
 > **Execution Plan**: [UI_PLAN.md](UI_PLAN.md)
 

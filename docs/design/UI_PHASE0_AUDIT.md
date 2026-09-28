@@ -88,9 +88,22 @@ backs it is listed in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md).
 |---|----------|-----------|
 | D5 | Extract an abstract `RendererService` (`src/ovito/core/rendering/RendererService.h`) exposing `rhi()`, `graphicsApi()`, `rhiResourceCache()`, `objectIdAllocator()`, `loadShader()`, `reportWarning()`, `isRendererThread()` and the `ensureGraphicsPipeline`/shared-device helpers; `RenderThread` derives from it, and `SceneRenderer::Device`, `SceneRenderer::Implementation` and `Configuration::createImplementationFor*` take `RendererService*`. | The measured coupling is modest and localized; it removes the last hard dependency of the renderer family on the render thread, which is exactly what blocks using the Qt Quick QRhi. |
 | D6 | Phase 1 renders with a custom `QQuickRhiItemRenderer` that *implements* `RendererService` (option A), not by rendering offscreen into a texture that QML then displays (option B). | Sharing textures across two QRhi instances is unreliable; option A renders the frame graph directly into the item's render target with zero readback and zero extra QRhi. |
-| D7 | Keep `RenderThread` for all offscreen work and as the classic frontend's service. | No functional change for the classic frontend; the QML viewport path does not need a `RenderThread` at all, which also removes the `requestPick` GUI-thread blocking deadlock risk from the QML viewport. |
+| D7 | Keep `RenderThread` for all offscreen work and as the classic frontend's service. The interactive QML frame does not use it, but **offscreen picking does** (D11). | No functional change for the classic frontend. The QML viewport's interactive path needs no `RenderThread`, which also removes the `requestPick` GUI-thread blocking deadlock risk from the QML viewport — the picking path added in Phase 1 is asynchronous and never blocks the GUI thread. |
 | D8 | Establish the task context (`Promise<void>::create()`, `setIsInteractive()`, `setUserInterface(ui)`, `Task::Scope`) around the frame graph rendering inside the Qt Quick renderer. | `FrameGraph::finalizeForRendering()` asserts `this_task::get()`/`this_task::ui()` and `StandardRenderer` calls `this_task::isInteractive()`; the Qt Quick render thread has no OVITO task by default. |
 | D9 | Document `RendererService` as non-thread-safe, callable only from the thread that owns the QRhi (`isRendererThread()`). | The Qt Quick renderer runs on the scene graph thread, while `RenderThread` runs on its own thread; both must satisfy the same contract. |
+| D10 | Generalize the offscreen render target flag `forAmbientOcclusion`/`aoSampling` into `forPickingOnly`/`pickingOnly`, and add `RenderThread::renderPickingFrame()` returning `ScopedFuture<ObjectPickingBuffer>` plus the header-only `ObjectPickingBuffer` (`src/ovito/core/rendering/ObjectPickingBuffer.h`) as the render-thread/GUI-thread handoff type. | The QML viewport needs picking results, and the existing `RequestPick` path cannot serve them: it requires a swap chain and blocks the calling thread. The renamed flag expresses what the target actually is — "an offscreen target that receives picking passes only" — and `renderPickingFrame()` reuses the existing `renderPickingPass()`, so the amount of new core code stays small. |
+| D11 | Picking in the QML viewport runs as an asynchronous offscreen pass on the shared `RenderThread`; `ViewportWindow::pick()` resolves from a cached `ObjectPickingBuffer` and starts a refresh when that buffer is out of date, instead of waiting for a result. | Verified constraints: Qt Quick has an active QRhi frame during the scene graph sync step (`beginOffscreenFrame()` is rejected there), and a readback submitted inside the interactive frame completes only at frame end, so neither can answer a synchronous `pick()`. Blocking the GUI thread would stall input handling and the scene graph, and `SelectionMode` picks on every mouse move. |
+
+### Follow-up finding: Qt-delivered event handlers run without a `UserInterface`
+
+`TaskManager` wraps main-thread event-loop work in `Task::Scope taskScope(nullptr)` (`TaskManager.cpp:281`, `:365`), i.e.
+in a scope task that has **no** `UserInterface`. Any OVITO asynchronous work started from a Qt event handler (a QML
+signal, a mouse event, a `QTimer`) therefore runs in a task for which `this_task::ui()` asserts, even though
+`this_task::get()` succeeds. The classic frontend hits the same condition and solves it by attaching the context
+explicitly *after* the coroutine's first suspension (`ViewportWindow::generateFrameGraph()` at
+`ViewportWindow.cpp:207`, `WidgetViewportWindow::grabViewportImage()` at `WidgetViewportWindow.cpp:207`); the QML
+viewport does the same in `QuickViewportWindow::renderPickingBuffer()`. This is a general expectation for every QML
+frontend entry point that starts asynchronous work, not a picking-specific issue — recorded as **O8**.
 
 ---
 
@@ -163,6 +176,13 @@ All of these are subject to the regression checks in [UI_PHASE1_SPIKE.md](UI_PHA
    licensing decision made by the repository owner, not a functional change.
 5. **CMake**: `OVITO_BUILD_QML_FRONTEND` option in the root `CMakeLists.txt` and the conditional
    `ADD_SUBDIRECTORY(qml)` in `src/ovito/gui/CMakeLists.txt`.
+6. **Offscreen picking support** (D10): `src/ovito/core/rendering/ObjectPickingBuffer.h` (new, header-only,
+   forward-declared in `ForwardDecl.h`), `RenderThread::renderPickingFrame()` with
+   `EventType::RenderPickingFrame`/`RenderPickingFrameEvent`/`handleRenderPickingFrame()`, the `RenderTarget` wrapper for
+   it, the `forAmbientOcclusion`→`forPickingOnly` flag rename, `ObjectPickingMap::lookupPickResult()` (factored out of
+   `RenderThread::lookupPickBuffer()`, which now delegates to it), and
+   `ViewportWindow::generateFrameGraph()` moved from private to protected so that the QML adapter can produce a
+   dedicated picking frame graph (a frame graph is consumed by exactly one renderer).
 
 ---
 
@@ -172,7 +192,9 @@ All of these are subject to the regression checks in [UI_PHASE1_SPIKE.md](UI_PHA
 |---|------|-------|
 | O1 | The `ovitoheadless` QPA plugin referenced by `StandaloneApplication::createQtApplicationImpl()`, `cmake/Prerequisites.cmake:290` and `cmake/OvitoTesting.cmake` does not exist. Either implement it (a platform integration providing `createPlatformVulkanInstance()` via `VK_EXT_headless_surface` and fontconfig-based font rendering) or remove the references. Headless Qt Quick rendering on Linux depends on it. | Phase 2 |
 | O2 | `RenderThread` creates its `QVulkanInstance` without an API version, which triggers a Vulkan validation error (`VUID-VkApplicationInfo-apiVersion`, observed in the classic frontend run). | Phase 1 follow-up |
-| O3 | Object picking in the QML viewport is not implemented (`QuickViewportWindow::pick()` returns `std::nullopt` with a TODO). | Phase 1 remaining gate |
+| O3 | ~~Object picking in the QML viewport is not implemented.~~ **Resolved in Phase 1** — picking is implemented as an asynchronous offscreen pass (D11) and verified end to end. Refinements left for Phase 5: pre-warming the buffer on viewport enter/camera change, coalescing hover picks, and revisiting the "use the previous buffer while refreshing" policy. | Phase 5 |
+| O7 | The GPU picking-target creation (≈55 lines: two R32UI textures, the D32F depth texture, the texture render target, the batched readback) is still duplicated between `RenderThread::ensurePickingResources()` and the QML renderer path; the proposal is a shared core `PickingBufferTarget` class. | Phase 2 |
+| O8 | Qt event handlers run in a task without a `UserInterface` (see the follow-up finding in section 2), so every QML entry point that starts asynchronous work must attach the context itself. Phase 2 should establish this once — e.g. a helper that wraps a QML-facing call in a `Task::Scope` bound to the `UserInterface` — instead of repeating the pattern per call site. | Phase 2 |
 | O4 | Each QML viewport item owns its own `RendererService` state (`RendererResourceCache`, `ObjectIdAllocator`, pipeline cache). Buffers are therefore not shared between the viewports of one window; consider one service per `QQuickWindow` shared by its items. | Phase 2 |
 | O5 | The full action/editor inventory and the expanded parity matrix required by the remaining Phase 0 deliverables are still pending. | Phase 0 |
 | O6 | The frontend-neutral application class and `--gui=qml` (D3) are unimplemented. | Phase 2 |

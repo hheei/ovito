@@ -128,12 +128,15 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   6. **Cross-API Smoke Test**: Validate Linux x86_64/ARM64 (Vulkan), macOS ARM64 (Metal), and Windows x86_64 (D3D12); record unavailable environments as unverified.
   7. **Frame Handoff**: Document prepared-state ownership, synchronization, resource release, and picking-result delivery. Evaluate representative static and animated particle scenes, recording dataset size, frame time, and input responsiveness against classic.
 - **Exit Gate**: A minimal executable renders real OVITO scene data through the candidate architecture, and the listed lifecycle, input, and backend checks have recorded results. A visible viewport alone is insufficient. Unverified targets leave the cross-platform gate open. If `QQuickRhiItem` integration fails, revise the design with evidence for an alternative covering all target backends before production integration.
-- **Status (rendering bridge validated)**: `src/ovito/gui/qml` implements the `QQuickRhiItem` + `BaseViewportWindow`
-  adapter + `QQuickRhiItemRenderer`/`RendererService` composition and renders real particle data, four simultaneous
-  viewports and repeated scene-graph resource rebuild cycles without a `RenderThread`; results, evidence and the exact
-  reproduction commands are recorded in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md). Still open: object picking, an
-  assert-enabled lifecycle run, HiDPI/resize, performance baselines and every non-OpenGL backend (including Linux
-  Vulkan, which is blocked by the missing `ovitoheadless` QPA plugin).
+- **Status (rendering bridge and picking validated)**: `src/ovito/gui/qml` implements the `QQuickRhiItem` +
+  `BaseViewportWindow` adapter + `QQuickRhiItemRenderer`/`RendererService` composition and renders real particle data, four
+  simultaneous viewports and repeated scene-graph resource rebuild cycles without a `RenderThread` in the interactive frame.
+  Object picking is implemented as an asynchronous offscreen pass on OVITO's `RenderThread` and verified end to end
+  (hit/no-hit controls, 2× HiDPI, all three Qt Quick render loops, lifecycle cycles, and selection through the unmodified
+  `SelectionMode`), including a run with assertions enabled. Results, evidence and the exact reproduction commands are
+  recorded in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md). Still open: interactive resize and mixed-DPI setups, frame-time
+  performance baselines, and every non-OpenGL backend (including Linux Vulkan, which is blocked by the missing
+  `ovitoheadless` QPA plugin).
 
 ---
 
