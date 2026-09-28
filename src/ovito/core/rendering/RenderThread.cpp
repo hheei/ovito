@@ -376,14 +376,14 @@ std::pair<RenderTarget, QWindow*> RenderThread::createOnscreenTarget(ViewportWin
 * Blocks the calling thread until the GPU resources have been allocated.
 * Throws Exception on failure.
 ******************************************************************************/
-RenderTarget RenderThread::createOffscreenTarget(const QSize& size, bool forAmbientOcclusion)
+RenderTarget RenderThread::createOffscreenTarget(const QSize& size, bool forPickingOnly)
 {
     OVITO_ASSERT(this_task::isMainThread());
     OVITO_ASSERT(!size.isEmpty());
 
     RenderTargetHandle handle = _nextHandle++;
     QMutexLocker locker(&_syncMutex);
-    _eventQueue.addEvent(new CreateOffscreenTargetEvent(handle, size, forAmbientOcclusion));
+    _eventQueue.addEvent(new CreateOffscreenTargetEvent(handle, size, forPickingOnly));
     _syncCondition.wait(&_syncMutex);
 
     // Check if the render thread reported an error.
@@ -463,6 +463,27 @@ ScopedFuture<std::pair<QByteArray, QByteArray>> RenderThread::renderAOFrame(Rend
     promise.task()->inheritContextFromCurrentTask();
 
     _eventQueue.addEvent(new RenderAOFrameEvent(handle, std::move(frameGraph), std::move(promise)));
+    return future;
+}
+
+/******************************************************************************
+* Renders a picking pass for the given frame graph into the target's offscreen
+* picking buffers.
+* Called from the GUI thread or a worker thread.
+******************************************************************************/
+ScopedFuture<ObjectPickingBuffer> RenderThread::renderPickingFrame(RenderTargetHandle handle, OORef<FrameGraph> frameGraph,
+    std::unique_ptr<SceneRenderer::Configuration> rendererConfig)
+{
+    OVITO_ASSERT(this_task::get());
+    OVITO_ASSERT(this_task::ui());
+    OVITO_ASSERT(frameGraph);
+    OVITO_ASSERT(rendererConfig);
+
+    Promise<ObjectPickingBuffer> promise = Promise<ObjectPickingBuffer>::create();
+    ScopedFuture<ObjectPickingBuffer> future = promise.future();
+    promise.task()->inheritContextFromCurrentTask();
+
+    _eventQueue.addEvent(new RenderPickingFrameEvent(handle, std::move(frameGraph), std::move(rendererConfig), std::move(promise)));
     return future;
 }
 
@@ -757,6 +778,7 @@ void RenderThread::processEvent(QEvent* e)
     case EventType::RenderOnscreenFrame:   handleRenderOnscreenFrame(static_cast<RenderOnscreenFrameEvent*>(e)); break;
     case EventType::RenderOffscreenFrame:  handleRenderOffscreenFrame(static_cast<RenderOffscreenFrameEvent*>(e)); break;
     case EventType::RenderAOFrame:         handleRenderAOFrame(static_cast<RenderAOFrameEvent*>(e)); break;
+    case EventType::RenderPickingFrame:    handleRenderPickingFrame(static_cast<RenderPickingFrameEvent*>(e)); break;
     case EventType::RequestPick:           handleRequestPick(static_cast<RequestPickEvent*>(e)); break;
     case EventType::SurfaceGoingAway:      handleSurfaceGoingAway(static_cast<SurfaceGoingAwayEvent*>(e)); break;
     case EventType::SuspendTarget:         handleSuspendTarget(static_cast<SuspendTargetEvent*>(e)); break;
@@ -824,11 +846,11 @@ void RenderThread::handleCreateOffscreenTarget(CreateOffscreenTargetEvent* event
 
         TargetState& state = _targets[event->handle];
         state.offscreenSize = event->size;
-        state.aoSampling = event->forAmbientOcclusion;
+        state.forPickingOnly = event->forPickingOnly;
 
         // Allocate GPU resources for the offscreen target (only for visual rendering).
-        // For ambient occlusion sampling, renderPickingPass() will take care of allocating the target buffer.
-        if(!state.aoSampling) {
+        // For picking-only targets, renderPickingPass() takes care of allocating the target buffer.
+        if(!state.forPickingOnly) {
             state.colorTexture.reset(rhi()->newTexture(QRhiTexture::RGBA8, event->size, 1, QRhiTexture::RenderTarget));
             if(!state.colorTexture || !state.colorTexture->create())
                 throw Exception(tr("Failed to create color texture for offscreen render target."));
@@ -898,7 +920,7 @@ void RenderThread::handleRenderOffscreenFrame(RenderOffscreenFrameEvent* event)
     if(it != _targets.end()) {
         TargetState& state = it->second;
         OVITO_ASSERT(!state.window); // RenderOffscreenFrame events should only be posted for offscreen targets.
-        OVITO_ASSERT(!state.aoSampling);
+        OVITO_ASSERT(!state.forPickingOnly);
 
         // Offscreen target: render immediately.
         renderOffscreen(state, event);
@@ -914,7 +936,7 @@ void RenderThread::handleRenderAOFrame(RenderAOFrameEvent* event)
     if(it != _targets.end()) {
         TargetState& state = it->second;
         OVITO_ASSERT(!state.window); // AO sampling is only supported for offscreen targets.
-        OVITO_ASSERT(state.aoSampling); // Target must have been created with forAmbientOcclusion=true.
+        OVITO_ASSERT(state.forPickingOnly); // Target must have been created with createOffscreenTarget(..., forPickingOnly=true).
 
         // Create a Task::Scope to associate the rendering work with the caller's task for cancellation support.
         Task::Scope taskScope(event->promise.task());
@@ -930,6 +952,52 @@ void RenderThread::handleRenderAOFrame(RenderAOFrameEvent* event)
             event->promise.setResult(std::make_pair(std::move(state.pickObjectIdData), std::move(state.pickPrimitiveIdData)));
             event->promise.setFinished();
         }
+    }
+}
+
+/******************************************************************************
+* Handles a RenderPickingFrame event: renders the picking pass of the given
+* frame graph and reads the picking buffers back to CPU memory.
+******************************************************************************/
+void RenderThread::handleRenderPickingFrame(RenderPickingFrameEvent* event)
+{
+    auto it = _targets.find(event->handle);
+    if(it == _targets.end())
+        return;
+
+    TargetState& state = it->second;
+    OVITO_ASSERT(!state.window); // Picking passes are rendered into offscreen targets only.
+    OVITO_ASSERT(state.forPickingOnly); // Target must have been created with createOffscreenTarget(..., forPickingOnly=true).
+
+    // Create a Task::Scope to associate the rendering work with the caller's task for cancellation support.
+    Task::Scope taskScope(event->promise.task());
+    OVITO_ASSERT(this_task::ui());
+
+    // The picking pass is executed by the same code path as the onscreen picking of the classic frontend.
+    state.lastRenderedFrameGraph = event->frameGraph;
+    state.rendererConfig = std::move(event->rendererConfig);
+    state.pickBufferValid = false;
+
+    if(!state.offscreenSize.isEmpty())
+        renderPickingPass(state, state.offscreenSize);
+
+    // Hand the result over to the caller. The picking buffer takes ownership of the readback data;
+    // if the picking pass failed, an invalid buffer is delivered instead.
+    if(state.pickBufferValid) {
+        ObjectPickingBuffer buffer(std::move(state.pickingMap),
+            std::move(state.pickObjectIdData), std::move(state.pickPrimitiveIdData), std::move(state.pickDepthData),
+            state.pickBufferSize, event->frameGraph->projectionParams());
+
+        // The readback data has been handed over; the target holds no picking buffer anymore.
+        state.pickBufferSize = QSize();
+        state.pickBufferValid = false;
+
+        event->promise.setResult(std::move(buffer));
+        event->promise.setFinished();
+    }
+    else {
+        event->promise.setResult(ObjectPickingBuffer());
+        event->promise.setFinished();
     }
 }
 
@@ -1467,9 +1535,7 @@ void RenderThread::renderPickingPass(TargetState& state, const QSize& size)
 
 /******************************************************************************
 * Looks up the nearest non-zero object ID in the pick buffer around the
-* given position. Searches outward from the center in concentric rings.
-* Returns the corresponding PickResult with scene node and pick info, or
-* std::nullopt if no object was hit.
+* given position and resolves it into a pick result.
 * Called on the render thread.
 ******************************************************************************/
 std::optional<ViewportWindow::PickResult> RenderThread::lookupPickBuffer(const TargetState& state, const QPointF& pos, int radius) const
@@ -1478,72 +1544,10 @@ std::optional<ViewportWindow::PickResult> RenderThread::lookupPickBuffer(const T
     OVITO_ASSERT(!state.pickObjectIdData.isEmpty());
     OVITO_ASSERT(!state.pickPrimitiveIdData.isEmpty());
     OVITO_ASSERT(!state.pickDepthData.isEmpty());
-
-    const int w = state.pickBufferSize.width();
-    const int h = state.pickBufferSize.height();
-    const int cx = qBound(0, static_cast<int>(pos.x()), w - 1);
-    const int cy = qBound(0, static_cast<int>(pos.y()), h - 1);
-    const uint32_t* objectIds  = reinterpret_cast<const uint32_t*>(state.pickObjectIdData.constData());
-    const uint32_t* primitiveIds = reinterpret_cast<const uint32_t*>(state.pickPrimitiveIdData.constData());
-
-    // A pixel is considered "hit" when its objectId is non-zero.
-    auto isHit = [&](int x, int y) -> bool {
-        return objectIds[y * w + x] != 0;
-    };
-
-    // Check the center pixel first.
-    int foundX = cx, foundY = cy;
-    bool found = isHit(cx, cy);
-    if(!found) {
-        // Search outward in concentric rings.
-        int bestDistSq = std::numeric_limits<int>::max();
-        for(int ring = 1; ring <= radius; ring++) {
-            for(int d = -ring; d <= ring; d++) {
-                // Top and bottom edges.
-                for(int ey : { cy - ring, cy + ring }) {
-                    int ex = cx + d;
-                    if(ex >= 0 && ex < w && ey >= 0 && ey < h && isHit(ex, ey)) {
-                        int distSq = d * d + ring * ring;
-                        if(distSq < bestDistSq) {
-                            bestDistSq = distSq;
-                            foundX = ex;
-                            foundY = ey;
-                            found = true;
-                        }
-                    }
-                }
-                // Left and right edges (excluding corners, already handled above).
-                if(d != -ring && d != ring) {
-                    for(int ex : { cx - ring, cx + ring }) {
-                        int ey = cy + d;
-                        if(ex >= 0 && ex < w && ey >= 0 && ey < h && isHit(ex, ey)) {
-                            int distSq = ring * ring + d * d;
-                            if(distSq < bestDistSq) {
-                                bestDistSq = distSq;
-                                foundX = ex;
-                                foundY = ey;
-                                found = true;
-                            }
-                        }
-                    }
-                }
-            }
-            if(found) break;
-        }
-    }
-
-    if(!found)
-        return std::nullopt;
-
-    uint32_t objectId    = objectIds[foundY * w + foundX];
-    uint32_t primitiveId = primitiveIds[foundY * w + foundX];
-    float    depth       = reinterpret_cast<const float*>(state.pickDepthData.constData())[foundY * w + foundX];
-
-    // Resolve the (objectId, primitiveId, depth) triple using the picking map built during rendering.
     OVITO_ASSERT(state.lastRenderedFrameGraph);
-    return state.pickingMap.resolvePickResult(objectId, primitiveId, depth,
-        QPoint(foundX, foundY),
-        state.lastRenderedFrameGraph->projectionParams(), state.pickBufferSize);
+
+    return state.pickingMap.lookupPickResult(state.pickObjectIdData, state.pickPrimitiveIdData, state.pickDepthData,
+        state.pickBufferSize, pos, radius, state.lastRenderedFrameGraph->projectionParams());
 }
 
 /******************************************************************************

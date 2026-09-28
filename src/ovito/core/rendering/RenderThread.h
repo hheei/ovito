@@ -8,6 +8,7 @@
 #include <ovito/core/rendering/SceneRenderer.h>
 #include <ovito/core/rendering/RendererService.h>
 #include <ovito/core/rendering/ObjectPickingMap.h>
+#include <ovito/core/rendering/ObjectPickingBuffer.h>
 #include <ovito/core/rendering/ObjectIdAllocator.h>
 #include <ovito/core/rendering/RendererResourceCache.h>
 #include <ovito/core/rendering/WarningIndicatorRenderer.h>
@@ -65,9 +66,13 @@ public:
 	[[nodiscard]] std::pair<RenderTarget, QWindow*> createOnscreenTarget(ViewportWindow* viewportWindow = nullptr);
 
 	/// Creates a reusable offscreen render target at the given pixel resolution.
+	/// Creates a new offscreen render target of the given size.
+	/// \param forPickingOnly  If true, the target provides only the buffers a picking pass renders into,
+	///                       i.e. no color texture is allocated and no visual frame may be submitted to it.
+	///                       Used for ambient occlusion sampling and for offscreen picking.
 	/// Blocks the calling thread until the GPU resources have been allocated.
 	/// Throws Exception if the RHI resources could not be created.
-	[[nodiscard]] RenderTarget createOffscreenTarget(const QSize& size, bool forAmbientOcclusion = false);
+	[[nodiscard]] RenderTarget createOffscreenTarget(const QSize& size, bool forPickingOnly = false);
 
 	/// Returns the QRhi instance owned by this render thread. May only be called from a renderer implementation on the render thread.
 	QRhi* rhi() const override { return _rhi.get(); }
@@ -147,6 +152,12 @@ private:
 	/// It returns the contents of the object ID and primitive ID buffers as byte arrays, which are used to determine the AO contribution for each particle.
 	ScopedFuture<std::pair<QByteArray, QByteArray>> renderAOFrame(RenderTargetHandle handle, OORef<FrameGraph> frameGraph);
 
+	/// Renders a picking pass for the given frame graph into the target's offscreen picking buffers.
+	/// The target must have been created with createOffscreenTarget(..., forPickingOnly = true).
+	/// May be called from any thread; the returned future is fulfilled once the readback is complete.
+	[[nodiscard]] ScopedFuture<ObjectPickingBuffer> renderPickingFrame(RenderTargetHandle handle, OORef<FrameGraph> frameGraph,
+		std::unique_ptr<SceneRenderer::Configuration> rendererConfig);
+
 	/// Requests a picking operation at the given position.
 	/// Blocks the calling (GUI) thread until the result is available.
 	std::optional<ViewportWindow::PickResult> requestPick(RenderTargetHandle handle,
@@ -160,6 +171,7 @@ private:
 		RenderOnscreenFrame,
 		RenderOffscreenFrame,
 		RenderAOFrame,
+		RenderPickingFrame,
 		RequestPick,
 		SurfaceGoingAway,
 		SuspendTarget,
@@ -185,11 +197,11 @@ private:
 
 	/// Event to create an offscreen render target.
 	struct CreateOffscreenTargetEvent : public RenderEvent {
-		CreateOffscreenTargetEvent(RenderTargetHandle h, QSize s, bool aoSampling)
-			: RenderEvent(EventType::CreateOffscreenTarget), handle(h), size(s), forAmbientOcclusion(aoSampling) {}
+		CreateOffscreenTargetEvent(RenderTargetHandle h, QSize s, bool pickingOnly)
+			: RenderEvent(EventType::CreateOffscreenTarget), handle(h), size(s), forPickingOnly(pickingOnly) {}
 		RenderTargetHandle handle;
 		QSize size;
-		bool forAmbientOcclusion; ///< Whether the offscreen target is intended for ambient occlusion sampling by an AmbientOcclusionModifier.
+		bool forPickingOnly; ///< Whether the offscreen target is used only for picking passes (e.g. ambient occlusion sampling).
 	};
 
 	/// Event to destroy a render target (onscreen or offscreen).
@@ -227,6 +239,16 @@ private:
 		RenderTargetHandle handle;
 		OORef<FrameGraph> frameGraph;
 		Promise<std::pair<QByteArray, QByteArray>> promise;
+	};
+
+	/// Event to submit a frame graph for an offscreen picking pass.
+	struct RenderPickingFrameEvent : public RenderEvent {
+		RenderPickingFrameEvent(RenderTargetHandle h, OORef<FrameGraph> fg, std::unique_ptr<SceneRenderer::Configuration> rc, Promise<ObjectPickingBuffer> p)
+			: RenderEvent(EventType::RenderPickingFrame), handle(h), frameGraph(std::move(fg)), rendererConfig(std::move(rc)), promise(std::move(p)) {}
+		RenderTargetHandle handle;
+		OORef<FrameGraph> frameGraph;
+		std::unique_ptr<SceneRenderer::Configuration> rendererConfig;
+		Promise<ObjectPickingBuffer> promise;
 	};
 
 	/// Event to request a picking operation at a given position.
@@ -338,7 +360,7 @@ private:
 		QSize pickBufferSize;                                        ///< Pixel dimensions the picking buffer was rendered at.
 		bool pickBufferValid = false;                                ///< Whether pick data matches the current lastRenderedFrameGraph.
 		ObjectPickingMap pickingMap;                                 ///< Maps (objectId, primitiveId) to PickResult; built during picking pass rendering.
-		bool aoSampling = false;									 ///< Whether the picking pass is being rendered for ambient occlusion sampling by an AmbientOcclusionModifier.
+		bool forPickingOnly = false;									 ///< Whether this target exists only for picking passes and cannot display a visual image.
 
 		// --- Offscreen-specific ---
 		QSize offscreenSize;
@@ -367,6 +389,7 @@ private:
 	void handleRenderOnscreenFrame(RenderOnscreenFrameEvent* event);
 	void handleRenderOffscreenFrame(RenderOffscreenFrameEvent* event);
 	void handleRenderAOFrame(RenderAOFrameEvent* event);
+	void handleRenderPickingFrame(RenderPickingFrameEvent* event);
 	void handleRequestPick(RequestPickEvent* event);
 	void handleSurfaceGoingAway(SurfaceGoingAwayEvent* event);
 	void suspendTarget(RenderTargetHandle handle);
@@ -556,6 +579,15 @@ public:
 	{
 		OVITO_ASSERT(_handle != 0 && _thread);
 		return _thread->renderAOFrame(_handle, std::move(frameGraph));
+	}
+
+	/// Renders a picking pass for the frame graph into the target's offscreen picking buffers
+	/// and returns the resulting picking buffer.
+	[[nodiscard]] ScopedFuture<ObjectPickingBuffer> renderPickingFrame(OORef<FrameGraph> frameGraph,
+		std::unique_ptr<SceneRenderer::Configuration> rendererConfig)
+	{
+		OVITO_ASSERT(_handle != 0 && _thread);
+		return _thread->renderPickingFrame(_handle, std::move(frameGraph), std::move(rendererConfig));
 	}
 
 	/// Releases the GPU resources (swap chain, renderer state, picking buffers) of this

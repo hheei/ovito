@@ -106,6 +106,7 @@ namespace Ovito
     class AbstractCameraSource;
     class FrameGraph;
     class ObjectPickingMap;
+    class ObjectPickingBuffer;
     class SceneRenderer;
     class RendererService;
     class ObjectPickInfo;

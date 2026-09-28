@@ -36,6 +36,22 @@ public:
 		const QPoint& pixelPos,
 		const ViewProjectionParameters& projParams, QSize renderSize) const;
 
+	/// Searches the picking buffer contents for the closest pixel that belongs to a rendered object,
+	/// starting at \a pos and searching outward in concentric rings up to \a pickRadius pixels,
+	/// and resolves it into a pick result. Returns std::nullopt if no object was found.
+	///
+	/// \param objectIdData    Contents of the R32UI object ID texture, read back from the GPU.
+	/// \param primitiveIdData Contents of the R32UI primitive ID texture, read back from the GPU.
+	/// \param depthData       Contents of the D32F depth texture, read back from the GPU.
+	/// \param bufferSize      Pixel size of the picking buffer the data was read back from.
+	/// \param pos             Pick position in buffer pixel coordinates.
+	/// \param pickRadius      Radius in pixels to search around \a pos for a hit.
+	/// \param projParams      Projection parameters the picking buffer was rendered with.
+	std::optional<ViewportWindow::PickResult> lookupPickResult(
+		const QByteArray& objectIdData, const QByteArray& primitiveIdData, const QByteArray& depthData,
+		const QSize& bufferSize, const QPointF& pos, int pickRadius,
+		const ViewProjectionParameters& projParams) const;
+
 protected:
 
     /// Describes a pickable graphics primitive that has been encoded as a range of object IDs in the frame buffer.

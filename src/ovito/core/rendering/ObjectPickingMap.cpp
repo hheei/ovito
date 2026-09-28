@@ -84,4 +84,84 @@ std::optional<ViewportWindow::PickResult> ObjectPickingMap::resolvePickResult(
         subobjectId);
 }
 
+/******************************************************************************
+* Searches the picking buffer for the closest pixel belonging to a rendered
+* object and resolves it into a pick result.
+******************************************************************************/
+std::optional<ViewportWindow::PickResult> ObjectPickingMap::lookupPickResult(
+    const QByteArray& objectIdData, const QByteArray& primitiveIdData, const QByteArray& depthData,
+    const QSize& bufferSize, const QPointF& pos, int pickRadius,
+    const ViewProjectionParameters& projParams) const
+{
+    const int w = bufferSize.width();
+    const int h = bufferSize.height();
+    if(w <= 0 || h <= 0)
+        return std::nullopt;
+    // Make sure the readback buffers really contain one 32-bit value per pixel.
+    if(objectIdData.size() < w * h * int(sizeof(uint32_t))
+        || primitiveIdData.size() < w * h * int(sizeof(uint32_t))
+        || depthData.size() < w * h * int(sizeof(float)))
+        return std::nullopt;
+
+    const int cx = qBound(0, static_cast<int>(pos.x()), w - 1);
+    const int cy = qBound(0, static_cast<int>(pos.y()), h - 1);
+    const uint32_t* objectIds  = reinterpret_cast<const uint32_t*>(objectIdData.constData());
+    const uint32_t* primitiveIds = reinterpret_cast<const uint32_t*>(primitiveIdData.constData());
+
+    // A pixel is considered "hit" when its objectId is non-zero.
+    auto isHit = [&](int x, int y) -> bool {
+        return objectIds[y * w + x] != 0;
+    };
+
+    // Check the center pixel first.
+    int foundX = cx, foundY = cy;
+    bool found = isHit(cx, cy);
+    if(!found) {
+        // Search outward in concentric rings.
+        int bestDistSq = std::numeric_limits<int>::max();
+        for(int ring = 1; ring <= pickRadius; ring++) {
+            for(int d = -ring; d <= ring; d++) {
+                // Top and bottom edges.
+                for(int ey : { cy - ring, cy + ring }) {
+                    int ex = cx + d;
+                    if(ex >= 0 && ex < w && ey >= 0 && ey < h && isHit(ex, ey)) {
+                        int distSq = d * d + ring * ring;
+                        if(distSq < bestDistSq) {
+                            bestDistSq = distSq;
+                            foundX = ex;
+                            foundY = ey;
+                            found = true;
+                        }
+                    }
+                }
+                // Left and right edges (excluding corners, already handled above).
+                if(d != -ring && d != ring) {
+                    for(int ex : { cx - ring, cx + ring }) {
+                        int ey = cy + d;
+                        if(ex >= 0 && ex < w && ey >= 0 && ey < h && isHit(ex, ey)) {
+                            int distSq = ring * ring + d * d;
+                            if(distSq < bestDistSq) {
+                                bestDistSq = distSq;
+                                foundX = ex;
+                                foundY = ey;
+                                found = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if(found) break;
+        }
+    }
+
+    if(!found)
+        return std::nullopt;
+
+    const uint32_t objectId    = objectIds[foundY * w + foundX];
+    const uint32_t primitiveId = primitiveIds[foundY * w + foundX];
+    const float    depth       = reinterpret_cast<const float*>(depthData.constData())[foundY * w + foundX];
+
+    return resolvePickResult(objectId, primitiveId, depth, QPoint(foundX, foundY), projParams, bufferSize);
+}
+
 }   // End of namespace

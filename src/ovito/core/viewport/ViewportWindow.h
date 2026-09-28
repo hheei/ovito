@@ -276,9 +276,11 @@ protected:
     /// Returns the asynchronous task generating the frame graph for the next frame.
     FutureWatcher<Future<OORef<FrameGraph>>>& frameGraphGenerationWatcher() { return _frameGraphGenerationWatcher; }
 
-private:
-
-    /// A coroutine that generates the frame graph for the next frame to be rendered.
+    /// A coroutine that generates a frame graph for the current viewport contents without rendering it.
+    ///
+    /// Besides the interactive rendering path, subclasses can use this to obtain a frame graph for offscreen
+    /// rendering, e.g. to render an object picking pass in the background. The caller takes ownership of the
+    /// returned frame graph and must not submit it to more than one renderer at a time.
     Future<OORef<FrameGraph>> generateFrameGraph();
 
 private Q_SLOTS:
