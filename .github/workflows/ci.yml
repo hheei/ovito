@@ -250,6 +250,10 @@ jobs:
         shell: pwsh
         run: |
           vcpkg install boost-headers:x64-windows
+          # vcpkg installs into the vcpkg root, which is a machine-level environment variable of the runner image
+          # and therefore not part of the Actions env context. Export the Boost root explicitly for later steps.
+          $root = if($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:\vcpkg" }
+          "BOOST_ROOT=$root/installed/x64-windows" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       # Qt pre-compiles the HLSL shaders to DXIL with dxc, which must be on the PATH - and whose absence is a
       # fatal error at configure time (see src/ovito/core/CMakeLists.txt).
@@ -278,12 +282,10 @@ jobs:
       - name: Configure CMake
         shell: pwsh
         run: |
-          # $env:VCPKG_INSTALLATION_ROOT is a machine-level variable of the runner image and therefore not part of
-          # the Actions env context (${{ env.* }} would be empty here).
           cmake -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DCMAKE_PREFIX_PATH="$env:Qt6_DIR" `
-            -DBOOST_ROOT="$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" `
+            -DBOOST_ROOT="$env:BOOST_ROOT" `
             -DOVITO_BUILD_CPP_TESTS=ON `
             -DOVITO_BUILD_QML_FRONTEND=ON
 

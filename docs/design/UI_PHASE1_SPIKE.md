@@ -280,49 +280,66 @@ Each backend was exercised with the full check set (`--qml-pick`, `--qml-hide-sh
 
 ### 3.6 Performance
 
-Frame times of the Qt Quick frontend, measured with `--qml-frame-stats` (frames are requested continuously, as animation
-playback does), four viewports, vsync disabled, software OpenGL unless noted:
+Frame times reported by `--qml-frame-stats` (frames are requested continuously, as animation playback does), four
+viewports, one per pane:
 
-| Data set | Linux, default render loop | Linux, `basic` render loop | macOS/Metal, vsync (Retina) |
-|----------|---------------------------|----------------------------|------------------------------|
-| 512 atoms | 15.3 ms (65 fps) | 7.6 ms (131 fps) | 16.95 ms (59.0 fps) |
-| 4096 atoms | 19.2 ms (52 fps) | — | 17.05 ms (58.7 fps) |
-| 32768 atoms | 48.8 ms (20.5 fps) | 25.0 ms (40 fps) | 17.34 ms (57.7 fps) |
-| 262144 atoms | 285.7 ms (3.5 fps) | — | — |
+| Data set | Host, Qt Quick backend, window | Frame time | Frame rate |
+|----------|-------------------------------|-----------|------------|
+| 512 atoms | macOS ARM64/Metal (Apple M4), 1280×800, dpr 1 | 9.74–9.80 ms | 102.0–102.7 fps |
+| 512 atoms | macOS ARM64/Metal, 1920×940 | 8.87 ms | 112.8 fps |
+| 4096 atoms | macOS ARM64/Metal, 1280×800 | 10.87 ms | 92.0 fps |
+| 32768 atoms | macOS ARM64/Metal, 1280×800 | 10.07 ms | 99.3 fps |
+| 262144 atoms | macOS ARM64/Metal, 1280×800 | 16.76 ms | 59.7 fps |
+| 262144 atoms | macOS ARM64/Metal, 1920×940 | 16.26 ms | 61.5 fps |
+| 512 atoms, `QSG_NO_VSYNC=1` | macOS ARM64/Metal, 1280×800 | 8.60 ms | 116.3 fps |
+| 512 atoms | Linux x86_64/OpenGL 4.5 (llvmpipe), 1280×800 | 14.4–15.3 ms | 65–69 fps |
+| 512 atoms, `QSG_RENDER_LOOP=basic`, `QSG_NO_VSYNC=1` | Linux x86_64/OpenGL (llvmpipe), 1280×800 | 7.6 ms | 131 fps |
+| 4096 atoms | Linux x86_64/OpenGL (llvmpipe), 1280×800 | 19.2 ms | 52.0 fps |
+| 32768 atoms | Linux x86_64/OpenGL (llvmpipe), 1280×800 | 48.8 ms | 20.5 fps |
+| 262144 atoms | Linux x86_64/OpenGL (llvmpipe), 1280×800 | 285.7 ms | 3.5 fps |
+| 512–32768 atoms | macOS ARM64/Metal (first host), 2× Retina (≈3.2 Mpx) | 16.95–17.34 ms | 57.7–59.0 fps |
 
-* The Linux numbers come from a *software* rasterizer (llvmpipe, 1280×800 window); they are a lower bound, not a statement
-  about GPU hardware. The macOS numbers are hardware Metal at 2× Retina resolution (the four viewports cover
-  ≈2000×1600 device pixels, i.e. ~3.2 Mpx per frame).
-* The `basic` (single-threaded) Qt Quick render loop is ~2× faster than the default (threaded) loop for this workload
-  (four independent `QQuickRhiItem`s). Frame-graph generation happens per frame in both cases, so this is
-  scene-graph/hand-off overhead, not renderer cost. Worth revisiting in Phase 2 (also see O4, one renderer service per
-  window).
-* 262144 atoms at 3.5 fps is the software-rasterizer limit for four simultaneous viewports of that size; the per-frame
-  cost scales with particles × viewports, exactly like the classic frontend.
+* On the **M4 the frame time is dominated by the four-viewport overhead** up to 32768 atoms: it stays between 9 and 11 ms
+  across a 64× range of particle counts, and it does not grow with the window (8.87 ms at 1920×940 versus 9.80 ms at
+  1280×800 for 512 atoms, 16.26 versus 16.76 ms for 262144 atoms). Per frame the frontend generates four frame graphs,
+  hands them to four `QQuickRhiItemRenderer`s and composites four textures on the scene-graph thread, and that fixed cost —
+  not rasterization — sets the floor. Only 262144 atoms (≈1 M particles across the four viewports) push the render cost
+  above it.
+* The **Linux numbers come from a software rasterizer** (llvmpipe, 1280×800). They are a lower bound, and their scaling is
+  the expected bandwidth-bound one — the opposite of the M4's flat curve, which is why they should not be extrapolated to
+  hardware.
+* The `basic` (single-threaded) render loop is ~2× faster than the default (threaded) loop under llvmpipe (7.6 versus
+  14.4 ms). Frame-graph generation happens per frame in both cases, so this is scene-graph hand-off overhead rather than
+  renderer cost; it is carried into Phase 2 together with O4 (one renderer service per window instead of one per item).
+* The **Retina measurements of the first host are limited by its display refresh** (57.7–59.0 fps at ≈3.2 Mpx, exactly like
+  the classic frontend on that machine); they show that the frontend sustains the refresh at that resolution and nothing
+  about headroom. The second host, whose display is not the limiting factor for small scenes, is the one that exposes it.
 
-**Comparison with the classic frontend (macOS/Metal, same machine, same data sets).** The classic frontend exposes no
-frame-time counter, so a temporary instrumentation patch was applied locally and reverted afterwards (the exact diff is
-recorded in [UI_TEST_ENV.md](UI_TEST_ENV.md) section 7, which also explains why an unattended classic run is otherwise
-likely to measure an *empty* scene):
+**Comparison with the classic frontend.** The classic frontend exposes no frame-time counter, so a temporary instrumentation
+patch was applied locally and reverted afterwards (the exact diff is recorded in [UI_TEST_ENV.md](UI_TEST_ENV.md) section 7,
+which also explains why an unattended classic run is otherwise likely to measure an *empty* scene):
 
-| Frontend | Data set | Rendered surface | Frame rate |
-|----------|----------|------------------|------------|
-| Classic QtWidgets frontend (Metal) | 512 atoms, 4 viewports | 1386×1156 device px (1.6 Mpx) | 61.0 fps (vsync-limited) |
-| Qt Quick frontend (Metal) | 512 atoms, 4 viewports | ≈2000×1600 device px (3.2 Mpx) | 59.0 fps (vsync-limited) |
+| Frontend | Host, data set, rendered surface | Frame rate |
+|----------|----------------------------------|------------|
+| Classic QtWidgets (Metal) | first host, 512 atoms, 1386×1156 device px (1.6 Mpx) | 61.0 fps |
+| Qt Quick (Metal) | first host, 512 atoms, ≈2000×1600 device px (3.2 Mpx) | 59.0 fps |
+| Qt Quick (Metal) | second host, 512 atoms, 1280×800 (1.0 Mpx) | 102 fps |
+| Qt Quick (Metal) | second host, 262144 atoms, 1920×940 (1.8 Mpx) | 61.5 fps |
 
-Both frontends are limited by the 60 Hz display refresh at these data sets, and the Qt Quick frontend reaches the same
-frame rate while rendering **twice the number of pixels** (its window is larger and every viewport is rendered at Retina
-resolution). A pixel-exact comparison therefore favours the classic frontend, and the Qt Quick path still matches it; a
-frame-rate-limited statement beyond that is not possible without disabling vsync for the classic path, which OVITO does
-not expose.
+The classic run is bound by the 60 Hz display refresh, so its 61.0 fps is a ceiling and not a cost measurement. What the
+comparison does support: at the data set and resolution at which the classic frontend was measured, the Qt Quick frontend
+sustains the same refresh rate while rendering twice the pixels, and it exceeds it by a wide margin (102–116 fps) when the
+scene is small. A cost-versus-cost comparison would require disabling vsync for the classic path, which OVITO does not
+expose; the frame times above are therefore the meaningful absolute numbers, and the classic frontend is kept as a
+qualitative reference.
 
 **Input responsiveness (picking).** Measured on Linux/OpenGL unless noted:
 
 | Scenario | Measured latency |
 |----------|------------------|
-| First pick after window creation (includes creating the render thread and its QRhi) | 99–150 ms |
-| Refresh after the picking buffer was invalidated by a resize (small viewport, warm pipelines) | ≤10 ms (one poll interval) |
-| Recovery after hide/show (GPU resources released and re-acquired) | 133–546 ms |
+| First pick after window creation (includes creating the render thread and its QRhi) | 99 ms (macOS/Metal) – 150 ms (Linux, software rasterizer) |
+| Warm refresh after the buffer was invalidated by a resize | 19–27 ms (bounded by the harness's 10 ms poll interval) |
+| Recovery after hide/show (GPU resources released and re-acquired) | 487–522 ms (Linux), 504 ms (macOS/Metal) |
 | Probe during scene evaluation | returns immediately (0 ms), no deadlock |
 | 262144-atom scene, grid of 25 positions | 25/25 hits, first hit after 25 ms |
 
