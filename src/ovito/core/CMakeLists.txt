@@ -443,15 +443,16 @@ IF(ZLIB_FOUND)
     )
     # Define STDC for the zstd zlibWrapper source files, because newer zlib versions (1.3+) no longer define
     # this macro in zconf.h, but the zlibWrapper code in gzguts.h still relies on it to include standard headers.
-    SET(ZSTD_ZLIBWRAPPER_COMPILE_DEFINITIONS "STDC")
+    SET_SOURCE_FILES_PROPERTIES(${ZSTD_ZLIBWRAPPER_SOURCES} PROPERTIES COMPILE_DEFINITIONS "STDC")
     IF(WIN32)
-        # These sources *implement* the zlib API on top of zstd instead of using it. A zlib that is packaged as a
-        # DLL declares its functions as dllimport in zconf.h (vcpkg's zlib even makes that unconditional), which
-        # turns every definition here into an error (MSVC C2491). ZLIB_INTERNAL selects the declarations for code
-        # that builds zlib itself, i.e. defines the functions instead of importing them.
-        LIST(APPEND ZSTD_ZLIBWRAPPER_COMPILE_DEFINITIONS ZLIB_INTERNAL)
+        # zstd_zlibwrapper.c *implements* the zlib API on top of zstd instead of using it. A zlib that is packaged
+        # as a DLL declares its functions as dllimport in zconf.h (vcpkg's zlib makes that declaration
+        # unconditional), which turns every definition in this file into an error (MSVC C2491). ZLIB_INTERNAL
+        # selects the declarations for code that builds zlib itself, i.e. that defines the functions.
+        # The other wrapper sources are not affected: gzguts.h defines ZLIB_INTERNAL for them anyway.
+        SET_SOURCE_FILES_PROPERTIES("${OVITO_SOURCE_BASE_DIR}/src/3rdparty/zstd/zlibWrapper/zstd_zlibwrapper.c"
+            PROPERTIES COMPILE_DEFINITIONS "STDC;ZLIB_INTERNAL")
     ENDIF()
-    SET_SOURCE_FILES_PROPERTIES(${ZSTD_ZLIBWRAPPER_SOURCES} PROPERTIES COMPILE_DEFINITIONS "${ZSTD_ZLIBWRAPPER_COMPILE_DEFINITIONS}")
     TARGET_SOURCES(Core PRIVATE ${ZSTD_ZLIBWRAPPER_SOURCES})
 ELSE()
     MESSAGE(WARNING "zlib library not found. OVITO will be built without I/O support for gzip compressed files.")

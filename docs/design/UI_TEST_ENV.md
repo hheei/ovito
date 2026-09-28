@@ -299,8 +299,12 @@ development machine and read its package lines: `cmake -S . -B /tmp/cfgprobe -G 
 Three Windows dependency failures in a row (`Boost`, then `HDF5`, then `SQLite3`, then the zlib runtime library) came
 from skipping this step.
 
-* **Boost headers** on Windows (`vcpkg install boost-headers:x64-windows`, passed as `-DBOOST_ROOT=...`): geogram requires
-  them, and the failure surfaces during configure as `Could NOT find Boost (missing: Boost_INCLUDE_DIR)`.
+* **Boost headers** on Windows: download and unpack the complete official headers
+  (`boost_1_92_0.tar.gz`, 235 MB) and configure with `-DBOOST_ROOT=<dir> -DBoost_NO_BOOST_CMAKE=ON`. Neither the runner
+  image nor a plain `vcpkg install boost-headers:x64-windows` provides them: that port installs only the headers that do
+  not belong to a library-specific port, so the build fails later on `boost/algorithm/algorithm.hpp` (and would fail on
+  `boost/version.hpp` as well). Installing the individual ports instead means ~16 of them, one per Boost library that
+  OVITO includes. OVITO links only `Boost::boost` (header-only), so the headers are all that is needed.
 * **HDF5 + NetCDF-C** on Windows (`vcpkg install "hdf5[hl]:x64-windows" "netcdf-c[core,netcdf-4]:x64-windows"` plus
   `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`): the Particles plugin's `netcdf_integration` module
   needs them, and only `OVITO_REDISTRIBUTABLE_PACKAGE`/`OVITO_BUILD_PYPI` builds take them from the bundled submodules.

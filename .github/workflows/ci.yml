@@ -268,20 +268,39 @@ jobs:
           path: C:\Users\runneradmin\AppData\Local\vcpkg\archives
           key: vcpkg-x64-windows-boost-hdf5-netcdf-v1
 
-      - name: Install the Boost headers and the HDF5/NetCDF libraries
+      - name: Restore the Boost headers from the cache
+        id: boost-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\.boost
+          key: boost-1.92.0-headers
+
+      - name: Install the Boost headers
+        if: steps.boost-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          # vcpkg's boost-headers port only carries the headers that do not belong to a library-specific
+          # port, so the complete official Boost headers are used instead: OVITO includes headers such as
+          # boost/algorithm/algorithm.hpp and boost/version.hpp, which are otherwise missing.
+          $version = "1.92.0"
+          $underscored = $version -replace '\.', '_'
+          Invoke-WebRequest "https://archives.boost.io/release/$version/source/boost_$underscored.tar.gz" -OutFile "$env:RUNNER_TEMP/boost.tar.gz"
+          New-Item -ItemType Directory -Force "${{ github.workspace }}\.boost" | Out-Null
+          tar -xzf "$env:RUNNER_TEMP/boost.tar.gz" -C "${{ github.workspace }}\.boost" --strip-components=1
+
+      - name: Install the HDF5/NetCDF/SQLite3 libraries
         shell: pwsh
         run: |
           # netcdf-c[netcdf-4] pulls the HDF5 high-level library it needs. Naming "core" first disables its
           # default features dap and nczarr, which would otherwise build curl for remote access OVITO
           # does not use.
-          # Same set of third-party libraries the Linux and macOS jobs get from their package managers:
-          # Boost headers (geogram), HDF5 with its high-level library and NetCDF-C (the particle file
-          # formats) and SQLite3 (the particles plugin).
-          vcpkg install boost-headers:x64-windows "hdf5[hl]:x64-windows" "netcdf-c[core,netcdf-4]:x64-windows" sqlite3:x64-windows
+          # Same third-party libraries the Linux and macOS jobs get from their package managers: HDF5 with
+          # its high-level library and NetCDF-C for the particle file formats, and SQLite3 for the particles
+          # plugin (Boost is installed separately, see above).
+          vcpkg install "hdf5[hl]:x64-windows" "netcdf-c[core,netcdf-4]:x64-windows" sqlite3:x64-windows
           # vcpkg installs into the vcpkg root, which is a machine-level environment variable of the runner image
-          # and therefore not part of the Actions env context. Export the paths explicitly for the later steps.
+          # and therefore not part of the Actions env context. Export the path explicitly for the later steps.
           $root = if($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:\vcpkg" }
-          "BOOST_ROOT=$root/installed/x64-windows" | Out-File -FilePath $env:GITHUB_ENV -Append
           "VCPKG_TOOLCHAIN=$root/scripts/buildsystems/vcpkg.cmake" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       # Qt pre-compiles the HLSL shaders to DXIL with dxc, which must be on the PATH - and whose absence is a
@@ -321,7 +340,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_TOOLCHAIN" `
             -DCMAKE_PREFIX_PATH="$env:Qt6_DIR" `
-            -DBOOST_ROOT="$env:BOOST_ROOT" `
+            -DBOOST_ROOT="${{ github.workspace }}\.boost" -DBoost_NO_BOOST_CMAKE=ON `
             -DOVITO_BUILD_CPP_TESTS=ON `
             -DOVITO_BUILD_QML_FRONTEND=ON
 
