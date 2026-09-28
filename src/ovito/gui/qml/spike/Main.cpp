@@ -129,6 +129,34 @@ PickProbe probePicking(QuickViewportWindow* viewportWindow, const QSizeF& itemSi
     return probe;
 }
 
+/// Picks at a grid of positions covering the whole viewport item, which answers the question "does picking work in
+/// this viewport at all". A fixed probe position cannot answer that: the camera fits a scene to the aspect ratio
+/// of the viewport, so the same position can lie outside the scene on a viewport of a different shape even though
+/// picking works perfectly - which is how the CI smoke test failed on a viewport that is 307 instead of 380 pixels
+/// tall, while the synthetic click at the item centre still selected the lattice.
+PickProbe scanPicking(QuickViewportWindow* viewportWindow, const QSizeF& itemSize)
+{
+    PickProbe probe;
+    probe.center = QPoint(int(itemSize.width() / 2), int(itemSize.height() / 2));
+    probe.itemSize = itemSize;
+    // The grid must be fine enough that it cannot fall between the objects: pick() looks for an object within
+    // four device pixels of the probe position, so a spacing of five pixels cannot miss an object that covers
+    // more than a point. A coarse grid aliases with the periodicity of a crystal: a 55 pixel grid - the spacing
+    // of a fitted 8x8 lattice in a 496 pixel wide viewport - landed exactly in the gaps and hit nothing at all.
+    constexpr qreal spacing = 5;
+    for(qreal y = spacing / 2; y < itemSize.height(); y += spacing) {
+        for(qreal x = spacing / 2; x < itemSize.width(); x += spacing) {
+            probe.tested++;
+            if(auto result = viewportWindow->pick(QPointF(x, y))) {
+                probe.hits++;
+                if(!probe.example)
+                    probe.example = std::move(result);
+            }
+        }
+    }
+    return probe;
+}
+
 /// Prints the outcome of a picking probe.
 void reportPicking(const PickProbe& probe, const QString& what)
 {
@@ -193,6 +221,8 @@ void reportPickingState(QmlMainWindowUI* ui, const QPoint& probePos)
     qInfo() << "PICK_TEST state at failure: item" << item->size() << "probe center" << probe.center
             << "in item" << probe.itemSize << "hits" << probe.hits
             << "pick()" << (result ? "returned a result" : "returned nothing");
+    // The scan distinguishes "picking does not work here" from "the test position does not contain an object".
+    reportPicking(scanPicking(viewportWindow, item->size()), QStringLiteral("viewport scan at failure"));
 }
 
 /// Waits until the picking buffer has been re-rendered for the current viewport state after the viewport changed
@@ -209,7 +239,7 @@ void waitForPickingBuffer(QmlMainWindowUI* ui, const QPoint& probePos, const QSt
                 if(previousItemSize.isValid() && item->size() == previousItemSize)
                     return false;
                 if(QuickViewportWindow* viewportWindow = item->viewportWindow())
-                    return probePicking(viewportWindow, item->size(), probePos).hits > 0;
+                    return scanPicking(viewportWindow, item->size()).hits > 0;
             }
             return false;
         },
@@ -251,8 +281,9 @@ void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void(
     // re-read for every probe so that a layout pass happening in between cannot distort the measurement.
     const QDateTime probeStart = QDateTime::currentDateTime();
     pollUntil(ui, 25, pickTimeoutMs,
-        [viewportWindow, item, itemPos]() {
-            return probePicking(viewportWindow, item->size(), itemPos).hits > 0;
+        [viewportWindow, item]() {
+            // Any object anywhere in the viewport proves that the picking buffer has arrived; see scanPicking().
+            return scanPicking(viewportWindow, item->size()).hits > 0;
         },
         [ui, item, viewportWindow, itemPos, probeStart, continuation](bool satisfied) {
             if(satisfied)
@@ -265,8 +296,12 @@ void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void(
             // Second pass: the picking pass has been rendered in the background in the meantime.
             const PickProbe finalProbe = probePicking(viewportWindow, item->size(), itemPos);
             reportPicking(finalProbe, QStringLiteral("after picking pass"));
-            if(finalProbe.hits == 0)
-                reportVerificationFailure(QStringLiteral("no object was picked at the test position"));
+            const PickProbe scan = scanPicking(viewportWindow, item->size());
+            reportPicking(scan, QStringLiteral("viewport scan"));
+            if(scan.hits == 0)
+                reportVerificationFailure(QStringLiteral("no object was picked anywhere in the viewport"));
+            else if(finalProbe.hits == 0)
+                qInfo() << "PICK_TEST the test position" << itemPos << "does not contain an object in this viewport shape";
 
             // Negative control: a corner of the viewport shows only the empty background.
             if(std::optional<ViewportWindow::PickResult> backgroundPick = viewportWindow->pick(QPointF(2, 2))) {

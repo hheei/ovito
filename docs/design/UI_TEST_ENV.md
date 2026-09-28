@@ -64,6 +64,24 @@ LD_LIBRARY_PATH="$PWD/.qt/6.10.2/gcc_64/lib" QT_QPA_PLATFORM=xcb timeout 300 \
   ./build-native/bin/ovito-qml-spike --qml-capture /tmp/shot.png --qml-capture-delay 4000 /tmp/lattice_512.xyz
 ```
 
+### 1.1 Picking checks: the probe must not alias with the scene
+
+Two ways a picking check reports "nothing was picked" while nothing is wrong with picking:
+
+* **The probe position can lie outside the scene.** The camera fits a scene to the *aspect ratio* of the viewport, so
+  the same pixel position holds different content on viewports of different shapes: the CI smoke test probed
+  `(300,300)` and hit 19 of 25 positions on a 496x380 viewport, but nothing at all on the macOS runner's 496x307
+  viewport, while the synthetic click at the item centre still selected the lattice. Probe a grid over the whole
+  viewport, or the item centre, not one fixed position.
+* **The probe grid can alias with a periodic scene.** A fitted 8x8 lattice in a 496 pixel wide viewport has a particle
+  spacing of about 55 pixels. A 9x9 grid over that viewport has almost exactly the same spacing and landed in the gaps
+  between the particles: 0 of 81 positions hit while a 4 pixel grid around a particle hit 19 of 25. `pick()` searches
+  within four device pixels of the probe position, so the grid spacing must stay below that (the smoke test uses 5
+  pixels, which turned the same viewport into 2468 of 7524 hits).
+
+Both failures look identical in a log that only prints a hit count, so the smoke test prints the item size, the probe
+centre and a full-viewport scan whenever a picking check fails.
+
 ### 2.1 Qt Quick graphics backends under Xvfb
 
 | Backend | Works? | Recipe / reason |
