@@ -320,6 +320,14 @@ silent-empty-scene trap of §3.1: it must be ≥ 1.
   option qml-frame-stats` was the observable symptom). Copy the *source file* and rebuild, never a stale binary.
 * Assertion/lifecycle checks are only meaningful in an assert-enabled build (§4); a clean run of an `NDEBUG` build proves
   nothing about object lifetimes.
+* **Probe positions must be inside the viewport item**: at `QT_SCALE_FACTOR=2` (or with a small window) the first
+  viewport item can shrink to a few hundred logical pixels, and a probe at `300,300` then measures `0 of 0 positions`
+  and looks like a picking failure. The spike clamps its grid into the item and prints the position it used plus the item
+  size, so a probe taken before and after a resize is comparable.
+* **Two probes at the same position must agree.** The picking buffer is rendered asynchronously, so a probe taken right
+  after a change answers from the previous buffer; if the probes before and after the picking pass disagree (19/25 versus
+  13/25 was the symptom), that is a defect in the buffer bookkeeping, not a measurement artefact - it is how the missing
+  buffer-size check of `QuickViewportWindow::pick()` was found.
 
 ## 9. Quick checklist
 

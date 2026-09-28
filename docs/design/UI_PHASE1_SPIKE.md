@@ -109,8 +109,11 @@ satisfy it from Qt Quick works, and both were validated to fail before the curre
 
 Picking therefore runs completely outside the interactive frame, reusing OVITO's existing offscreen rendering path:
 
-1. `QuickViewportWindow::pick()` looks up the cached `ObjectPickingBuffer` locally and never waits. A buffer rendered for
-   a different viewport size is discarded, because pixel coordinates would no longer match.
+1. `QuickViewportWindow::pick()` looks up the cached `ObjectPickingBuffer` locally and never waits. The buffer is
+   only used when it was rendered at the **current viewport device size**; otherwise pixel coordinates would be
+   resolved in the geometry of a previous viewport (defect F5). A new pass is also discarded while the viewport
+   geometry changes under it, because the projection the frame graph was generated with must belong to the size the
+   picking buffer is rendered at.
 2. If the buffer is missing or was invalidated by a newly generated frame graph, `refreshPickingBuffer()` starts at most
    one background pass (`renderPickingBuffer()`): a coroutine that obtains a **dedicated** frame graph by calling the
    reused `ViewportWindow::generateFrameGraph()` (a frame graph is consumed by exactly one renderer, so it must not be
@@ -321,6 +324,7 @@ not expose.
 | F2 | `NewGraphicsSystemService::applicationStarting()` and `UpdateNotificationService::applicationStarting()` dereferenced the result of `dynamic_object_cast<MainWindowUI>()` after an assert only, which crashed during startup for any non-desktop frontend (all plugins, including the desktop GUI plugin, are loaded). | Both services return early when the active `UserInterface` is not a `MainWindowUI`. |
 | F3 | The classic frontend logs `VUID-VkApplicationInfo-apiVersion` (value 0) when creating its `QVulkanInstance`. Pre-existing, non-fatal, still open (O2). | Not fixed; recorded in the audit. |
 | F4 | The picking coroutine (`QuickViewportWindow::renderPickingBuffer()`) submitted its render-thread work from a Qt event handler, i.e. from a task without a `UserInterface`; with assertions active this aborted in `RenderThread::renderPickingFrame()` (`this_task::ui()`). | Attach the context after the coroutine's first suspension (`setUserInterface()`, `setIsInteractive()`), the pattern `WidgetViewportWindow::grabViewportImage()` already uses. Only found because the assert-enabled configuration exists — see O8 for the general QML-frontend consequence. |
+| F5 | After a resize, `QuickViewportWindow::pick()` kept answering from the picking buffer of the **previous** viewport size. `lookupPickResult()` normalizes the pick position with the buffer size it is given, so picks in the resized viewport were silently resolved in the old geometry (found because the harness's probes before and after the picking pass disagreed: 19/25 versus 13/25 at the same position, with different hit atoms). A second, narrower race let a pass be rendered whose frame graph projection came from a different viewport geometry than the buffer. | `pick()` rejects a buffer whose `bufferSize()` differs from the current viewport device size, and `renderPickingBuffer()` drops a pass whose `projectionParams().aspectRatio` does not match the size it would render at. The measured resize recovery time (section 3.4) became a real refresh time because of this; before, it was the instant answer of the stale buffer. |
 
 ### 4.1 Design corrections (not defects, but recorded so they are not repeated)
 
