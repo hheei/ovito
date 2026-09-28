@@ -4,7 +4,7 @@
 >
 > **Guiding Principle**: Validate high risks first, interaction parity before redesign
 >
-> **Status**: Proposed Roadmap; Phase 0 audit (partially), Phase 1 rendering spike and Phase 2 deliverables 1–6
+> **Status**: Proposed Roadmap; Phase 0 audit (partially), Phase 1 rendering spike and Phase 2 deliverables 1–7
 > executed — the frontend selection (`--gui=qml`), the shared `gui/base` workbench base class, the layout-derived
 > workbench shell and the import path with its empty/busy/cancelling/cancelled/error states are in the tree and verified
 > on Linux/OpenGL, see [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) and [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md)
@@ -199,12 +199,13 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      from the deployed layout — the macOS bundle and the Windows plugin directory, not only from the build tree. With
      `OVITO_BUILD_QML_FRONTEND=OFF` the build must contain no QML sources and no QML-linked target.
   7. **Phase 1 leftovers that a real shell needs** (each already recorded in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md)):
-     **O4** one `RendererService` per window instead of one per viewport item (the default threaded render loop measured
-     ~2× the frame time of the `basic` loop on Linux); **O7/O11** a shared core `PickingBufferTarget` and one shared
-     frame-graph render-pass helper over `RendererService*` (the QML renderer currently replays ~100 lines of
-     `RenderThread::renderFrameGraph()` and duplicates the pick radius of 4); **O8** a helper that wraps QML-facing calls
-     in a `Task::Scope` bound to the `UserInterface` (Qt event handlers run in a task without a UI — defect F4 in the
-     Phase 1 report); **D14** as described above. **O1** (the `ovitoheadless` QPA plugin does not exist in this tree, which
+     ~~**O4** one `RendererService` per window instead of one per viewport item~~ **done** — the items of a window share
+     the service (and with it the pipeline and resource caches) and the measurement below confirms the win; ~~**O7/O11**
+     a shared core `PickingBufferTarget` and one shared frame-graph render-pass helper over `RendererService*`~~
+     **done/resolved** — the pass sequence now lives in `FrameGraphRenderPass` (decision D24), and the duplicated picking
+     target disappeared when the Qt Quick frontend moved its picking to `RenderThread::renderPickingFrame()` in Phase 1;
+     ~~**O8** a helper that wraps QML-facing calls in a `Task::Scope` bound to the `UserInterface`~~ **done**
+     (`GuiTaskScope`); ~~**D14**~~ as described above. **O1** (the `ovitoheadless` QPA plugin does not exist in this tree, which
      is why headless Linux verification needs `xvfb` plus `QT_QPA_PLATFORM=xcb`) and **O2** (the Vulkan
      `VUID-VkApplicationInfo-apiVersion` validation error in `RenderThread`) must be either fixed or explicitly documented
      as constraints in this phase — an undocumented environment requirement is a support burden.
@@ -214,7 +215,7 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      seconds — a crash or a failed startup exits differently, so a "stays up" assertion catches startup regressions
      without inventing a test-only command line option. macOS has no `timeout`, so that check uses a background process
      plus `sleep`/`kill` and closes the window afterwards (testing rules in [UI_TEST_ENV.md](UI_TEST_ENV.md)).
-- **Status (deliverables 1-6 implemented)**: `ovito --gui=qml` starts the Qt Quick workbench, renders a trajectory
+- **Status (deliverables 1-7 implemented)**: `ovito --gui=qml` starts the Qt Quick workbench, renders a trajectory
   imported from the command line, and plain `ovito` still starts the classic main window. Deliverable 1-3 are the
   frontend registry of decision **D15**, the shared workbench base class of decision **D16** and the shell's own state
   and dialog objects (**D19**, **D22**) in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md). Deliverable 4 lays the viewport
@@ -223,14 +224,29 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   (`Ctrl+O`), drag & drop onto the window, a status bar with the running operations' progress and a Cancel command, an
   error dialog for a file whose format cannot be detected, and the cleanup that removes a half-imported pipeline after a
   cancellation (**D20**). Deliverable 6 (resources and packaging) is verified by building with
-  `OVITO_BUILD_QML_FRONTEND=OFF`, which contains neither QML sources nor a QML target. **Open from this phase**:
-  deliverable 7 (the carried-over Phase 1 items O4 and O7/O11; **O2 is fixed** - `RenderThread` now requests an explicit
-  Vulkan API version - and **O1 is documented** as an environment constraint) and the exit-gate verification on Windows
-  (D3D12 has no test host). The spike verifies the shell with `--qml-layout-check` and `--qml-import-check` in CI; the
+  `OVITO_BUILD_QML_FRONTEND=OFF`, which contains neither QML sources nor a QML target. Deliverable 7 closed the
+  carried-over Phase 1 items: the window's viewport items share one renderer service (**D23**, measured below), the
+  frame-graph pass sequence exists once (**D24**), the picking target no longer exists twice (**O7**) and **O2** (explicit
+  Vulkan API version) and **O1** (documented as an environment constraint) are settled. **Open from this phase**: the
+  exit-gate verification on Windows (D3D12 has no test host). The spike verifies the shell with `--qml-layout-check` and `--qml-import-check` in CI; the
   testing recipe is [UI_TEST_ENV.md](UI_TEST_ENV.md). Verified so far: Linux/OpenGL (all checks, including the four
   viewports, the splitter drag and its undo, picking, the import path and the cancellation) and macOS/Metal (the same
   check set, 126 fps with four viewports at 1280x800); macOS screenshots need the screen-recording permission, so the
   shell evidence image is the Linux one.
+
+- **Deliverable 7 measurement (frame time of the four viewports, 1280×800, headless, `QSG_NO_VSYNC=1`, medians of three
+  runs)**: one service per viewport item versus one per window, Linux/OpenGL/llvmpipe:
+
+  | scene | render loop | per item | per window |
+  |---|---|---|---|
+  | 512 atoms | threaded | 64.0 fps (15.6 ms) | **114.0 fps (8.8 ms)** |
+  | 512 atoms | basic | 118.0 fps (8.5 ms) | **175.5 fps (5.7 ms)** |
+  | 32768 atoms | threaded | 19.5 fps (51.3 ms) | **22.5 fps (44.4 ms)** |
+  | 32768 atoms | basic | 38.5 fps (26.0 ms) | **44.5 fps (22.5 ms)** |
+
+  Sharing the caches removes most of the fixed per-frame cost of four viewports (each item used to prepare and upload
+  the same vertex data, and to compile every pipeline, of its own accord), which is exactly the overhead that the frame
+  time of an empty-ish scene is made of.
 
 - **Non-goals of this phase** (so the shell does not swallow the later ones): pipeline and property models, the pipeline
   view and editors, timeline and animation, render settings and output, data inspector, session saving, command palette.

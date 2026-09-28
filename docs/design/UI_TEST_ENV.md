@@ -576,3 +576,19 @@ Traps and facts that cost time here, in order:
 8. Screenshots: `--qml-hold-ms` + a private `Xvfb` display + `ffmpeg -f x11grab` (§2.2); never `grabWindow()` (§9).
 9. Windows/D3D12 and further macOS coverage: push the work to a `feature/**` branch and read the CI smoke-test logs
    (§6). The CI smoke test verifies numerically (frame statistics, picking, layout) and uploads no screenshot.
+
+### 9.5 Frame-time measurements of the Qt Quick viewport
+
+The frame time of the QML frontend is only comparable when the display's refresh rate is out of the picture:
+
+* `QSG_NO_VSYNC=1` removes the refresh-rate cap of the Qt Quick render loop. Without it every configuration that can keep up
+  reports the same number (60 Hz on a 60 Hz display), which hides both regressions and improvements.
+* `QSG_RENDER_LOOP=basic` removes the scene graph's own threading and is the loop in which a change of the rendering path
+  shows up most clearly; measure both loops, because a change can affect them differently.
+* Measure medians of at least three runs per configuration and per dataset size, and keep the window size and the dataset
+  identical. The interesting sizes are a small scene (a few hundred atoms - the frame is dominated by the fixed cost of the
+  four viewports) and a large one (tens of thousands of atoms - the frame is dominated by the geometry).
+* A headless Linux recipe: `xvfb-run -a --server-args="-screen 0 1400x900x24"` with `QT_QPA_PLATFORM=xcb`,
+  `QSG_NO_VSYNC=1` and the spike's `--qml-frame-stats 2000`. Both loops and both dataset sizes are needed to see which part
+  of the frame a change moved; the numbers of the per-item versus per-window renderer service are in
+  [UI_PLAN.md](UI_PLAN.md) deliverable 7.
