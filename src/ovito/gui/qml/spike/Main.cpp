@@ -36,15 +36,27 @@ namespace Ovito {
 
 namespace {
 
+/// Number of verification checks that did not produce the expected result. The spike exits with a non-zero
+/// status when this counter is non-zero, so an automated run (the CI smoke test) fails on a broken viewport
+/// instead of only printing a warning into a log nobody reads.
+int verificationFailures = 0;
+
+/// Records a verification check that did not produce the expected result.
+void reportVerificationFailure(const QString& message)
+{
+    verificationFailures++;
+    qWarning() << "VERIFY_FAILED" << message;
+}
+
 /// Saves the current contents of the workbench window to an image file and quits the application.
 void captureWindowAndQuit(QmlMainWindowUI* ui, const QString& file)
 {
     QImage image = ui->view() ? ui->view()->grabWindow() : QImage();
     if(image.isNull() || !image.save(file))
-        qWarning() << "Failed to capture the workbench window to" << file;
+        reportVerificationFailure(QStringLiteral("Failed to capture the workbench window to %1").arg(file));
     else
         qInfo() << "Saved workbench window contents to" << file;
-    QCoreApplication::quit();
+    QCoreApplication::exit(verificationFailures == 0 ? 0 : 1);
 }
 
 /// Runs the given function after the specified delay.
@@ -183,7 +195,7 @@ void waitForPickingBuffer(QmlMainWindowUI* ui, const QPoint& probePos, const QSt
             if(satisfied)
                 qInfo() << "PICK_TEST" << what << ": picking works again after" << started.msecsTo(QDateTime::currentDateTime()) << "ms";
             else
-                qWarning() << "PICK_TEST" << what << ": no object was picked within 5 s";
+                reportVerificationFailure(QStringLiteral("no object was picked within 5 s %1").arg(what));
             continuation();
         });
 }
@@ -199,7 +211,7 @@ void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void(
     QuickViewportItem* item = firstViewportItem(ui);
     QuickViewportWindow* viewportWindow = item ? item->viewportWindow() : nullptr;
     if(!viewportWindow) {
-        qWarning() << "PICK_TEST no viewport item found";
+        reportVerificationFailure(QStringLiteral("no viewport item found"));
         continuation();
         return;
     }
@@ -222,10 +234,13 @@ void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void(
             if(satisfied)
                 qInfo() << "PICK_TEST first successful pick after" << probeStart.msecsTo(QDateTime::currentDateTime()) << "ms";
             else
-                qWarning() << "PICK_TEST the picking buffer did not become available within 5 s";
+                reportVerificationFailure(QStringLiteral("the picking buffer did not become available within 5 s"));
 
             // Second pass: the picking pass has been rendered in the background in the meantime.
-            reportPicking(probePicking(viewportWindow, item->size(), itemPos), QStringLiteral("after picking pass"));
+            const PickProbe finalProbe = probePicking(viewportWindow, item->size(), itemPos);
+            reportPicking(finalProbe, QStringLiteral("after picking pass"));
+            if(finalProbe.hits == 0)
+                reportVerificationFailure(QStringLiteral("no object was picked at the test position"));
 
             // Negative control: a corner of the viewport shows only the empty background.
             if(std::optional<ViewportWindow::PickResult> backgroundPick = viewportWindow->pick(QPointF(2, 2))) {
@@ -250,7 +265,7 @@ void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void(
                         if(const SceneNode* selectedNode = selection->firstNode())
                             qInfo() << "PICK_TEST synthetic click selected" << selectedNode->objectTitle();
                         else
-                            qWarning() << "PICK_TEST synthetic click selected nothing";
+                            reportVerificationFailure(QStringLiteral("synthetic click selected nothing"));
                     }
                 }
             }
@@ -264,7 +279,7 @@ void runHideShowTest(QmlMainWindowUI* ui, const QPoint& probePos, std::function<
 {
     const QList<QuickViewportItem*> items = viewportItems(ui);
     if(items.isEmpty()) {
-        qWarning() << "PICK_TEST hide/show: no viewport item found";
+        reportVerificationFailure(QStringLiteral("hide/show: no viewport item found"));
         continuation();
         return;
     }
@@ -345,6 +360,10 @@ void measureFrameRate(QmlMainWindowUI* ui, int durationMs, std::function<void()>
         const double fps = durationMs > 0 ? (*frames * 1000.0) / durationMs : 0.0;
         qInfo() << "FRAME_STATS" << *frames << "frames in" << durationMs << "ms with" << items.size() << "viewports ->"
                 << QString::number(fps, 'f', 1) << "fps (" << QString::number(fps > 0.0 ? 1000.0 / fps : 0.0, 'f', 2) << "ms/frame)";
+        // A viewport that renders nothing at all still looks healthy in a screenshot-less run; this is the check
+        // that catches it.
+        if(*frames == 0)
+            reportVerificationFailure(QStringLiteral("no frame was rendered within %1 ms").arg(durationMs));
         continuation();
     });
     timer->start(durationMs);
@@ -505,7 +524,7 @@ protected:
 
         _verificationFinished = [ui = mainWinUI, captureFile]() {
             if(captureFile.isEmpty())
-                QCoreApplication::quit();
+                QCoreApplication::exit(verificationFailures == 0 ? 0 : 1);
             else
                 captureWindowAndQuit(ui, captureFile);
         };
