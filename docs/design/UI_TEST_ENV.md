@@ -306,6 +306,13 @@ check fails, so the step is an assertion instead of a log to grep. The screensho
 | macOS ARM64 | Metal | Metal | the runner's own session |
 | Windows AMD64 | **D3D12 on WARP** (`QSG_RHI_BACKEND=d3d12`, `QSG_RHI_PREFER_SOFTWARE_RENDERER=1`) | D3D12 on WARP (D3D11 fallback) | the runner's own session |
 
+**Where the jobs currently stand** (as of the Phase 1 close-out): Linux x86_64, Linux ARM64 and macOS ARM64 run the full
+smoke test and pass. The Windows job **builds the whole tree** (1149/1149 targets, `ovito.exe` and `ovito-qml-spike.exe`
+included) but has not yet reached its D3D12 smoke test: the run stopped at the preceding CTest step, where five tests
+aborted with `0xc0000135`, which turned out to be the `PATH` trap described below rather than a test failure. That trap is
+fixed, but the job has not been re-run since - a D3D12 runtime result is still outstanding, and CI usage is deliberately
+kept low, so a Windows verification should be a single deliberate run rather than a debug loop.
+
 Prerequisites that the runner images do **not** provide and that the workflow installs, each of which fails the job loudly
 if missing:
 

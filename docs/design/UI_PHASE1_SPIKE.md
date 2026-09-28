@@ -8,8 +8,8 @@
 > OVITO's `RenderThread` machinery, verified end to end (selection through `SelectionMode`). The frontend has been
 > exercised on **three** Qt Quick backends — OpenGL and Vulkan on Linux x86_64, Metal on macOS ARM64 — including hide/show,
 > resize, lifecycle and assertion-enabled runs, and a frame-rate baseline was measured against the classic frontend on
-> macOS. D3D12/Windows is the only target that could not be verified (no such machine is available), so the architecture
-> is **not yet frozen**.
+> macOS. On the fourth target, Windows x86_64, the frontend **compiles** (the CI job builds the whole tree with MSVC) but
+> the D3D12 runtime path could not be exercised, so the architecture is **not yet frozen**.
 >
 > Environment recipes, traps and measurement instructions live in [UI_TEST_ENV.md](UI_TEST_ENV.md) — read that before
 > re-running any of the checks below.
@@ -269,7 +269,7 @@ Each backend was exercised with the full check set (`--qml-pick`, `--qml-hide-sh
 | Linux x86_64 (`xvfb`) | OpenGL 4.5 (Mesa llvmpipe, software) | ✔ | ✔ 19/25 grid hits, click selects | 14.4–15.3 ms/frame (65–69 fps, vsync), 7.6 ms (basic loop) |
 | Linux x86_64 (`xvfb`) | Vulkan via lavapipe (software ICD) | ✔ | ✔ identical hits and hit locations | 19.7 ms/frame (50.7 fps) |
 | macOS ARM64 (Cocoa) | **Metal** | ✔ | ✔ 14/25 grid hits (Retina geometry), click selects | 16.95 ms/frame (59.0 fps, vsync) |
-| Windows x86_64 | D3D12 | — | — | not verified: no Windows machine available |
+| Windows x86_64 (CI runner) | D3D12 (WARP) | D3D12 (WARP) | not exercised: the job built the tree (1149/1149 targets) but stopped before the smoke test | not measured |
 
 * The picking results are **identical** between the Linux OpenGL and Linux Vulkan runs (same subobject id, same hit
   location to within 10⁻³ Å), which is expected because the picking pass is rendered by OVITO's own renderer through
@@ -360,6 +360,22 @@ already earned its keep in its first runs:
   the imported pipelines with their detected format and the viewport state at the moment a check fails.
 * The picking checks wait 20 s rather than 5 s: a CI runner creates the render thread's graphics device and compiles its
   pipelines far more slowly than a development machine, so the shorter timeout was measuring the runner, not the code.
+* The **checks themselves were wrong on the macOS runner** even after those fixes: the harness probed one fixed position
+  `(300,300)`, and the camera fits a scene to the *aspect ratio* of the viewport, so that position missed the scene on the
+  runner's 496×307 viewport (19/25 hits on the development machine's 496×380 one) while the synthetic click at the item
+  centre selected the lattice in the same run. The check now scans the whole viewport, which in turn needs a scan grid
+  *finer than the scene's periodicity*: the first version used a spacing of ~55 px, exactly the particle spacing of a
+  fitted 8×8 lattice in a 496 px wide viewport, and reported 0/81 hits on a viewport where a 5 px grid reports 2468/7524.
+  Both traps are documented in [UI_TEST_ENV.md](UI_TEST_ENV.md) section 1.1 - the lesson is that a picking check must
+  distinguish "picking does not work" from "the probe does not contain an object".
+
+**Windows x86_64.** The Windows job is the reason the smoke test exists, and it paid off differently than expected: it
+reached a full build of the tree (1149/1149 targets, including `ovito.exe` and `ovito-qml-spike.exe`) but never got to
+the D3D12 smoke test, because the job stopped at the preceding CTest step (five tests aborted with `0xc0000135`,
+`STATUS_DLL_NOT_FOUND`, because the step's `PATH` replaced the runner's path instead of extending it - a workflow defect,
+not a code defect). Getting that far required the dependency list of section 6 of the testing notes *and* four code fixes
+(F7-F10 in section 4), all of them real portability defects that no other platform exposes. CI work was stopped there by
+the project maintainer, so the D3D12 runtime verification remains an open gate item rather than a known failure.
 
 Published results of the four jobs: see section 3.5.
 
@@ -375,6 +391,10 @@ Published results of the four jobs: see section 3.5.
 | F4 | The picking coroutine (`QuickViewportWindow::renderPickingBuffer()`) submitted its render-thread work from a Qt event handler, i.e. from a task without a `UserInterface`; with assertions active this aborted in `RenderThread::renderPickingFrame()` (`this_task::ui()`). | Attach the context after the coroutine's first suspension (`setUserInterface()`, `setIsInteractive()`), the pattern `WidgetViewportWindow::grabViewportImage()` already uses. Only found because the assert-enabled configuration exists — see O8 for the general QML-frontend consequence. |
 | F5 | After a resize, `QuickViewportWindow::pick()` kept answering from the picking buffer of the **previous** viewport size. `lookupPickResult()` normalizes the pick position with the buffer size it is given, so picks in the resized viewport were silently resolved in the old geometry (found because the harness's probes before and after the picking pass disagreed: 19/25 versus 13/25 at the same position, with different hit atoms). A second, narrower race let a pass be rendered whose frame graph projection came from a different viewport geometry than the buffer. | `pick()` rejects a buffer whose `bufferSize()` differs from the current viewport device size, and `renderPickingBuffer()` drops a pass whose `projectionParams().aspectRatio` does not match the size it would render at. The measured resize recovery time (section 3.4) became a real refresh time because of this; before, it was the instant answer of the stale buffer. |
 | F6 | A picking pass that terminated with an **error** was completely silent: the adapter connected only `FutureWatcher::completed`, so a failed pass left no trace and the next `pick()` merely started another attempt. The visible symptom was "picking does not work", with the reason nowhere in the log — which is how the CI smoke test failed on all four platforms at once (section 3.7). | The adapter also connects the watcher's `error` signal, reports the exception once per series of failures (a successful pass clears the flag) and marks the buffer stale so a later pick retries. The spike's checks additionally print the viewport state and the imported datasets when a check fails, because a check that fails without stating under which conditions it ran costs a debugging session. |
+| F7 | `src/ovito/core/CMakeLists.txt` deployed the Windows zlib runtime library by globbing conda's names (`zlib.dll`, `zlib1.dll`), but upstream zlib ≥ 1.3.2 names the import library `z.lib` and the DLL `z.dll`; CMake configure aborted with a `FATAL_ERROR` for **any** vcpkg/Conan user. | Derive the DLL name from the import library that `ZLIB::ZLIB` points at (`NAME_WE` of the `.lib` entry, after filtering the `optimized;…;debug;…` list form), and list the DLLs actually present in the error message. |
+| F8 | `src/3rdparty/zstd/zlibWrapper/zstd_zlibwrapper.c` does not compile when zlib is a packaged DLL: vcpkg patches `zconf.h` so that `ZEXTERN` becomes `__declspec(dllimport)` unconditionally, and MSVC then rejects the wrapper's definitions of the zlib API (`C2491`). | Define `ZLIB_INTERNAL` for that translation unit only (which turns `ZEXTERN` into `dllexport`); the `gz*.c` sources define it themselves. |
+| F9 | `RendererService`'s implicitly declared copy assignment was instantiated by MSVC in every translation unit that includes the header (`C2280`), because the graphics-pipeline cache holds move-only entries (`boost::anys::unique_any`, `std::unique_ptr`). GCC and clang never instantiate it, so it would have surfaced only on Windows. | The service is explicitly non-copyable (deleted copy operations plus an explicit default constructor), which is also the correct semantics for a long-lived GPU-resource owner. |
+| F10 | `DataBuffer::copyTo()`/`copyComponentTo()` used a bare `static_assert(false)` inside a discarded `if constexpr` branch, which is ill-formed for Apple clang 15 (legal only from clang 17/GCC 13, via CWG 2518); the macOS build failed in the precompiled header. Pre-existing, but only reachable once the macOS job could configure. | A template-dependent `detail::always_false_v<Iter>` helper. |
 
 ### 4.1 Design corrections (not defects, but recorded so they are not repeated)
 
@@ -397,14 +417,14 @@ Published results of the four jobs: see section 3.5.
 | Deadlock/circular wait elimination | **Done, and structurally enforced** — the interactive QML frame never touches a `RenderThread`; offscreen picking submits work through `RenderThread::renderPickingFrame()` and is answered from a cached buffer, so no GUI-thread wait exists that could interleave with a render-thread wait. The previously planned design (blocking `pick()`, `RenderThread::requestPick()`) was rejected for this reason. |
 | Picking and raycasting | **Done** — asynchronous offscreen picking (section 1.5), verified on three Qt Quick backends with hit/no-hit controls, HiDPI/Retina, three render loops, lifecycle cycles, hiding/showing, resizing, a probe during scene evaluation, a 262144-atom scene and an end-to-end synthetic click through `SelectionMode` (sections 3.4–3.6, O3). |
 | HiDPI / resize | **Verified for 2× scaling and interactive resize** — `QT_SCALE_FACTOR=2` on Linux and Retina (`devicePixelRatio = 2`) on macOS both work with correct coordinate handling; `--qml-resize WxH` resizes the window at runtime and picking recovers in 19–27 ms once a buffer for the new device size exists (the stale buffer of the previous size is rejected in the meantime, defect F5). Mixed-DPI multi-monitor setups remain unmeasured. |
-| Cross-API smoke test (Vulkan, Metal, D3D12) | **Partially verified** — Linux x86_64 with Qt Quick **OpenGL** (llvmpipe) and **Vulkan** (lavapipe ICD), macOS ARM64 with **Metal** (hardware), each with the full check set (section 3.5). Qt Quick Vulkan on the hardware RADV driver is blocked by `Xvfb`'s missing DRI3; **D3D12/Windows remains unverified** because no Windows machine is available. |
+| Cross-API smoke test (Vulkan, Metal, D3D12) | **Partially verified** — Linux x86_64 with Qt Quick **OpenGL** (llvmpipe) and **Vulkan** (lavapipe ICD), macOS ARM64 with **Metal** (hardware), each with the full check set (section 3.5). Qt Quick Vulkan on the hardware RADV driver is blocked by `Xvfb`'s missing DRI3. On **Windows x86_64 the frontend compiles and links** with MSVC (the CI job builds 1149/1149 targets) but the D3D12/WARP smoke test has not run yet, so that row stays open (section 3.7). |
 | Performance baseline vs classic (frame time, input responsiveness, data set sizes) | **Done for the reachable configurations** — frame times for 512/4096/32768/262144 atoms and two render loops (section 3.6), picking latencies for cold/warm/resize/hide-show/during-evaluation, and a same-machine comparison against the classic frontend on macOS/Metal (61.0 fps vs 59.0 fps, vsync-limited, with the Qt Quick frontend rendering twice the pixels). Remaining gap: no vsync-free classic measurement is possible, and the Linux numbers come from software rasterizers. |
 | Document required changes to `core/rendering`/`core/viewport` | **Done** — `RendererService` extraction and the offscreen picking entry point, see [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) sections 2 and 4. |
 
 Consequently the rendering bridge and the picking path are validated on three Qt Quick backends (OpenGL and Vulkan on
 Linux, Metal on macOS), with an assertion-enabled regression run and a measured performance baseline. What keeps the
-architecture status at **proposed** is the D3D12/Windows target and the missing `ovitoheadless` QPA plugin for the Linux
-Qt Quick Vulkan path (O1).
+architecture status at **proposed** is the missing D3D12 runtime evidence (Windows x86_64 is build-verified only) and the
+missing `ovitoheadless` QPA plugin for the Linux headless path (O1).
 
 ---
 
@@ -449,9 +469,9 @@ successful pick, a negative control on the empty background, and the object sele
 
 ## 7. Recommended Next Steps
 
-1. **Close the last Phase 1 gaps where the environment allows it**: a D3D12/Windows runner (the CI workflow now builds and
-   smoke tests the frontend on all four target platforms) and a Qt Quick Vulkan run on the hardware driver, which needs a
-   machine with a real display server or DRI3.
+1. **Close the last Phase 1 gaps where the environment allows it**: let the Windows CI job reach its D3D12/WARP smoke test
+   (the tree already builds there; the job stopped at the preceding CTest step, whose `PATH` handling is fixed but not yet
+   re-run) and run Qt Quick Vulkan on a hardware driver, which needs a machine with a real display server or DRI3.
 2. **Decide and document the cross-backend validation plan**, including whether the `ovitoheadless` QPA plugin (O1) is
    implemented for Linux headless verification or the Linux gate is moved to a Vulkan-capable desktop session.
 3. **Move to Phase 2 only after those gates are recorded**, starting with the frontend-neutral application class and
