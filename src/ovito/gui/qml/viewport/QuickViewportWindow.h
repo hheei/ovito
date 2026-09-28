@@ -6,6 +6,8 @@
 
 #include <ovito/gui/qml/QmlFrontend.h>
 #include <ovito/gui/base/viewport/BaseViewportWindow.h>
+#include <ovito/core/rendering/ObjectPickingBuffer.h>
+#include <ovito/core/rendering/RenderThread.h>
 
 namespace Ovito {
 
@@ -26,6 +28,9 @@ class OVITO_GUIQML_EXPORT QuickViewportWindow : public BaseViewportWindow
     OVITO_CLASS(QuickViewportWindow)
 
 public:
+
+    /// Constructor.
+    QuickViewportWindow();
 
     /// Associates this window with a viewport and the QML item it renders into.
     void initializeWindow(Viewport* viewport, UserInterface& userInterface, QuickViewportItem* item);
@@ -79,7 +84,12 @@ public:
     qreal devicePixelRatio() const override;
 
     /// Determines the object located under the given mouse cursor position.
-    /// \note Picking is not implemented by the prototype yet, see docs/design/UI_PHASE1_SPIKE.md.
+    /// \param pos  Position of the mouse cursor in device-independent (logical) viewport coordinates.
+    ///
+    /// The picking pass is rendered offscreen by the render thread, independently of the interactive frame, so
+    /// that picking neither blocks the GUI thread nor the Qt Quick scene graph. The result is taken from the
+    /// picking buffer that was rendered most recently; if that buffer no longer matches the viewport contents, a
+    /// new pass is started in the background and later calls are served from its result.
     std::optional<PickResult> pick(const QPointF& pos) override;
 
     /// Returns the icon image used for displaying non-fatal rendering warnings.
@@ -99,10 +109,41 @@ protected:
     /// Hands the frame graph of the next frame over to the QML item for rendering.
     void renderFrameGraph(OORef<FrameGraph> frameGraph) override;
 
+    /// A coroutine that renders a picking pass for the current viewport contents on the render thread.
+    /// Returns an invalid buffer if the picking pass could not be rendered, e.g. because the viewport
+    /// has been hidden in the meantime.
+    Future<ObjectPickingBuffer> renderPickingBuffer();
+
+private Q_SLOTS:
+
+    /// Stores the result of the asynchronous picking pass.
+    void pickingBufferReady();
+
 private:
+
+    /// Starts rendering a new picking buffer if no other picking pass is currently in flight.
+    void refreshPickingBuffer();
+
+    /// Radius (in device pixels) around the pick position in which a rendered object is searched for.
+    static constexpr int pickRadius = 4;
 
     /// The QML item that renders this viewport. Not owning.
     QPointer<QuickViewportItem> _item;
+
+    /// The picking buffer produced by the last completed offscreen picking pass.
+    ObjectPickingBuffer _pickingBuffer;
+
+    /// Watches the asynchronous picking pass rendering.
+    FutureWatcher<Future<ObjectPickingBuffer>> _pickingBufferWatcher;
+
+    /// The offscreen render target the picking passes are rendered into. Created on demand.
+    std::optional<RenderTarget> _pickingTarget;
+
+    /// The size the current picking render target was created for.
+    QSize _pickingTargetSize;
+
+    /// Indicates that the cached picking buffer no longer matches the viewport contents.
+    bool _pickingBufferStale = true;
 };
 
 }   // End of namespace
