@@ -118,7 +118,10 @@ jobs:
             ninja-build build-essential \
             libboost-dev libnetcdf-dev libhdf5-dev \
             libgl1-mesa-dev libgl1-mesa-dri libvulkan-dev mesa-vulkan-drivers xvfb \
-            libxkbcommon-dev libxkbcommon-x11-0
+            libxkbcommon-dev libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-render-util0 libxcb-shape0 libxcb-sync1 libxcb-xfixes0 \
+            libxcb-xinerama0 libxcb-xkb1
 
       - name: Install Qt 6.10.2
         uses: jurplel/install-qt-action@v4
