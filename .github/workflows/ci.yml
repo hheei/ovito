@@ -69,7 +69,10 @@ jobs:
       - name: Smoke test the Qt Quick frontend
         env:
           QT_QPA_PLATFORM: xcb
+          # Both spellings: the Vulkan loader accepts VK_DRIVER_FILES since 1.3.234, older ones only the
+          # deprecated VK_ICD_FILENAMES.
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
           LD_LIBRARY_PATH: ${{ env.Qt6_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
         run: |
           python3 - <<'PY'
@@ -147,7 +150,10 @@ jobs:
       - name: Smoke test the Qt Quick frontend
         env:
           QT_QPA_PLATFORM: xcb
+          # Both spellings: the Vulkan loader accepts VK_DRIVER_FILES since 1.3.234, older ones only the
+          # deprecated VK_ICD_FILENAMES.
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
           LD_LIBRARY_PATH: ${{ env.Qt6_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
         run: |
           python3 - <<'PY'
