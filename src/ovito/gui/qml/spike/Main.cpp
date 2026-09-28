@@ -41,6 +41,11 @@ namespace {
 /// instead of only printing a warning into a log nobody reads.
 int verificationFailures = 0;
 
+/// How long a picking check waits for the asynchronously rendered picking buffer. This is generous on purpose: a
+/// CI runner is much slower than a development machine, and a picking pass includes creating the render thread's
+/// graphics device and compiling its pipelines, which can take many seconds there.
+constexpr int pickTimeoutMs = 20000;
+
 /// Records a verification check that did not produce the expected result.
 void reportVerificationFailure(const QString& message)
 {
@@ -173,13 +178,30 @@ void pollUntil(QmlMainWindowUI* ui, int intervalMs, int timeoutMs, std::function
     timer->start();
 }
 
+/// Reports the state a picking check was made under. Without it a failing check only says "no object was picked",
+/// which does not distinguish a slow or failed picking pass from a scene with nothing at the probed position.
+void reportPickingState(QmlMainWindowUI* ui, const QPoint& probePos)
+{
+    QuickViewportItem* item = firstViewportItem(ui);
+    QuickViewportWindow* viewportWindow = item ? item->viewportWindow() : nullptr;
+    if(!item || !viewportWindow) {
+        qInfo() << "PICK_TEST state at failure: no viewport item or viewport window";
+        return;
+    }
+    const PickProbe probe = probePicking(viewportWindow, item->size(), probePos);
+    const std::optional<ViewportWindow::PickResult> result = viewportWindow->pick(QPointF(probePos));
+    qInfo() << "PICK_TEST state at failure: item" << item->size() << "probe center" << probe.center
+            << "in item" << probe.itemSize << "hits" << probe.hits
+            << "pick()" << (result ? "returned a result" : "returned nothing");
+}
+
 /// Waits until the picking buffer has been re-rendered for the current viewport state after the viewport changed
 /// (a resize or a hide/show cycle) and reports how long that took, counted from the moment the change was made.
 void waitForPickingBuffer(QmlMainWindowUI* ui, const QPoint& probePos, const QString& what, QDateTime changeTime,
                           std::function<void()> continuation, QSizeF previousItemSize = {})
 {
     const QDateTime started = std::move(changeTime);
-    pollUntil(ui, 10, 5000,
+    pollUntil(ui, 10, pickTimeoutMs,
         [ui, probePos, previousItemSize]() {
             if(QuickViewportItem* item = firstViewportItem(ui)) {
                 // After a resize the viewport geometry must have been updated before a picking buffer for the new
@@ -191,11 +213,13 @@ void waitForPickingBuffer(QmlMainWindowUI* ui, const QPoint& probePos, const QSt
             }
             return false;
         },
-        [what, started, continuation](bool satisfied) {
+        [what, started, continuation, ui, probePos](bool satisfied) {
             if(satisfied)
                 qInfo() << "PICK_TEST" << what << ": picking works again after" << started.msecsTo(QDateTime::currentDateTime()) << "ms";
-            else
-                reportVerificationFailure(QStringLiteral("no object was picked within 5 s %1").arg(what));
+            else {
+                reportVerificationFailure(QStringLiteral("no object was picked within %1 s %2").arg(pickTimeoutMs / 1000).arg(what));
+                reportPickingState(ui, probePos);
+            }
             continuation();
         });
 }
@@ -226,15 +250,17 @@ void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void(
     // Measure how long the asynchronously rendered picking buffer takes to become available. The item geometry is
     // re-read for every probe so that a layout pass happening in between cannot distort the measurement.
     const QDateTime probeStart = QDateTime::currentDateTime();
-    pollUntil(ui, 25, 5000,
+    pollUntil(ui, 25, pickTimeoutMs,
         [viewportWindow, item, itemPos]() {
             return probePicking(viewportWindow, item->size(), itemPos).hits > 0;
         },
         [ui, item, viewportWindow, itemPos, probeStart, continuation](bool satisfied) {
             if(satisfied)
                 qInfo() << "PICK_TEST first successful pick after" << probeStart.msecsTo(QDateTime::currentDateTime()) << "ms";
-            else
-                reportVerificationFailure(QStringLiteral("the picking buffer did not become available within 5 s"));
+            else {
+                reportVerificationFailure(QStringLiteral("the picking buffer did not become available within %1 s").arg(pickTimeoutMs / 1000));
+                reportPickingState(ui, itemPos);
+            }
 
             // Second pass: the picking pass has been rendered in the background in the meantime.
             const PickProbe finalProbe = probePicking(viewportWindow, item->size(), itemPos);
@@ -251,8 +277,12 @@ void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void(
                 qInfo() << "PICK_TEST background control: nothing picked";
             }
 
-            // End-to-end check: a synthetic click must select an object through the regular input mode path.
+            // End-to-end check: a synthetic click must select an object through the regular input mode path. The
+            // pick is repeated right before the click, because the input mode decides on the pick result it is
+            // given and a stale result would report a selection without a working pick.
             const QPointF clickPos(itemPos);
+            const std::optional<ViewportWindow::PickResult> pickBeforeClick = viewportWindow->pick(clickPos);
+            qInfo() << "PICK_TEST the pick before the synthetic click" << (pickBeforeClick ? "hit" : "missed");
             const QPointF globalPos = item->mapToGlobal(clickPos);
             QMouseEvent pressEvent(QEvent::MouseButtonPress, clickPos, globalPos, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
             QCoreApplication::sendEvent(item, &pressEvent);
@@ -488,6 +518,17 @@ protected:
                 continue;
             }
             mainWinUI->importFile(Application::instance()->fileManager().urlFromUserInput(argument));
+        }
+
+        // Diagnostic: report what the command line data files turned into. A file that was misdetected by the
+        // importer autodetection shows up here, instead of only as a picking check that finds nothing.
+        if(QuickViewportItem* item = firstViewportItem(mainWinUI)) {
+            if(Viewport* viewport = item->viewportWindow() ? item->viewportWindow()->viewport() : nullptr) {
+                if(Scene* scene = viewport->scene()) {
+                    for(SceneNode* node : scene->children())
+                        qInfo() << "DATASET" << node->objectTitle();
+                }
+            }
         }
 
         // Optional picking verification: perform picking operations and print the outcome.

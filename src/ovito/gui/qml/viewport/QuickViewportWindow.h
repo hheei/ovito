@@ -119,6 +119,9 @@ private Q_SLOTS:
     /// Stores the result of the asynchronous picking pass.
     void pickingBufferReady();
 
+    /// Reports a picking pass that terminated with an error instead of producing a buffer.
+    void pickingBufferFailed(const Exception& exception);
+
 private:
 
     /// Starts rendering a new picking buffer if no other picking pass is currently in flight.
@@ -144,6 +147,9 @@ private:
 
     /// Indicates that the cached picking buffer no longer matches the viewport contents.
     bool _pickingBufferStale = true;
+
+    /// Indicates that the failure of a picking pass has already been reported to the user. Reset when a pass succeeds.
+    bool _pickingFailureReported = false;
 };
 
 }   // End of namespace

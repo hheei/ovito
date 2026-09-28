@@ -677,10 +677,16 @@ ENDIF()
 
 IF(ZLIB_FOUND AND NOT EMSCRIPTEN)
     IF(WIN32 AND NOT OVITO_BUILD_CONDA)
-        # Deploy the zlib DLL.
+        # Deploy the zlib runtime DLL next to the executable. Its file name depends on the packaging layout of the
+        # library: conda-style installs provide bin/zlib.dll, a vcpkg tree provides bin/zlib1.dll. Look for the
+        # DLL under both names instead of assuming one of them, and fail if the layout is unknown.
         GET_TARGET_PROPERTY(ZLIB_LIBRARY_LOCATION ZLIB::ZLIB LOCATION)
         GET_FILENAME_COMPONENT(ZLIB_LIBRARY_PATH "${ZLIB_LIBRARY_LOCATION}" PATH)
-        OVITO_INSTALL_SHARED_LIB("${ZLIB_LIBRARY_PATH}/../bin/zlib.dll")
+        FILE(GLOB ZLIB_RUNTIME_DLL "${ZLIB_LIBRARY_PATH}/../bin/zlib.dll" "${ZLIB_LIBRARY_PATH}/../bin/zlib1.dll")
+        IF(NOT ZLIB_RUNTIME_DLL)
+            MESSAGE(FATAL_ERROR "Did not find the zlib runtime library. Expected zlib.dll or zlib1.dll in ${ZLIB_LIBRARY_PATH}/../bin")
+        ENDIF()
+        OVITO_INSTALL_SHARED_LIB("${ZLIB_RUNTIME_DLL}" EXACT)
     ENDIF()
 ENDIF()
 

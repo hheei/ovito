@@ -78,7 +78,9 @@ jobs:
           python3 - <<'PY'
           import os, pathlib
           a, n = 3.6, 8
-          lines = [f"{n**3}", "512 atoms, simple cubic lattice a=3.6"]
+          # The comment line must not contain the word "atoms": OVITO's importer autodetection then hands the
+          # file to the LAMMPS data importer, which parses an empty scene out of it (see UI_TEST_ENV.md section 1).
+          lines = [f"{n**3}", "simple cubic lattice, a=3.6"]
           lines += [f"Ar {i*a} {j*a} {k*a}" for i in range(n) for j in range(n) for k in range(n)]
           pathlib.Path(os.environ["RUNNER_TEMP"], "lattice_512.xyz").write_text("\n".join(lines) + "\n")
           PY
@@ -162,7 +164,9 @@ jobs:
           python3 - <<'PY'
           import os, pathlib
           a, n = 3.6, 8
-          lines = [f"{n**3}", "512 atoms, simple cubic lattice a=3.6"]
+          # The comment line must not contain the word "atoms": OVITO's importer autodetection then hands the
+          # file to the LAMMPS data importer, which parses an empty scene out of it (see UI_TEST_ENV.md section 1).
+          lines = [f"{n**3}", "simple cubic lattice, a=3.6"]
           lines += [f"Ar {i*a} {j*a} {k*a}" for i in range(n) for j in range(n) for k in range(n)]
           pathlib.Path(os.environ["RUNNER_TEMP"], "lattice_512.xyz").write_text("\n".join(lines) + "\n")
           PY
@@ -228,7 +232,9 @@ jobs:
           python3 - <<'PY'
           import os, pathlib
           a, n = 3.6, 8
-          lines = [f"{n**3}", "512 atoms, simple cubic lattice a=3.6"]
+          # The comment line must not contain the word "atoms": OVITO's importer autodetection then hands the
+          # file to the LAMMPS data importer, which parses an empty scene out of it (see UI_TEST_ENV.md section 1).
+          lines = [f"{n**3}", "simple cubic lattice, a=3.6"]
           lines += [f"Ar {i*a} {j*a} {k*a}" for i in range(n) for j in range(n) for k in range(n)]
           pathlib.Path(os.environ["RUNNER_TEMP"], "lattice_512.xyz").write_text("\n".join(lines) + "\n")
           PY
@@ -265,9 +271,10 @@ jobs:
       - name: Install the Boost headers and the HDF5/NetCDF libraries
         shell: pwsh
         run: |
-          # netcdf-c[netcdf-4] pulls the HDF5 high-level library it needs; the default features dap and nczarr
-          # would additionally build curl for remote access, which OVITO does not use.
-          vcpkg install boost-headers:x64-windows "hdf5[hl]:x64-windows" "netcdf-c[netcdf-4]:x64-windows"
+          # netcdf-c[netcdf-4] pulls the HDF5 high-level library it needs. Naming "core" first disables its
+          # default features dap and nczarr, which would otherwise build curl for remote access OVITO
+          # does not use.
+          vcpkg install boost-headers:x64-windows "hdf5[hl]:x64-windows" "netcdf-c[core,netcdf-4]:x64-windows"
           # vcpkg installs into the vcpkg root, which is a machine-level environment variable of the runner image
           # and therefore not part of the Actions env context. Export the paths explicitly for the later steps.
           $root = if($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:\vcpkg" }
@@ -331,13 +338,14 @@ jobs:
           QSG_RHI_PREFER_SOFTWARE_RENDERER: '1'
         run: |
           $dataset = Join-Path $env:RUNNER_TEMP "lattice_512.xyz"
-          $lines = @("512", "512 atoms, simple cubic lattice a=3.6")
+          # The comment line must not contain the word "atoms" (see the Linux jobs above).
+          $lines = @("512", "simple cubic lattice, a=3.6")
           foreach($i in 0..7) { foreach($j in 0..7) { foreach($k in 0..7) {
             $lines += "Ar $($i*3.6) $($j*3.6) $($k*3.6)" } } }
           $lines | Out-File -FilePath $dataset -Encoding ascii
 
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          $env:PATH = "${{ github.workspace }}\build\lib\ovito\plugins;$env:PATH"
+          $env:PATH = "${{ github.workspace }}\build\lib\ovito\plugins;$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin;$env:PATH"
           & "${{ github.workspace }}\build\bin\ovito-qml-spike.exe" `
               --qml-window-size 1280x800 `
               --qml-frame-stats 2000 `

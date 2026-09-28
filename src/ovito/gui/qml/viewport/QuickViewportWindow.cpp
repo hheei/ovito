@@ -19,6 +19,7 @@ IMPLEMENT_CREATABLE_OVITO_CLASS(QuickViewportWindow);
 QuickViewportWindow::QuickViewportWindow()
 {
     connect(&_pickingBufferWatcher, &FutureWatcher<Future<ObjectPickingBuffer>>::completed, this, &QuickViewportWindow::pickingBufferReady);
+    connect(&_pickingBufferWatcher, &FutureWatcher<Future<ObjectPickingBuffer>>::error, this, &QuickViewportWindow::pickingBufferFailed);
 }
 
 /******************************************************************************
@@ -201,10 +202,26 @@ void QuickViewportWindow::refreshPickingBuffer()
 void QuickViewportWindow::pickingBufferReady()
 {
     _pickingBuffer = _pickingBufferWatcher.result();
+    _pickingFailureReported = false;
 
     // The buffer describes the viewport contents the pass was rendered from, which may already have
     // been superseded. In that case the next pick request starts another pass.
     _pickingBufferStale = _pickingBufferStale || !_pickingBuffer.isValid();
+}
+
+/******************************************************************************
+* Reports a picking pass that terminated with an error instead of producing a buffer.
+******************************************************************************/
+void QuickViewportWindow::pickingBufferFailed(const Exception& exception)
+{
+    // Without this the failure would only show up as a viewport that never has a picking buffer, i.e. as
+    // "picking does not work", with the reason nowhere in the log. Report it once per series of failures;
+    // a subsequent successful pass clears the flag, and a later pick request starts a new attempt.
+    if(!_pickingFailureReported) {
+        _pickingFailureReported = true;
+        qWarning() << "QuickViewportWindow: the picking pass failed:" << exception.message();
+    }
+    _pickingBufferStale = true;
 }
 
 /******************************************************************************
