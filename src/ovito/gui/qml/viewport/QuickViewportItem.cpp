@@ -6,6 +6,7 @@
 #include "QuickViewportItem.h"
 #include "QuickViewportRenderer.h"
 #include "QuickViewportWindow.h"
+#include "QuickRendererService.h"
 
 namespace Ovito {
 
@@ -110,6 +111,25 @@ QQuickRhiItemRenderer* QuickViewportItem::createRenderer()
 /******************************************************************************
 * Is called when the geometry of the item has changed.
 ******************************************************************************/
+/******************************************************************************
+* Returns the render service of the given window, creating it on first use.
+******************************************************************************/
+QuickRendererService* QuickViewportItem::ensureRenderService(QQuickWindow* window)
+{
+    if(!window)
+        return nullptr;
+
+    // The service is a child of the window, so that it exists exactly as long as the window (and with it the
+    // QRhi instance) does. It is found again rather than created a second time, because every viewport item of
+    // the window uses the same one.
+    if(auto* service = window->findChild<QuickRendererService*>(QStringLiteral("ovitoRendererService"), Qt::FindDirectChildrenOnly))
+        return service;
+    return new QuickRendererService(window);
+}
+
+/******************************************************************************
+* Is called when the geometry of the item has changed.
+******************************************************************************/
 void QuickViewportItem::geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry)
 {
     QQuickRhiItem::geometryChange(newGeometry, oldGeometry);
@@ -125,7 +145,12 @@ void QuickViewportItem::itemChange(ItemChange change, const ItemChangeData& valu
 {
     QQuickRhiItem::itemChange(change, value);
 
-    if(change == ItemVisibleHasChanged && _viewportWindow) {
+    if(change == ItemSceneChange) {
+        // The GPU resources of a window are shared by all of its viewport items and are owned by the window, so
+        // the service is picked up when the item enters a window (and dropped when it leaves it).
+        _renderService = ensureRenderService(value.window);
+    }
+    else if(change == ItemVisibleHasChanged && _viewportWindow) {
         const bool visible = value.boolValue && window() != nullptr;
         if(visible && !_shown) {
             _shown = true;

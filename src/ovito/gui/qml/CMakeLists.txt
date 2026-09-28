@@ -16,6 +16,7 @@ OVITO_STANDARD_PLUGIN(GuiQml
         viewport/QuickViewportWindow.cpp
         viewport/QuickViewportItem.cpp
         viewport/QuickViewportRenderer.cpp
+        viewport/QuickRendererService.cpp
         resources/qml.qrc
     PLUGIN_DEPENDENCIES
         GuiBase

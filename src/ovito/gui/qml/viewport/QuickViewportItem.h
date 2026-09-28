@@ -7,6 +7,8 @@
 #include <ovito/gui/qml/QmlFrontend.h>
 #include <ovito/core/rendering/SceneRenderer.h>
 #include <ovito/core/rendering/FrameGraph.h>
+#include <QPointer>
+#include "QuickRendererService.h"
 
 namespace Ovito {
 
@@ -39,6 +41,10 @@ public:
 
     /// Returns the viewport window driving this item.
     QuickViewportWindow* viewportWindow() const { return _viewportWindow; }
+
+    /// Returns the GPU resources this item renders with, or null while the item is not part of a window.
+    /// The service belongs to the window and is shared with its other viewport items.
+    QuickRendererService* renderService() const { return _renderService; }
 
     /// Hands a newly generated frame graph over to the render thread.
     /// Must be called on the GUI thread.
@@ -97,8 +103,14 @@ protected:
 
 private:
 
+    /// Returns the render service of the given window, creating it on first use.
+    static QuickRendererService* ensureRenderService(QQuickWindow* window);
+
     /// The viewport window that generates the frame graphs for this item and handles the viewport input.
     OORef<QuickViewportWindow> _viewportWindow;
+
+    /// The GPU resources of the window this item belongs to, shared with its other viewport items.
+    QPointer<QuickRendererService> _renderService;
 
     /// The frame graph that is waiting to be rendered by the Qt Quick render thread.
     OORef<FrameGraph> _pendingFrameGraph;

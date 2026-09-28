@@ -7,6 +7,7 @@
 #include "QuickViewportItem.h"
 #include "QuickViewportRenderer.h"
 #include "QuickViewportWindow.h"
+#include "QuickRendererService.h"
 
 namespace Ovito {
 
@@ -22,42 +23,25 @@ QuickViewportRenderer::QuickViewportRenderer(QuickViewportItem* item) : _item(it
 ******************************************************************************/
 QuickViewportRenderer::~QuickViewportRenderer()
 {
+    if(_service)
+        _service->unregisterRenderer(this);
+
     // Make sure the renderer implementation and all QRhi resources it holds are released while
     // the QRhi instance of the scene graph is still alive.
-    _implementation.reset();
+    _implementations.reset();
     _frameGraph.reset();
     _rendererConfig.reset();
 }
 
 /******************************************************************************
-* Returns the graphics API used by the Qt Quick scene graph.
+* Releases the renderer implementations of this render target.
 ******************************************************************************/
-QRhi::Implementation QuickViewportRenderer::graphicsApi() const
+void QuickViewportRenderer::releaseGraphicsResources()
 {
-    QRhi* rhi = QQuickRhiItemRenderer::rhi();
-    return rhi ? rhi->backend() : QRhi::Null;
-}
-
-/******************************************************************************
-* Loads a compiled .qsb shader from the Qt resource system.
-******************************************************************************/
-QShader QuickViewportRenderer::loadShader(const QString& resourcePath)
-{
-    QFile file(resourcePath);
-    if(!file.open(QIODevice::ReadOnly)) {
-        reportWarning(QObject::tr("Could not open shader resource: %1").arg(resourcePath));
-        return {};
-    }
-    return QShader::fromSerialized(file.readAll());
-}
-
-/******************************************************************************
-* Records a non-fatal warning encountered during rendering.
-******************************************************************************/
-void QuickViewportRenderer::reportWarning(const QString& message)
-{
-    _warnings.push_back(message);
-    qWarning() << message;
+    // The renderer implementation holds resource frames of the shared resource cache, and releasing them frees
+    // the GPU buffers they reference. Dropping the implementation also means that the next frame creates one for
+    // the new QRhi instance.
+    _implementations.reset();
 }
 
 /******************************************************************************
@@ -68,9 +52,10 @@ void QuickViewportRenderer::initialize(QRhiCommandBuffer* cb)
     Q_UNUSED(cb);
 
     // The color buffer or its sample count changed, which means the render pass descriptor of the
-    // item is not compatible with the previously created pipelines anymore. Drop them.
-    _implementation.reset();
-    discardCachedResources();
+    // item is not compatible with the previously created pipelines anymore. Drop the implementations;
+    // the shared pipeline cache of the service takes care of the pipelines themselves, which are only
+    // handed out for a matching render pass descriptor.
+    _implementations.reset();
 }
 
 /******************************************************************************
@@ -79,11 +64,28 @@ void QuickViewportRenderer::initialize(QRhiCommandBuffer* cb)
 void QuickViewportRenderer::synchronize(QQuickRhiItem* item)
 {
     OVITO_ASSERT(dynamic_cast<QuickViewportItem*>(item) != nullptr);
+    auto* quickItem = static_cast<QuickViewportItem*>(item);
+
+    // The GUI thread is blocked here, so the state of the item can be read safely. This is also where the
+    // renderer learns which GPU resources it uses: the ones of the window the item belongs to.
+    if(QuickRendererService* service = quickItem->renderService()) {
+        if(service != _service) {
+            if(_service)
+                _service->unregisterRenderer(this);
+            _service = service;
+            _service->registerRenderer(this);
+        }
+        // The service is shared by the window's items, but its QRhi instance only becomes available once the
+        // scene graph is initialized, and it is handed to a renderer rather than to the window.
+        _service->setRhi(QQuickRhiItemRenderer::rhi());
+    }
+
+    if(QuickViewportWindow* viewportWindow = quickItem->viewportWindow(); viewportWindow && viewportWindow->hasUserInterface())
+        _userInterface = viewportWindow->ui().shared_from_this();
 
     // Pick up the frame graph the GUI thread has generated in the meantime. If there is none,
     // the previously rendered frame graph is rendered again (e.g. after a resize).
-    if(auto* quickItem = static_cast<QuickViewportItem*>(item))
-        quickItem->takePendingFrame(_frameGraph, _rendererConfig);
+    quickItem->takePendingFrame(_frameGraph, _rendererConfig);
 }
 
 /******************************************************************************
@@ -95,6 +97,14 @@ void QuickViewportRenderer::render(QRhiCommandBuffer* cb)
     if(!cb || !renderTarget)
         return;
 
+    // Without a service there is no QRhi instance to render with, i.e. the scene graph could not provide the
+    // graphics resources of the window.
+    if(!_service || !_service->rhi()) {
+        cb->beginPass(renderTarget, QColor(24, 24, 24), { 1.0f, 0 });
+        cb->endPass();
+        return;
+    }
+
     if(!_frameGraph || !_rendererConfig) {
         // Nothing to display yet. Clear the item's color buffer with the viewport background color.
         cb->beginPass(renderTarget, QColor(24, 24, 24), { 1.0f, 0 });
@@ -104,19 +114,12 @@ void QuickViewportRenderer::render(QRhiCommandBuffer* cb)
 
     bool succeeded = false;
     try {
-        // Establish a task context for the rendering work, exactly as RenderThread does it for its
-        // render passes. OVITO's rendering code expects an active task and a UserInterface.
-        std::shared_ptr<UserInterface> ui;
-        if(_item) {
-            if(QuickViewportWindow* viewportWindow = _item->viewportWindow()) {
-                if(viewportWindow->hasUserInterface())
-                    ui = viewportWindow->ui().shared_from_this();
-            }
-        }
+        // Establish a task context for the rendering work, exactly as RenderThread does it for its render
+        // passes. OVITO's rendering code expects an active task and a UserInterface.
         Promise<void> promise = Promise<void>::create();
         promise.task()->setIsInteractive();
-        if(ui)
-            promise.task()->setUserInterface(std::move(ui));
+        if(_userInterface)
+            promise.task()->setUserInterface(_userInterface);
         Task::Scope taskScope(promise.task());
 
         renderFrameGraph(cb, *_frameGraph, *_rendererConfig);
@@ -141,57 +144,21 @@ void QuickViewportRenderer::renderFrameGraph(QRhiCommandBuffer* cb, FrameGraph& 
     QRhiRenderTarget* renderTarget = this->renderTarget();
     OVITO_ASSERT(renderTarget);
     OVITO_ASSERT(cb);
+    OVITO_ASSERT(_service);
 
-    _warnings.clear();
-
-    // Preprocess the frame graph (replace text primitives with images, compute wireframe line widths).
-    frameGraph.finalizeForRendering();
-
-    // Create or update the renderer implementation that executes the frame graph.
-    _implementation = rendererConfig.createImplementationForVisual(this, std::move(_implementation));
-    SceneRenderer::Implementation* implementation = _implementation.get();
-    if(!implementation)
-        throw Exception(QObject::tr("The scene renderer did not provide a rendering implementation."));
-
-    const QSize pixelSize = renderTarget->pixelSize();
-
-    // Phase 1: iterate the frame graph and build the draw calls.
-    implementation->renderFrame(frameGraph, rendererConfig, pixelSize, TaskProgress::Ignore, /*isPickingPass=*/false, /*refinementIteration=*/0);
-
-    // Check whether the renderer wants to render into an intermediate target for post-processing.
-    QRhiRenderTarget* sceneTarget = renderTarget;
-    if(QRhiRenderTarget* intermediate = implementation->prepareIntermediateTarget(renderTarget->renderPassDescriptor(), pixelSize))
-        sceneTarget = intermediate;
-    const bool useIntermediate = (sceneTarget != renderTarget);
-
-    // Phase 2: upload vertex, texture and uniform buffer data. This must happen before beginPass().
-    QRhiResourceUpdateBatch* resourceUpdates = rhi()->nextResourceUpdateBatch();
-    implementation->prepareResourceUpdates(sceneTarget, resourceUpdates, pixelSize, /*isPickingPass=*/false, frameGraph);
-
-    // Renderer-specific pre-passes (e.g. GPU depth sorting, OIT accumulation).
-    implementation->performPrePasses(cb, pixelSize, /*isPickingPass=*/false, resourceUpdates);
-
-    const QColor clearColor = static_cast<QColor>(frameGraph.clearColor());
-
-    // Phase 3: record the main scene render pass.
-    cb->beginPass(sceneTarget, clearColor, { 1.0f, 0 }, resourceUpdates);
-    cb->setViewport(QRhiViewport(0, 0, float(pixelSize.width()), float(pixelSize.height())));
-    // Workaround for Qt's Vulkan backend: also set the scissor rect to the full viewport size,
-    // because setViewport() won't do it if no graphics pipeline is currently bound.
-    cb->setScissor(QRhiScissor(0, 0, pixelSize.width(), pixelSize.height()));
-    implementation->compositeInPass(cb, sceneTarget, /*isPickingPass=*/false, /*skipOverLayer=*/useIntermediate);
-    cb->endPass();
-
-    // Run the post-processing pass and draw the overlay elements into the final target.
-    if(useIntermediate) {
-        QRhiResourceUpdateBatch* postUpdates = implementation->preparePostProcess(cb);
-        cb->beginPass(renderTarget, clearColor, { 1.0f, 0 }, postUpdates);
-        cb->setViewport(QRhiViewport(0, 0, float(pixelSize.width()), float(pixelSize.height())));
-        cb->setScissor(QRhiScissor(0, 0, pixelSize.width(), pixelSize.height()));
-        implementation->runPostProcess(cb, renderTarget);
-        implementation->renderOverLayerOnly(cb, renderTarget);
-        cb->endPass();
-    }
+    // The pass sequence is the one OVITO uses for all its render targets; it is implemented once, in the core,
+    // so that the Qt Quick renderer cannot drift apart from the classic render thread. Nothing is specific to
+    // this target: the item has no warning indicator and no watermark, and the frame graph is rendered into the
+    // texture render target of the item rather than into a swap chain or an offscreen target. The pass runs
+    // inside the QRhi frame Qt Quick has already started, which is why the caller here is render().
+    FrameGraphRenderPass::execute(FrameGraphRenderPass::Arguments{
+        .service = *_service,
+        .cb = *cb,
+        .renderTarget = *renderTarget,
+        .frameGraph = frameGraph,
+        .configuration = rendererConfig,
+        .implementations = _implementations,
+    });
 }
 
 }   // End of namespace

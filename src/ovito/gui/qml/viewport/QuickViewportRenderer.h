@@ -5,9 +5,7 @@
 
 
 #include <ovito/gui/qml/QmlFrontend.h>
-#include <ovito/core/rendering/RendererService.h>
-#include <ovito/core/rendering/RendererResourceCache.h>
-#include <ovito/core/rendering/ObjectIdAllocator.h>
+#include <ovito/core/rendering/FrameGraphRenderPass.h>
 
 namespace Ovito {
 
@@ -15,15 +13,18 @@ namespace Ovito {
  * \brief Renders the frame graph of a viewport into the texture render target of a QQuickRhiItem.
  *
  * This class is the bridge between OVITO's renderer (SceneRenderer::Implementation) and the Qt Quick scene
- * graph. It plays the role that RenderThread plays for the classic frontend: it acts as the RendererService
- * that supplies the QRhi instance and the GPU resource caches to the renderer, but instead of owning a QRhi
- * instance of its own, it renders with the QRhi instance owned by the Qt Quick scene graph. As a consequence,
- * no render target or command buffer needs to be created and no readback of the rendered image is required.
+ * graph. It plays the role that a render target of RenderThread plays for the classic frontend, but instead of
+ * rendering with a QRhi instance created on a thread of its own, it renders inside the QRhi frame the Qt Quick
+ * scene graph has already started.
  *
- * The renderer runs on the scene graph's rendering thread. The frame graph to render is handed over from the
- * GUI thread during QQuickRhiItemRenderer::synchronize(), i.e. while the GUI thread is blocked.
+ * The GPU resources it needs come from the QuickRendererService of the window the item belongs to, so that all
+ * viewport items of a window share the QRhi instance and the caches (see QuickRendererService). The service is
+ * picked up during scene graph synchronization, i.e. while the GUI thread is blocked, which is also when the
+ * frame graph to render is handed over.
+ *
+ * The renderer runs on the scene graph's rendering thread.
  */
-class OVITO_GUIQML_EXPORT QuickViewportRenderer : public QQuickRhiItemRenderer, public RendererService
+class OVITO_GUIQML_EXPORT QuickViewportRenderer : public QQuickRhiItemRenderer
 {
 public:
 
@@ -33,29 +34,9 @@ public:
     /// Destructor.
     ~QuickViewportRenderer() override;
 
-    /// Returns the QRhi instance provided by the Qt Quick scene graph.
-    QRhi* rhi() const override { return QQuickRhiItemRenderer::rhi(); }
-
-    /// Returns the graphics API used by the Qt Quick scene graph.
-    QRhi::Implementation graphicsApi() const override;
-
-    /// Returns the cache for QRhi resources such as vertex buffers and textures.
-    RendererResourceCache& rhiResourceCache() override { return *_resourceCache; }
-
-    /// Returns the object ID allocator used for rendering and object picking.
-    ObjectIdAllocator& objectIdAllocator() override { return _objectIdAllocator; }
-
-    /// Loads a compiled .qsb shader from the Qt resource system.
-    [[nodiscard]] QShader loadShader(const QString& resourcePath) override;
-
-    /// Records a non-fatal warning encountered during rendering.
-    void reportWarning(const QString& message) override;
-
-    /// This service is always used from the scene graph's rendering thread.
-    bool isRendererThread() const override { return true; }
-
-    /// Returns the warning messages reported during the last rendered frame.
-    const QStringList& warnings() const { return _warnings; }
+    /// Releases the GPU resources of this renderer, i.e. the renderer implementations of its render target.
+    /// Called by QuickRendererService when the scene graph invalidates the QRhi instance they were created with.
+    void releaseGraphicsResources();
 
 protected:
 
@@ -76,25 +57,22 @@ private:
     /// The QML item this renderer belongs to. Owned by the QML scene.
     QuickViewportItem* _item;
 
-    /// Cache for QRhi resources such as vertex buffers and textures.
-    /// Declared before _implementation so that the renderer implementation (and with it all
-    /// RendererResourceCache frames it holds) is destroyed first.
-    std::shared_ptr<RendererResourceCache> _resourceCache = std::make_shared<RendererResourceCache>();
+    /// The GPU resources of the window this item belongs to, shared with the other viewport items of the window.
+    QuickRendererService* _service = nullptr;
 
-    /// Allocator for unique object IDs used in rendering and object picking.
-    ObjectIdAllocator _objectIdAllocator;
+    /// The user interface the rendered frames belong to, taken from the item during synchronization so that the
+    /// render pass does not have to touch objects living on the GUI thread.
+    std::shared_ptr<UserInterface> _userInterface;
+
+    /// The renderer implementations of this item's render target. Only the visual one is used, because picking
+    /// is rendered asynchronously by the render thread (see QuickViewportWindow::renderPickingBuffer()).
+    FrameGraphRenderPass::Implementations _implementations;
 
     /// The frame graph currently rendered into the item.
     OORef<FrameGraph> _frameGraph;
 
     /// The renderer configuration belonging to the current frame graph.
     std::unique_ptr<SceneRenderer::Configuration> _rendererConfig;
-
-    /// The renderer implementation used to render the frame graph.
-    std::unique_ptr<SceneRenderer::Implementation> _implementation;
-
-    /// Warning messages collected during the last rendered frame.
-    QStringList _warnings;
 };
 
 }   // End of namespace
