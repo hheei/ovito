@@ -6,6 +6,7 @@
 
 #include <ovito/gui/qml/QmlFrontend.h>
 #include <ovito/core/rendering/FrameGraphRenderPass.h>
+#include "QuickRendererService.h"
 
 namespace Ovito {
 
@@ -58,7 +59,9 @@ private:
     QuickViewportItem* _item;
 
     /// The GPU resources of the window this item belongs to, shared with the other viewport items of the window.
-    QuickRendererService* _service = nullptr;
+    /// The service is owned by the window and dies with it, which can happen while a renderer that the scene graph
+    /// has not destroyed yet still exists, so the pointer is a guarded one.
+    QPointer<QuickRendererService> _service;
 
     /// The user interface the rendered frames belong to, taken from the item during synchronization so that the
     /// render pass does not have to touch objects living on the GUI thread.

@@ -152,7 +152,7 @@ void QuickViewportRenderer::renderFrameGraph(QRhiCommandBuffer* cb, FrameGraph& 
     // texture render target of the item rather than into a swap chain or an offscreen target. The pass runs
     // inside the QRhi frame Qt Quick has already started, which is why the caller here is render().
     FrameGraphRenderPass::execute(FrameGraphRenderPass::Arguments{
-        .service = *_service,
+        .service = *_service.data(),
         .cb = *cb,
         .renderTarget = *renderTarget,
         .frameGraph = frameGraph,
