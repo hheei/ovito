@@ -592,3 +592,15 @@ The frame time of the QML frontend is only comparable when the display's refresh
   `QSG_NO_VSYNC=1` and the spike's `--qml-frame-stats 2000`. Both loops and both dataset sizes are needed to see which part
   of the frame a change moved; the numbers of the per-item versus per-window renderer service are in
   [UI_PLAN.md](UI_PLAN.md) deliverable 7.
+
+### 9.6 The CI smoke test and its render loop
+
+The Qt Quick smoke test of the GitHub workflow (`.github/workflows/ci.yml`) runs with `QSG_RENDER_LOOP=basic` on the
+two Linux jobs. It asserts that the frontend starts, renders frames, picks, lays out its panes and imports a file -
+none of which depends on the render loop - while the runner has no GPU and few CPU cores, where the threaded loop's
+frame synchronization is a source of flakiness rather than of signal. Both loops are part of the local verification
+(section 9.5), so the loop that is left out of CI is covered elsewhere.
+
+Note that CTest runs *before* the smoke test in those jobs, and that a job which fails in the smoke test reports the
+spike's exit code: the spike exits non-zero when one of its checks fails, and a crash of the process (139) is not a
+check failure but a defect of its own.

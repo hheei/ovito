@@ -69,6 +69,11 @@ jobs:
       - name: Smoke test the Qt Quick frontend
         env:
           QT_QPA_PLATFORM: xcb
+          # The smoke test asserts that the frontend starts, renders, picks and imports; that is independent of the
+          # render loop. The scene graph's own threading is left out here, because the runner has no GPU and few
+          # cores, where the threaded loop's frame synchronization is a source of flakiness rather than of
+          # signal. Both loops are part of the local verification on real hardware (UI_TEST_ENV.md section 9.5).
+          QSG_RENDER_LOOP: basic
           # Both spellings: the Vulkan loader accepts VK_DRIVER_FILES since 1.3.234, older ones only the
           # deprecated VK_ICD_FILENAMES.
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
@@ -149,6 +154,11 @@ jobs:
       - name: Smoke test the Qt Quick frontend
         env:
           QT_QPA_PLATFORM: xcb
+          # The smoke test asserts that the frontend starts, renders, picks and imports; that is independent of the
+          # render loop. The scene graph's own threading is left out here, because the runner has no GPU and few
+          # cores, where the threaded loop's frame synchronization is a source of flakiness rather than of
+          # signal. Both loops are part of the local verification on real hardware (UI_TEST_ENV.md section 9.5).
+          QSG_RENDER_LOOP: basic
           # Both spellings: the Vulkan loader accepts VK_DRIVER_FILES since 1.3.234, older ones only the
           # deprecated VK_ICD_FILENAMES.
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
