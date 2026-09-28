@@ -7,6 +7,8 @@ OVITO_FIND_PACKAGE(Qt6 ${OVITO_MINIMUM_REQUIRED_QT_VERSION} COMPONENTS Quick REQ
 # Define plugin module.
 OVITO_STANDARD_PLUGIN(GuiQml
     SOURCES
+        app/QmlFrontend.cpp
+        app/QmlFrontendService.cpp
         mainwin/QmlMainWindowUI.cpp
         mainwin/QmlViewportController.cpp
         viewport/QuickViewportWindow.cpp

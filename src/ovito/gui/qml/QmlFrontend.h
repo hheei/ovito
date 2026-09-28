@@ -26,6 +26,8 @@ namespace Ovito
     class QuickViewportRenderer;
     class QmlMainWindowUI;
     class QmlViewportController;
+    class QmlFrontend;
+    class QmlFrontendService;
 }
 
 #endif // __OVITO_GUI_QML_

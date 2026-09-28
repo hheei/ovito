@@ -2,17 +2,22 @@
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/gui/desktop/GUI.h>
+#include <ovito/gui/desktop/app/QtWidgetsFrontend.h>
 #include <ovito/gui/desktop/mainwin/MainWindow.h>
 #include <ovito/gui/desktop/mainwin/OvitoStyle.h>
 #include <ovito/gui/desktop/mainwin/RecentFilesList.h>
 #include <ovito/gui/desktop/dialogs/MessageDialog.h>
 #include <ovito/gui/base/actions/ActionManager.h>
+#include <ovito/gui/base/app/GuiFrontend.h>
+#include <ovito/gui/base/app/GuiFrontendRegistry.h>
+#include <ovito/gui/base/app/WorkbenchUI.h>
 #include <ovito/core/app/undo/UndoStack.h>
 #include <ovito/core/app/PluginManager.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
 #include <ovito/core/rendering/standard/StandardRenderer.h>
 #include <ovito/core/utilities/concurrent/NoninteractiveContext.h>
+#include <ovito/core/utilities/concurrent/Task.h>
 #include "GuiApplication.h"
 
 // Registers the embedded Qt resource files embedded in a statically linked executable at application startup.
@@ -37,6 +42,11 @@ GuiApplication::GuiApplication()
 
     // Activate our icon theme.
     QIcon::setFallbackThemeName("ovito-light");
+
+    // Make the classic main window available as a selectable frontend. It is the default frontend, so the usual
+    // 'ovito' invocation keeps starting it; the QML frontend registers itself under a different name when it is part
+    // of the build (see the GuiQml plugin).
+    GuiFrontendRegistry::instance().registerFrontend(std::make_unique<QtWidgetsFrontend>());
 }
 
 /******************************************************************************
@@ -48,6 +58,7 @@ void GuiApplication::registerCommandLineParameters(QCommandLineParser& parser)
 
     parser.addOption(QCommandLineOption(QStringList{{"nogui"}}, tr("Run in console mode without displaying a graphical user interface.")));
     parser.addOption(QCommandLineOption(QStringList{{"noviewports"}}, tr("Do not create any viewports (for debugging purposes only).")));
+    parser.addOption(QCommandLineOption(QStringList{{"gui"}}, tr("Selects the user interface frontend to start, e.g. 'qml'."), tr("NAME"), QStringLiteral("qt-widgets")));
 }
 
 /******************************************************************************
@@ -145,6 +156,22 @@ MainThreadOperation GuiApplication::startupApplication()
     OVITO_ASSERT(this_task::get());
 
     if(Application::guiEnabled()) {
+        // Find the user interface frontend that the user selected. If it is not part of this build, this is a fatal
+        // error instead of a silent fallback to the default frontend: a user (or a test script) that asked for a
+        // specific frontend must not end up with a different one without noticing.
+        const QString frontendName = cmdLineParser().value(QStringLiteral("gui"));
+        const GuiFrontend* frontend = GuiFrontendRegistry::instance().findFrontend(frontendName);
+        if(!frontend) {
+            // Report the problem on the terminal and abort the startup with a non-zero exit code. The regular error
+            // dialog is deliberately not used here: the request may come from a script that cannot dismiss it.
+            const QStringList availableFrontends = GuiFrontendRegistry::instance().frontendNames();
+            if(availableFrontends.isEmpty())
+                qCritical().noquote() << tr("This build of OVITO contains no user interface frontend.");
+            else
+                qCritical().noquote() << tr("User interface '%1' is not available in this build of OVITO. Available user interfaces are: %2.").arg(frontendName, availableFrontends.join(QStringLiteral(", ")));
+            throw OperationCanceled();
+        }
+
         // Set up Qt event loop.
         createQtApplication(true);
 
@@ -170,16 +197,8 @@ MainThreadOperation GuiApplication::startupApplication()
         QGuiApplication::setWindowIcon(mainWindowIcon);
 
         if(Application::runMode() == Application::AppMode) {
-            // Create the main window widget and user interface object.
-            OORef<MainWindowUI> mainWinUI = OORef<MainWindowUI>::create();
-
-            // Show the main window.
-            mainWinUI->mainWindow()->setUpdatesEnabled(false);
-            mainWinUI->mainWindow()->restoreMainWindowGeometry();
-            mainWinUI->mainWindow()->restoreLayout();
-            mainWinUI->mainWindow()->setUpdatesEnabled(true);
-
-            return MainThreadOperation(*mainWinUI, MainThreadOperation::Kind::Isolated);
+            // Let the selected frontend create the workbench, which is the user interface of this application.
+            return frontend->createWorkbench();
         }
     }
 
@@ -268,16 +287,16 @@ void GuiApplication::initializeUserInterface(UserInterface& ui, const QStringLis
             if(!importUrls.empty()) {
                 if(numSessionFiles)
                     throw Exception(tr("Detected incompatible command line arguments: Cannot open a session state file and a simulation data file at the same time."));
-                if(MainWindowUI* mainWindowUI = dynamic_object_cast<MainWindowUI>(&ui))
-                    mainWindowUI->importFiles(std::move(importUrls));
+                if(WorkbenchUI* workbench = dynamic_object_cast<WorkbenchUI>(&ui))
+                    workbench->importFiles(std::move(importUrls));
                 else
                     throw Exception(tr("Cannot import data files from the command line when running in console mode."));
             }
             if(!directoriesToOpen.empty()) {
                 if(directoriesToOpen.size() > 1)
                     throw Exception(tr("Detected invalid command line arguments: Cannot open multiple directories at the same time."));
-                if(MainWindowUI* mainWindowUI = dynamic_object_cast<MainWindowUI>(&ui))
-                    mainWindowUI->openWorkingDirectory(directoriesToOpen.front());
+                if(WorkbenchUI* workbench = dynamic_object_cast<WorkbenchUI>(&ui))
+                    workbench->openWorkingDirectory(directoriesToOpen.front());
                 else
                     throw Exception(tr("Cannot open directory '%1' from the command line when running in console mode.").arg(directoriesToOpen.front()));
             }

@@ -5,14 +5,17 @@
 
 
 #include <ovito/gui/desktop/GUI.h>
-#include <ovito/core/app/UserInterface.h>
+#include <ovito/gui/base/app/WorkbenchUI.h>
 
 namespace Ovito {
 
 /**
  * \brief Implementation of the abstract UserInterface that represents a physical OVITO MainWindow.
+ *
+ * The parts of the user interface contract that do not depend on the presentation are provided by the WorkbenchUI base
+ * class (see gui/base), this class adds the QtWidgets main window and everything that requires a widget.
  */
-class OVITO_GUI_EXPORT MainWindowUI : public UserInterface
+class OVITO_GUI_EXPORT MainWindowUI : public WorkbenchUI
 {
     OVITO_CLASS(MainWindowUI)
 
@@ -50,17 +53,8 @@ public:
     /// Shows a progress bar or a similar UI to indicate the current rendering progress and let the user cancel the operation if necessary.
     virtual void showRenderingProgress(const std::shared_ptr<FrameBuffer>& frameBuffer, SharedFuture<void> renderingFuture) override;
 
-    /// \brief Returns whether animation recording is active and animation keys should be automatically generated.
-    /// \return \c true if animating is currently turned on and not suspended; \c false otherwise.
-    ///
-    /// When animating is turned on, controllers should automatically set keys when their value is changed.
-    virtual bool isAutoGenerateAnimationKeysEnabled() const override { return _autoKeyModeOn && _animSuspendCount == 0; }
-
     /// Cancels all running tasks associated with this user interface and closes the user interface as soon as possible (without asking user to save changes).
     virtual bool shutdown() override;
-
-    /// Displays an error message to the user.
-    virtual void reportError(const Exception& ex, bool blocking = false) override;
 
     /// Displays a modal message box to the user. Blocks until the user closes the message box.
     /// This method wraps the QMessageBox class of the Qt library.
@@ -69,30 +63,6 @@ public:
     /// Checks (or even modifies) the contents of a DataSet after it has been loaded from a file.
     /// Returns false if loading the DataSet was rejected by the application.
     virtual bool checkLoadedDataset(DataSet* dataset) override;
-
-    /// Registers a new task progress record with this user interface.
-    /// This method gets called when a new TaskProgress instance is created from a running task.
-    virtual std::mutex* taskProgressBegin(TaskProgress* progress) override;
-
-    /// Unregisters a task progress record from this user interface.
-    /// This method gets called when a previously registered task finishes.
-    virtual void taskProgressEnd(TaskProgress* progress) override;
-
-    /// Informs the user interface that a task's progress state has changed.
-    virtual void taskProgressChanged(TaskProgress* progress) override;
-
-    /// Lets the caller visit all registered worker tasks that are in progress.
-    void visitRunningTasks(std::function<void(const QString&,int,int)> visitor);
-
-    /// \brief Imports a set of files into the current dataset.
-    /// \param urls The locations of the files to import.
-    /// \param importerType The FileImporter type selected by the user. If null, the file's format will be auto-detected.
-    /// \param importerFormat The sub-format name selected by the user, which is supported by the selected importer class.
-    /// \throw Exception on error.
-    void importFiles(const std::vector<QUrl>& urls, const FileImporterClass* importerType = nullptr, const QString& importerFormat = {});
-
-    /// \brief Sets the current working directory and opens the file import dialog with the specified directory pre-selected.
-    void openWorkingDirectory(const QString& directoryPath);
 
     /// \brief Save the current dataset.
     /// \return \c true, if the dataset has been saved; \c false if the operation has been canceled by the user.
@@ -139,31 +109,41 @@ public:
 
 private:
 
-    /// Notifies all registered listeners that the progress state of the registered tasks has changed.
-    void notifyProgressTasksChanged();
-
     /// Saves the list of most recently visited directories to the settings store at shutdown time.
     void saveMostRecentlyUsedDirectories();
+
+protected:
+
+    // Implementation of the presentation hooks of WorkbenchUI (see gui/base/app/WorkbenchUI.h).
+
+    /// Creates the action manager of this workbench.
+    virtual ActionManager* createActionManager(QObject* parent) override;
+
+    /// Presents an error message to the user and lets them acknowledge it.
+    virtual void displayErrorMessage(const Exception& ex, bool blocking) override;
+
+    /// Updates the progress display of the main window.
+    virtual void progressTasksChanged() override;
+
+    /// Triggers the action that opens the file import dialog.
+    virtual void openImportDialog(const QString& directoryPath) override;
+
+    /// Displays the optional settings of every importer (see FileImporterEditor) to the user before the import starts.
+    virtual void inspectImporterFiles(const std::vector<std::pair<QUrl, OORef<FileImporter>>>& urlImporters) override;
+
+    /// Asks the user how the data to be imported should be merged into the current scene.
+    virtual FileImporter::ImportMode determineImportMode(Scene* scene, const std::vector<QUrl>& urls, FileImporter* importer) override;
+
+    /// Runs the import operation in a progress dialog, which lets the user cancel it.
+    virtual void runFileImport(FileImporter& importer, Scene* scene, std::vector<std::pair<QUrl, OORef<FileImporter>>> urlImporters, FileImporter::ImportMode importMode) override;
+
+    /// Remembers the directory of the imported file in the history of the file import dialog.
+    virtual void importDirectoryChanged(const QString& directoryPath) override;
 
 private:
 
     /// The main window widget associated with this UI object.
     MainWindow* _mainWindow = nullptr;
-
-    /// Indicates whether the user has activated auto-key animation mode.
-    bool _autoKeyModeOn = false;
-
-    /// Head of doubly-linked list of all registered task progress records.
-    TaskProgress* _progressTasksHead = nullptr;
-
-    /// Tail of doubly-linked list of all registered task progress records.
-    TaskProgress* _progressTasksTail = nullptr;
-
-    /// Guards thread-safe access to the task list.
-    std::mutex _progressTaskListMutex;
-
-    /// Indicates that a delayed task progress update is underway.
-    std::atomic_bool _progressUpdateScheduled{false};
 
     /// History of most recently used directories, grouped by file selection dialog type (e.g. data files, state files, Python scripts, ...).
     std::map<QString, QStringList> _recentlyUsedDirectories;

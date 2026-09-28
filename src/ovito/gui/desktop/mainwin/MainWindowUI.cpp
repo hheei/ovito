@@ -48,25 +48,16 @@ IMPLEMENT_ABSTRACT_OVITO_CLASS(MainWindowUI);
 ******************************************************************************/
 void MainWindowUI::initializeObject()
 {
-    UserInterface::initializeObject();
+    WorkbenchUI::initializeObject();
 
     // Create the widget.
     _mainWindow = new MainWindow(*this);
 
-    // Create input manager.
-    setViewportInputManager(new ViewportInputManager(_mainWindow, *this));
-
-    // Create an undo stack.
-    setUndoStack(new UndoStack(*this, _mainWindow));
-
-    // Create actions.
-    setActionManager(new WidgetActionManager(_mainWindow, *this));
-
-    // Reset undo stack whenever a new dataset is loaded.
-    QObject::connect(&datasetContainer(), &DataSetContainer::dataSetChanged, undoStack(), &UndoStack::clear);
+    // Create the input manager, the undo stack and the action manager. The main window owns them.
+    initializeWorkbench(_mainWindow);
 
     // Store current state of ACTION_AUTO_KEY_MODE_TOGGLE in a member variable for quick access in isAutoGenerateAnimationKeysEnabled().
-    QObject::connect(actionManager()->getAction(ACTION_AUTO_KEY_MODE_TOGGLE), &QAction::toggled, _mainWindow, [&](bool checked) { _autoKeyModeOn = checked; });
+    QObject::connect(actionManager()->getAction(ACTION_AUTO_KEY_MODE_TOGGLE), &QAction::toggled, _mainWindow, [&](bool checked) { setAutoKeyModeEnabled(checked); });
 
     // Initialize the widget.
     _mainWindow->initializeWindow();
@@ -90,6 +81,14 @@ MainWindowUI::~MainWindowUI()
 {
     OVITO_ASSERT(_mainWindow == nullptr);
     OVITO_ASSERT(!_progressTasksHead && !_progressTasksTail);
+}
+
+/******************************************************************************
+* Creates the action manager of this workbench.
+******************************************************************************/
+ActionManager* MainWindowUI::createActionManager(QObject* parent)
+{
+    return new WidgetActionManager(parent, *this);
 }
 
 /******************************************************************************
@@ -209,14 +208,9 @@ void MainWindowUI::showRenderingProgress(const std::shared_ptr<FrameBuffer>& fra
 /******************************************************************************
 * Handler function for exceptions.
 ******************************************************************************/
-void MainWindowUI::reportError(const Exception& ex, bool blocking)
+void MainWindowUI::displayErrorMessage(const Exception& ex, bool blocking)
 {
-    OVITO_ASSERT(this_task::isMainThread());
-
-    // Always display errors in the terminal window too.
-    UserInterface::reportError(ex, blocking);
-
-    // Pass exception to UI widget.
+    // Pass the exception to the widget, which displays it to the user.
     if(_mainWindow)
         _mainWindow->reportError(ex, blocking);
 }
@@ -246,59 +240,52 @@ bool MainWindowUI::checkLoadedDataset(DataSet* dataset)
     // Since version 3.8.0, OVITO Basic no longer supports multiple pipelines in the same scene.
     // Check if the state file contains more than one pipeline and inform user by displaying a dialog window.
     // Let the user pick one of the pipelines to be loaded and remove all others from the scene.
-    if(ViewportConfiguration* viewportConfig = dataset->viewportConfig()) {
-        if(Viewport* vp = viewportConfig->activeViewport()) {
-            if(Scene* scene = vp->scene()) {
-                std::vector<OORef<SceneNode>> fileSourcePipelines;
-                QStringList itemsList;
-                scene->visitPipelines([&](SceneNode* sceneNode) {
-                    if(dynamic_object_cast<FileSource>(sceneNode->pipeline()->source())) {
-                        fileSourcePipelines.emplace_back(sceneNode);
-                        itemsList.push_back(sceneNode->objectTitle());
-                    }
-                });
-                if(fileSourcePipelines.size() >= 2) {
-                    QDialog dlg(mainWindow());
-                    dlg.setWindowTitle(tr("Multiple pipelines found"));
-                    QVBoxLayout* mainLayout = new QVBoxLayout(&dlg);
-                    mainLayout->setSpacing(2);
-                    QLabel* label = new QLabel(tr(
-                        "<html><p>The OVITO session file contains %1 pipelines.</p>"
-                        "<p><i>OVITO Pro</i> is required since version 3.8.0 to work with "
-                        "multiple pipelines in the same scene. Please pick one of the pipelines "
-                        "below to load only that pipeline in <i>OVITO Basic</i> now - or open the session "
-                        "file in <i>OVITO Pro</i> to load all pipelines together.</p></html>"
-                    ).arg(fileSourcePipelines.size()));
-                    label->setWordWrap(true);
-                    label->setMinimumWidth(440);
-                    mainLayout->addWidget(label);
-                    mainLayout->addSpacing(6);
-                    mainLayout->addWidget(new QLabel(tr("Available pipelines:")));
-                    QListWidget* listWidget = new QListWidget();
-                    mainLayout->addWidget(listWidget);
-                    listWidget->addItems(itemsList);
-                    listWidget->setCurrentRow(0);
-                    QDialogButtonBox* buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, &dlg);
-                    QObject::connect(buttonBox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-                    QObject::connect(buttonBox, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-                    QObject::connect(listWidget, &QListWidget::itemSelectionChanged, &dlg, [&]() { buttonBox->button(QDialogButtonBox::Ok)->setEnabled(!listWidget->selectedItems().empty()); });
-                    mainLayout->addWidget(buttonBox);
-                    if(dlg.exec() == QDialog::Accepted) {
-                        QList<QListWidgetItem*> selectedItems = listWidget->selectedItems();
-                        if(selectedItems.empty())
-                            return false; // Abort loading of the DataSet.
-                        int keepIndex = listWidget->row(selectedItems.front());
-                        scene->selection()->setNode(fileSourcePipelines[keepIndex]);
-                        for(const auto& sceneNode : fileSourcePipelines) {
-                            if(sceneNode != fileSourcePipelines[keepIndex]) {
-                                sceneNode->requestObjectDeletion();
-                            }
-                        }
-                    }
-                    else {
-                        return false; // Abort loading of the DataSet.
+    std::vector<OORef<SceneNode>> fileSourcePipelines = WorkbenchUI::fileSourcePipelines(dataset);
+    if(fileSourcePipelines.size() >= 2) {
+        QStringList itemsList;
+        for(const auto& sceneNode : fileSourcePipelines)
+            itemsList.push_back(sceneNode->objectTitle());
+        {
+            QDialog dlg(mainWindow());
+            dlg.setWindowTitle(tr("Multiple pipelines found"));
+            QVBoxLayout* mainLayout = new QVBoxLayout(&dlg);
+            mainLayout->setSpacing(2);
+            QLabel* label = new QLabel(tr(
+                "<html><p>The OVITO session file contains %1 pipelines.</p>"
+                "<p><i>OVITO Pro</i> is required since version 3.8.0 to work with "
+                "multiple pipelines in the same scene. Please pick one of the pipelines "
+                "below to load only that pipeline in <i>OVITO Basic</i> now - or open the session "
+                "file in <i>OVITO Pro</i> to load all pipelines together.</p></html>"
+            ).arg(fileSourcePipelines.size()));
+            label->setWordWrap(true);
+            label->setMinimumWidth(440);
+            mainLayout->addWidget(label);
+            mainLayout->addSpacing(6);
+            mainLayout->addWidget(new QLabel(tr("Available pipelines:")));
+            QListWidget* listWidget = new QListWidget();
+            mainLayout->addWidget(listWidget);
+            listWidget->addItems(itemsList);
+            listWidget->setCurrentRow(0);
+            QDialogButtonBox* buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, &dlg);
+            QObject::connect(buttonBox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+            QObject::connect(buttonBox, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+            QObject::connect(listWidget, &QListWidget::itemSelectionChanged, &dlg, [&]() { buttonBox->button(QDialogButtonBox::Ok)->setEnabled(!listWidget->selectedItems().empty()); });
+            mainLayout->addWidget(buttonBox);
+            if(dlg.exec() == QDialog::Accepted) {
+                QList<QListWidgetItem*> selectedItems = listWidget->selectedItems();
+                if(selectedItems.empty())
+                    return false; // Abort loading of the DataSet.
+                int keepIndex = listWidget->row(selectedItems.front());
+                if(Scene* scene = fileSourcePipelines[keepIndex]->scene())
+                    scene->selection()->setNode(fileSourcePipelines[keepIndex]);
+                for(const auto& sceneNode : fileSourcePipelines) {
+                    if(sceneNode != fileSourcePipelines[keepIndex]) {
+                        sceneNode->requestObjectDeletion();
                     }
                 }
+            }
+            else {
+                return false; // Abort loading of the DataSet.
             }
         }
     }
@@ -427,53 +414,10 @@ void MainWindowUI::askForSaveChanges()
 }
 
 /******************************************************************************
-* Imports a given file into the scene.
+* Displays the optional settings of every importer to the user.
 ******************************************************************************/
-void MainWindowUI::importFiles(const std::vector<QUrl>& urls, const FileImporterClass* importerType, const QString& importerFormat)
+void MainWindowUI::inspectImporterFiles(const std::vector<std::pair<QUrl, OORef<FileImporter>>>& urlImporters)
 {
-    OVITO_ASSERT(this_task::get());
-    OVITO_ASSERT(!urls.empty());
-
-    // Create a reference to the active scene to keep it alive during this long-running operation.
-    OORef<DataSet> dataset = datasetContainer().currentSet();
-    OORef<Scene> scene = datasetContainer().activeScene();
-    if(!dataset || !scene)
-        throw Exception(tr("Cannot import because there is no active scene."));
-
-    std::vector<std::pair<QUrl, OORef<FileImporter>>> urlImporters;
-    for(const QUrl& url : urls) {
-        if(!url.isValid())
-            throw Exception(tr("Failed to import file. URL is not valid: %1").arg(url.toString()));
-
-        OORef<FileImporter> importer;
-        if(!importerType) {
-
-            // Detect file format.
-            Future<OORef<FileImporter>> importerFuture = FileImporter::autodetectFileFormat(url);
-            importer = importerFuture.blockForResult();
-            if(!importer)
-                throw Exception(tr("Could not auto-detect the format of the file %1. The file format might not be supported.").arg(url.fileName()));
-        }
-        else {
-            importer = static_object_cast<FileImporter>(importerType->createInstance());
-            if(!importer)
-                throw Exception(tr("Failed to import file. Could not initialize import service."));
-            importer->setSelectedFileFormat(importerFormat);
-        }
-
-        urlImporters.push_back(std::make_pair(url, std::move(importer)));
-    }
-
-    // Order URLs and their corresponding importers.
-    std::stable_sort(urlImporters.begin(), urlImporters.end(), [](const auto& a, const auto& b) {
-        int pa = a.second->importerPriority();
-        int pb = b.second->importerPriority();
-        if(pa > pb) return true;
-        if(pa < pb) return false;
-        return a.second->getOOClass().name() < b.second->getOOClass().name();
-    });
-
-    // Display the optional UI (which is provided by the corresponding FileImporterEditor class) for each importer.
     for(const auto& item : urlImporters) {
         const QUrl& url = item.first;
         const OORef<FileImporter>& importer = item.second;
@@ -493,11 +437,18 @@ void MainWindowUI::importFiles(const std::vector<QUrl>& urls, const FileImporter
             }
         }
     }
+}
+
+/******************************************************************************
+* Asks the user how the data to be imported should be merged into the current scene.
+******************************************************************************/
+FileImporter::ImportMode MainWindowUI::determineImportMode(Scene* scene, const std::vector<QUrl>& urls, FileImporter* importer)
+{
+    OVITO_ASSERT(scene && importer);
 
     // Determine how the file's data should be inserted into the current scene.
     FileImporter::ImportMode importMode = FileImporter::ResetScene;
 
-    OORef<FileImporter> importer = urlImporters.front().second;
     if(importer->isReplaceExistingPossible(scene, urls)) {
         // Ask user if the existing pipeline should be preserved or reset.
         MessageDialog msgBox(QMessageBox::Question, tr("Import file"),
@@ -561,107 +512,41 @@ void MainWindowUI::importFiles(const std::vector<QUrl>& urls, const FileImporter
         }
     }
 
-    Future<OORef<Pipeline>> future = importer->importFileSet(scene, std::move(urlImporters), importMode, true, ImportFileDialog::multiFileImportMode());
-    ProgressDialog::blockForFuture(std::move(future), *this, tr("Importing data"));
-
-    if(importMode == FileImporter::ResetScene) {
-        undoStack()->clear();
-        dataset->setFilePath({});
-    }
-
-    // Set the directory of the imported file as the current working directory for the file import dialog.
-    QString directoryPath = urls.back().toLocalFile();
-    if(!directoryPath.isEmpty()) {
-        directoryPath = QFileInfo(directoryPath).absolutePath();
-        QDir::setCurrent(directoryPath);
-        updateMostRecentlyUsedDirectory(QStringLiteral("import"), directoryPath);
-    }
+    return importMode;
 }
 
 /******************************************************************************
-* Sets the current working directory and opens the file import dialog with the
-* specified directory pre-selected.
+* Runs the import operation in a progress dialog, which lets the user cancel it.
 ******************************************************************************/
-void MainWindowUI::openWorkingDirectory(const QString& directoryPath)
+void MainWindowUI::runFileImport(FileImporter& importer, Scene* scene, std::vector<std::pair<QUrl, OORef<FileImporter>>> urlImporters, FileImporter::ImportMode importMode)
 {
-    QDir::setCurrent(directoryPath);
+    Future<OORef<Pipeline>> future = importer.importFileSet(scene, std::move(urlImporters), importMode, true, ImportFileDialog::multiFileImportMode());
+    ProgressDialog::blockForFuture(std::move(future), *this, tr("Importing data"));
+}
+
+/******************************************************************************
+* Remembers the directory of the imported file in the file import dialog history.
+******************************************************************************/
+void MainWindowUI::importDirectoryChanged(const QString& directoryPath)
+{
     updateMostRecentlyUsedDirectory(QStringLiteral("import"), directoryPath); // Note: "import" is the dialog class for the FileImportDialog.
+}
+
+/******************************************************************************
+* Opens the file import dialog.
+******************************************************************************/
+void MainWindowUI::openImportDialog(const QString& directoryPath)
+{
     actionManager()->getAction(ACTION_FILE_IMPORT)->trigger();
 }
 
 /******************************************************************************
-* Registers a new task progress record with this user interface.
-* This method gets called when a new TaskProgress instance is created from a running task.
+* Updates the progress display of the main window.
 ******************************************************************************/
-std::mutex* MainWindowUI::taskProgressBegin(TaskProgress* progress)
+void MainWindowUI::progressTasksChanged()
 {
-    std::lock_guard<std::mutex> lock(_progressTaskListMutex);
-    if(!_progressTasksHead)
-        _progressTasksHead = progress;
-    progress->setPrevInList(_progressTasksTail);
-    progress->setNextInList(nullptr);
-    if(_progressTasksTail)
-        _progressTasksTail->setNextInList(progress);
-    _progressTasksTail = progress;
-    return &_progressTaskListMutex;
-}
-
-/******************************************************************************
-* Unregisters a task progress record from this user interface.
-* This method gets called when a previously registered task finishes.
-******************************************************************************/
-void MainWindowUI::taskProgressEnd(TaskProgress* progress)
-{
-    // Note: Mutex is already locked by the TaskProgress class.
-    if(_progressTasksHead == progress)
-        _progressTasksHead = progress->nextInList();
-    if(_progressTasksTail == progress)
-        _progressTasksTail = progress->prevInList();
-    if(TaskProgress* prev = progress->prevInList())
-        prev->setNextInList(progress->nextInList());
-    if(TaskProgress* next = progress->nextInList())
-        next->setPrevInList(progress->prevInList());
-    notifyProgressTasksChanged();
-}
-
-/******************************************************************************
-* Informs the user interface that a task's progress state has changed.
-******************************************************************************/
-void MainWindowUI::taskProgressChanged(TaskProgress* progress)
-{
-    // Note: Mutex is already locked by the TaskProgress class.
-    notifyProgressTasksChanged();
-}
-
-/******************************************************************************
-* Notifies all registered listeners that the progress state of the registered tasks has changed.
-******************************************************************************/
-void MainWindowUI::notifyProgressTasksChanged()
-{
-    // The following timer code ensures that the GUI task display is updated only once every 100 ms.
-    // It also ensures that the UI update is done in the main thread and that short-lived
-    // tasks don't show up in the GUI at all.
-    if(hasMainWindow() && !_progressUpdateScheduled.exchange(true)) {
-        QTimer::singleShot(100, QCoreApplication::instance(), [self=OORef<MainWindowUI>(this)]() {
-            self->_progressUpdateScheduled.store(false);
-            if(self->hasMainWindow())
-                Q_EMIT self->mainWindow()->taskProgressUpdate();
-        });
-    }
-}
-
-/******************************************************************************
-* Lets the caller visit all registered worker tasks that are in progress.
-******************************************************************************/
-void MainWindowUI::visitRunningTasks(std::function<void(const QString&,int,int)> visitor)
-{
-    std::lock_guard<std::mutex> lock(_progressTaskListMutex);
-    for(TaskProgress* taskProgress = _progressTasksHead; taskProgress != nullptr; taskProgress = taskProgress->nextInList()) {
-        // Compute overall progress, taking into account nested sub-steps of the task.
-        auto [totalProgressValue, totalProgressMaximum] = taskProgress->computeTotalProgress();
-        // Call visitor function.
-        visitor(taskProgress->text(), totalProgressValue, totalProgressMaximum);
-    }
+    if(hasMainWindow())
+        Q_EMIT mainWindow()->taskProgressUpdate();
 }
 
 /******************************************************************************

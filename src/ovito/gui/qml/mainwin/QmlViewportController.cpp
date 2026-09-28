@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/gui/qml/QmlFrontend.h>
+#include <ovito/gui/qml/mainwin/QmlMainWindowUI.h>
+#include <ovito/gui/qml/mainwin/QmlViewportController.h>
 #include <ovito/gui/qml/viewport/QuickViewportItem.h>
 #include <ovito/gui/qml/viewport/QuickViewportWindow.h>
-#include <ovito/gui/qml/mainwin/QmlMainWindowUI.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
 #include <ovito/core/viewport/Viewport.h>
@@ -20,6 +21,12 @@ namespace Ovito {
 ******************************************************************************/
 QmlViewportController::QmlViewportController(QmlMainWindowUI& ui, QObject* parent) : QObject(parent), _ui(ui)
 {
+    // The viewport items have to be rebuilt whenever the current dataset (and with it the set of viewports) changes,
+    // because a viewport item belongs to the viewport of one dataset.
+    connect(&ui.datasetContainer(), &DataSetContainer::dataSetChanged, this, [this]() {
+        discardViewportItems();
+        Q_EMIT viewportConfigurationChanged();
+    });
 }
 
 /******************************************************************************
@@ -39,27 +46,35 @@ void QmlViewportController::setStatusMessage(const QString& message)
 }
 
 /******************************************************************************
-* Creates a viewport item for the next viewport of the current dataset.
+* Returns the number of viewports of the current dataset.
 ******************************************************************************/
-QQuickItem* QmlViewportController::createViewportItem(QQuickItem* parentItem)
+int QmlViewportController::viewportCount() const
+{
+    if(ViewportConfiguration* viewportConfig = _ui.datasetContainer().activeViewportConfig())
+        return viewportConfig->viewports().size();
+    return 0;
+}
+
+/******************************************************************************
+* Creates the viewport item for the viewport with the given index of the current dataset.
+******************************************************************************/
+QQuickItem* QmlViewportController::createViewportItem(QQuickItem* parentItem, int viewportIndex)
 {
     OVITO_ASSERT(parentItem);
+    OVITO_ASSERT(viewportIndex >= 0);
 
-    DataSet* dataset = _ui.datasetContainer().currentSet();
-    if(!dataset || !parentItem)
-        return nullptr;
-
-    // Obtain the list of viewports of the current dataset.
     ViewportConfiguration* viewportConfig = _ui.datasetContainer().activeViewportConfig();
-    if(!viewportConfig)
-        return nullptr;
-    const QList<OORef<Viewport>>& viewports = viewportConfig->viewports();
-    if(viewports.empty())
+    if(!viewportConfig || viewportIndex >= viewportConfig->viewports().size())
         return nullptr;
 
-    // The prototype creates one viewport item per call, cycling through the viewports of the dataset.
-    Viewport* viewport = viewports[_nextViewportIndex % viewports.size()].get();
-    _nextViewportIndex++;
+    Viewport* viewport = viewportConfig->viewports()[viewportIndex].get();
+
+    // Discard a viewport item that is still showing another viewport (or another dataset).
+    if(auto* oldItem = viewportItem(viewportIndex)) {
+        _viewportItems[viewportIndex].clear();
+        oldItem->setParentItem(nullptr);
+        delete oldItem;
+    }
 
     auto* item = new QuickViewportItem(parentItem);
     item->setParentItem(parentItem);
@@ -71,15 +86,41 @@ QQuickItem* QmlViewportController::createViewportItem(QQuickItem* parentItem)
     item->initializeWindow(viewport, _ui, _interactiveRenderer);
 
     // Keep the item sized to the area reserved for it in the QML layout.
-    auto resizeItem = [item, parentItem]() {
+    const auto resizeItem = [item, parentItem]() {
         item->setSize(parentItem->size());
     };
     connect(parentItem, &QQuickItem::widthChanged, this, resizeItem);
     connect(parentItem, &QQuickItem::heightChanged, this, resizeItem);
     resizeItem();
 
-    _viewportItems.push_back(item);
+    if(_viewportItems.size() <= viewportIndex)
+        _viewportItems.resize(viewportIndex + 1);
+    _viewportItems[viewportIndex] = item;
     return item;
+}
+
+/******************************************************************************
+* Returns the viewport item that has been created for the viewport with the given index.
+******************************************************************************/
+QuickViewportItem* QmlViewportController::viewportItem(int viewportIndex) const
+{
+    if(viewportIndex >= 0 && viewportIndex < _viewportItems.size())
+        return _viewportItems[viewportIndex].data();
+    return nullptr;
+}
+
+/******************************************************************************
+* Discards the viewport items of the previous dataset.
+******************************************************************************/
+void QmlViewportController::discardViewportItems()
+{
+    for(QPointer<QuickViewportItem>& item : _viewportItems) {
+        if(QuickViewportItem* viewportItem = item.data()) {
+            viewportItem->setParentItem(nullptr);
+            delete viewportItem;
+        }
+    }
+    _viewportItems.clear();
 }
 
 /******************************************************************************

@@ -546,14 +546,20 @@ protected:
         if(!mainWinUI)
             return;
 
-        // Import the data files specified on the command line.
+        // Import the data files specified on the command line through the shared import path of the workbench,
+        // which is the same code the real frontend uses.
+        std::vector<QUrl> importUrls;
         for(const QString& argument : cmdLineParser().positionalArguments()) {
             if(argument.endsWith(QStringLiteral(".ovito"), Qt::CaseInsensitive)) {
                 qWarning() << "Session state files are not supported by the frontend prototype yet:" << argument;
                 continue;
             }
-            mainWinUI->importFile(Application::instance()->fileManager().urlFromUserInput(argument));
+            importUrls.push_back(Application::instance()->fileManager().urlFromUserInput(argument));
         }
+        mainWinUI->handleExceptions([&]() {
+            if(!importUrls.empty())
+                mainWinUI->importFiles(importUrls);
+        });
 
         // Diagnostic: report what the command line data files turned into. A file that was misdetected by the
         // importer autodetection shows up here, instead of only as a picking check that finds nothing.

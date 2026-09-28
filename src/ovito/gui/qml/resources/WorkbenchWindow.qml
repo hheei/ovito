@@ -43,16 +43,28 @@ Rectangle {
         Grid {
             id: viewportGrid
             anchors.fill: parent
-            columns: 2
+            columns: Math.min(2, Math.max(1, viewportController.viewportCount))
             spacing: theme.spacing
 
+            // One pane per viewport of the current dataset. A viewport item belongs to the viewport of one dataset,
+            // so the panes bind themselves again whenever the frontend reports a new set of viewports.
             Repeater {
-                model: 4
+                model: viewportController.viewportCount
 
                 Item {
+                    id: viewportPane
                     width: Math.round((viewportGrid.width - viewportGrid.spacing) / 2)
                     height: Math.round((viewportGrid.height - viewportGrid.spacing) / 2)
-                    Component.onCompleted: viewportController.createViewportItem(this)
+
+                    function bindViewport() {
+                        viewportController.createViewportItem(viewportPane, index)
+                    }
+                    Component.onCompleted: bindViewport()
+
+                    Connections {
+                        target: viewportController
+                        function onViewportConfigurationChanged() { viewportPane.bindViewport() }
+                    }
                 }
             }
         }

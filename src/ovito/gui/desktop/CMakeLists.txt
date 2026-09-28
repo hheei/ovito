@@ -137,6 +137,7 @@ OVITO_STANDARD_PLUGIN(Gui
         viewport/overlays/MoveOverlayInputMode.cpp
         app/GuiApplication.cpp
         app/GuiApplicationService.cpp
+        app/QtWidgetsFrontend.cpp
         utilities/concurrent/ProgressDialog.cpp
         resources/gui.qrc
     PLUGIN_DEPENDENCIES

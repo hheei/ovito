@@ -4,6 +4,8 @@
 # Define plugin module.
 OVITO_STANDARD_PLUGIN(GuiBase
     SOURCES
+        app/GuiFrontendRegistry.cpp
+        app/WorkbenchUI.cpp
         actions/ActionManager.cpp
         actions/ViewportModeAction.cpp
         actions/ViewportActions.cpp

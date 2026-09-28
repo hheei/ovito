@@ -11,9 +11,12 @@ namespace Ovito {
 /**
  * \brief Exposes the C++ side of the Qt Quick frontend to the QML scene.
  *
- * This class is registered as the "viewportController" context property of the QML engine. It creates the
- * viewport items requested by the QML layout and carries the state that the QML scene needs to display,
- * e.g. the status line message.
+ * This class is registered as the "viewportController" context property of the QML engine. It creates the viewport
+ * items that the QML layout asks for and carries the state that the QML scene displays, e.g. the status line message.
+ *
+ * The viewports are those of the current dataset. Whenever that dataset is replaced, the controller discards its
+ * viewport items and emits viewportConfigurationChanged(), which tells the QML scene to ask for viewport items again -
+ * a viewport item belongs to the viewport of one dataset and cannot be reused for the next one.
  */
 class OVITO_GUIQML_EXPORT QmlViewportController : public QObject
 {
@@ -21,6 +24,9 @@ class OVITO_GUIQML_EXPORT QmlViewportController : public QObject
 
     /// The message displayed in the status line of the workbench window.
     Q_PROPERTY(QString statusMessage READ statusMessage WRITE setStatusMessage NOTIFY statusMessageChanged)
+
+    /// The number of viewports of the current dataset, i.e. the number of viewport items the QML scene should have.
+    Q_PROPERTY(int viewportCount READ viewportCount NOTIFY viewportConfigurationChanged)
 
 public:
 
@@ -33,8 +39,16 @@ public:
     /// Sets the status message displayed in the status line.
     void setStatusMessage(const QString& message);
 
-    /// Creates a viewport item for the next viewport of the current dataset and adds it to the QML scene.
-    Q_INVOKABLE QQuickItem* createViewportItem(QQuickItem* parentItem);
+    /// Returns the number of viewports of the current dataset.
+    int viewportCount() const;
+
+    /// Creates the viewport item for the viewport with the given index of the current dataset and adds it to the QML scene.
+    /// Calling this again for the same index replaces the viewport item that was created before.
+    /// \return The new viewport item, or null if the current dataset has no viewport with that index.
+    Q_INVOKABLE QQuickItem* createViewportItem(QQuickItem* parentItem, int viewportIndex);
+
+    /// Returns the viewport item that has been created for the viewport with the given index, or null.
+    QuickViewportItem* viewportItem(int viewportIndex) const;
 
     /// Gives the input focus to the viewport item displaying the given viewport.
     void setViewportInputFocus(Viewport* viewport);
@@ -44,19 +58,24 @@ Q_SIGNALS:
     /// Is emitted when the status message has changed.
     void statusMessageChanged();
 
+    /// Is emitted when the current dataset or its set of viewports has changed.
+    void viewportConfigurationChanged();
+
+private:
+
+    /// Discards the viewport items of the previous dataset.
+    void discardViewportItems();
+
 private:
 
     /// The user interface this controller belongs to.
     QmlMainWindowUI& _ui;
 
-    /// The viewport items that have been created for the current dataset.
+    /// The viewport items that have been created for the viewports of the current dataset, indexed by viewport.
     std::vector<QPointer<QuickViewportItem>> _viewportItems;
 
     /// The renderer object that provides the rendering settings of the interactive viewports.
     OORef<SceneRenderer> _interactiveRenderer;
-
-    /// The index of the next viewport to create an item for.
-    int _nextViewportIndex = 0;
 };
 
 }   // End of namespace
