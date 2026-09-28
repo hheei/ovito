@@ -1,9 +1,15 @@
 # OVITO Modern Workbench UI Design Specification
 
-> **Target Version**: OVITO Next-Gen (Qt 6.8+ / Qt Quick & QML)  
-> **Core Principle**: Interaction Parity First, Visual Modernization in Lockstep  
-> **Visual Inspiration**: VS Code Modern Theme (Clean, focused, dark/light modern)  
-> **Status**: Source-Grounded Architectural Design
+> **Target Version**: OVITO Next-Gen (Qt 6.10+ / Qt Quick & QML)
+>
+> **Core Principle**: Interaction Parity First, Visual Modernization in Lockstep
+>
+> **Visual Inspiration**: VS Code Modern Theme (Clean, focused, dark/light modern)
+>
+> **Status**: Proposed Design; the Qt Quick viewport rendering bridge is validated on the Linux/OpenGL backend
+> (see [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md)); cross-backend, picking and HiDPI validation are still open
+>
+> **Execution Plan**: [UI_PLAN.md](UI_PLAN.md)
 
 ---
 
@@ -65,9 +71,12 @@ To prevent architectural rot and ensure true frontend independence, the new QML 
 ```
 
 - **Rule 1**: `qml` may depend on `gui/base` and `core`.
-- **Rule 2**: `qml` **MUST NEVER** `#include` headers from `gui/desktop` or link against `ovito_desktop`.
-- **Rule 3**: If a service or logic currently lives in `gui/desktop` but is needed by `qml`, it must first be extracted and refactored into `gui/base` as a shared abstraction.
-- **Rule 4**: All QML-facing presentation models must be authored independently under `src/ovito/gui/qml/models/`. Never assume an existing desktop model is directly QML-ready.
+- **Rule 2**: `qml` **MUST NEVER** `#include` headers from `gui/desktop` or link against its `Gui` target. A common executable may select either frontend without introducing that dependency into the QML module.
+- **Rule 3**: If business logic currently lives in `gui/desktop` but is needed by `qml`, extract the shared operation into `gui/base` and keep frontend-specific dialogs in their respective frontends. Preserve the classic frontend's behavior during extraction.
+- **Rule 4**: Audit models and actions already in `gui/base` before adding QML adapters under `src/ovito/gui/qml/models/`. Choose direct reuse, composition/proxy adaptation, or extraction of shared operations based on actual API gaps; do not duplicate pipeline mutation logic to change its presentation.
+- **Rule 5**: Preserve numerical algorithms, file readers, and asynchronous evaluation semantics. Any rendering integration changes in `core/rendering` or `core/viewport` must be identified by the spike and verified against both frontends and headless rendering.
+
+The Qt baseline follows the root CMake configuration and `AGENTS.md`: Qt 6.10+, with matching private headers. Target backends are Metal on macOS ARM64, D3D12 on Windows x86_64, and Vulkan on Linux x86_64/ARM64.
 
 ---
 
@@ -107,11 +116,20 @@ The layout preserves classic OVITO spatial semantics while dressing them in clea
 | Classic OVITO Component | Modern QML Equivalent | Architecture Strategy |
 | :--- | :--- | :--- |
 | `MainWindow` (QtWidgets) | `WorkbenchWindow.qml` | Rewrite in QML shell; retains classic menu bar + side panel topology. |
-| `ViewportsPanel` (Grid container) | `ViewportGrid.qml` | Re-implements 1x1, 2x2, 1+2 splitters with fluid QML transitions. |
-| `WidgetViewportWindow` | `QuickViewportItem` | Adapts `BaseViewportWindow` input handling; renders via `QQuickRhiItem`. |
-| Pipeline Command Page | `PipelineView.qml` | Driven by a dedicated `QmlPipelineModel`. |
+| `ViewportsPanel` (Grid container) | `ViewportGrid.qml` | Preserves audited split, resize, and maximize behavior; 1x1, 2x2, and 1+2 are initial layouts. |
+| `WidgetViewportWindow` | `QuickViewportItem` + viewport adapter | Composes a `BaseViewportWindow` subclass for input; renders via `QQuickRhiItem`. |
+| Pipeline Command Page | `PipelineView.qml` | Uses the shared pipeline model through the adaptation selected in Phase 0. |
 | `PropertiesEditor` & `ParameterUI` | `ModifierEditorRegistry` | Specialized QML editors for complex tools + generic fallback. |
 | `AnimationTrackBar` / `TimeSlider` | `TimelineView.qml` | Driven by `QmlAnimationModel`; QML declarative track & scrubber. |
+
+### 3.2 Interaction States and Layout Behavior
+
+- **Empty scene**: Offer Import, keep unavailable editing commands disabled, and explain why they are unavailable.
+- **Evaluation in progress**: Show task progress and cancellation where supported. Distinguish pending results from ready results; a retained previous frame must not be presented as the completed current frame.
+- **Failure or cancellation**: Show an actionable error at the affected pipeline item with details available. Cancellation ends the busy state without discarding the editable scene.
+- **Keyboard and accessibility**: Preserve platform-native shortcuts and command enablement. Define focus order between viewport, pipeline, inspector, and timeline; expose accessible names, roles, values, and visible focus. Text editing must take precedence over conflicting global shortcuts.
+- **Scientific parameter entry**: Provide direct numeric entry with units, precision, and bounds. Sliders supplement numeric fields; they do not replace them. Invalid input must not silently alter a value.
+- **Small windows and HiDPI**: Allow panel resizing and inspector scrolling while keeping navigation and import controls reachable. Phase 2 establishes a documented minimum window size and checks long labels, both themes, and fractional display scaling. Avoid layout animation that interferes with precise pointer input.
 
 ---
 
@@ -142,41 +160,71 @@ OVITO RenderThread owns QRhi    Qt Quick Scene Graph owns QRhi
 ```
 
 ### 4.2 Integration Seam via `BaseViewportWindow`
-`QuickViewportItem` leverages `BaseViewportWindow` (from `gui/base`), which already decouples generic mouse/keyboard navigation logic from `QWidget`:
-```cpp
-class QuickViewportItem : public QQuickRhiItem, public BaseViewportWindow
-{
-    Q_OBJECT
-    // Pointer and wheel events map directly into BaseViewportWindow methods:
-    void mousePressEvent(QMouseEvent* event) override { BaseViewportWindow::mousePressEvent(event); }
-    void mouseMoveEvent(QMouseEvent* event) override { BaseViewportWindow::mouseMoveEvent(event); }
-    void mouseReleaseEvent(QMouseEvent* event) override { BaseViewportWindow::mouseReleaseEvent(event); }
-    void wheelEvent(QWheelEvent* event) override { BaseViewportWindow::wheelEvent(event); }
-};
+`BaseViewportWindow` already provides shared input handling, but inherits `QObject` through `ViewportWindow`. `QQuickRhiItem` also inherits `QObject`. A single class must not inherit both; use composition:
+
+```text
+GUI thread
+QuickViewportItem : QQuickRhiItem
+  └── owns QuickViewportAdapter : BaseViewportWindow
+        ├── forwards input to existing viewport input modes
+        ├── implements viewport size, visibility, cursor, and picking interfaces
+        └── participates in existing scene preparation and frame-graph generation
+
+                 prepared state transferred at synchronization
+                                    │
+                                    ▼
+Qt Quick rendering callbacks
+QuickViewportRenderer : QQuickRhiItemRenderer
+  └── consumes prepared state using Qt Quick's QRhi, command buffer, and target
 ```
-*Note: The exact threading bridge and swapchain synchronization must be validated in Phase 1 (Technical Spike) before finalizing this class.*
+
+These names describe responsibilities, not frozen interfaces. The adapter forwards press/move/release, double-click, wheel, key, focus-loss, and context-menu behavior. Item visibility, geometry, and scene attachment changes must map to the shared viewport lifecycle. Logical input coordinates and device-pixel render coordinates must remain distinct.
+
+### 4.3 Threading and Resource Contract to Validate
+
+- Keep dataset mutation and input handling on the GUI thread. Reuse OVITO scene preparation and asynchronous evaluation; rendering callbacks consume prepared frame state rather than evaluating pipelines or reading mutable QML state.
+- Define the transfer and lifetime of frame graphs, renderer configuration, and picking results. Qt Quick synchronization is the handoff point for item state; validate buffer/resource sharing only within the owning QRhi instance.
+- Qt Quick owns its QRhi and command buffer. The renderer must not destroy them or submit work through the classic `RenderThread` using resources owned by Qt Quick.
+- Specify resource release and recreation for hide/show, scene-graph invalidation, window closing, and movement between windows. GPU resources must be released on their owning rendering thread.
+- Preserve picking semantics while avoiding a circular wait between GUI and rendering threads. The spike must exercise picking during resize, evaluation, and teardown, not only during steady-state rendering.
+
+Phase 1 must record the required changes to the existing renderer, the tested backend matrix, and lifecycle results before these interfaces are finalized. An alternative integration approach requires a revised design covering all target backends.
 
 ---
 
-## 5. Presentation Layer & Models (Zero Assumption)
+## 5. Presentation Models and Editing Commands
 
-No existing QtWidgets model is assumed to be QML-ready. Independent presentation adapters are authored under `src/ovito/gui/qml/models/`:
+Audit the existing `gui/base` models and actions first. `PipelineListModel` already exposes named roles, a selection model, and an invokable drag-and-drop operation; `AvailableModifiersModel` contains modifier discovery and applicability logic. These are reuse candidates, not proof that every role and operation can be bound unchanged in QML.
 
-### 5.1 `QmlPipelineModel`
-```
-OVITO Pipeline / ModificationNode
-              │
-              ▼
-QmlPipelineModel : public QAbstractListModel
-  ├── Roles: title, itemType, isEnabled, isSelected, statusIcon, hasError
-  ├── Methods: moveItem(from, to), toggleItem(index), deleteItem(index)
-              │
-              ▼
-QML ListView (PipelineView.qml)
-```
+New adapters live under `src/ovito/gui/qml/models/`. The `Qml*Model` names below describe presentation contracts; Phase 0 decides whether each needs a new class, a proxy, or direct binding. Shared operations remain the single implementation of pipeline mutations.
+
+### 5.1 Pipeline and Modifier Presentation
+
+- Expose title, item type, enabled state, selection, and evaluation status/details to `PipelineView.qml`.
+- Preserve source and visual-element rows, modifier groups, multi-selection, shared modifiers, and valid drop boundaries identified in the parity audit. A pipeline row is not necessarily a movable modifier.
+- Route insertion, toggling, reordering, deletion, and grouping through shared model operations or extracted commands. Validate the current target at invocation time; transient row numbers must not identify objects across deferred operations or model rebuilds.
+- Synchronize selection and status after undo/redo, asynchronous evaluation, and dataset replacement. Cancel edits whose target has been removed and release old object references when switching datasets.
+- Adapt modifier discovery from `AvailableModifiersModel`, including categories, templates, and applicability to the current input; a class registry alone is insufficient.
+- Audit scene/pipeline selection separately. Add a scene adapter only if the shared selection API cannot provide the required presentation.
 
 ### 5.2 `QmlAnimationModel`
-Exposes trajectory frame counts, current time/frame, playback state (playing, paused), keyframe marks, and playback speed/loop options.
+
+Expose the animation interval, current time/frame, playback state, speed, and loop options using existing animation settings and time conversions. Support non-zero starting frames and distinguish source trajectory frames from the scene animation interval.
+
+Expose editable controller tracks and keyframe selection. Key movement, deletion, parameter animation entry points, and auto-key behavior must use existing controller operations and undo transactions. Keyframe marks alone do not meet animation parity.
+
+### 5.3 Shared Command and Undo Contract
+
+Reuse `gui/base` actions and OVITO's undo infrastructure through a QML-facing bridge. Preserve action enablement, checked state, labels, shortcuts, and error handling; frontend dialogs gather inputs and then invoke the shared operation.
+
+| Edit kind | Required behavior |
+| :--- | :--- |
+| Discrete edit (toggle, insert, delete, reorder) | One named undo transaction; validate targets and roll back failed mutations. |
+| Continuous edit (numeric drag, slider, keyframe move) | Begin on edit start, update within one logical transaction, commit on acceptance/release, cancel and restore on Escape or interrupted interaction. |
+| Text entry | Commit valid input on acceptance; define focus-loss behavior consistently with the classic control. Invalid input leaves the stored value unchanged. |
+| Dataset replacement or target deletion | End/cancel the active edit before releasing its target; never let a deferred write reach a different object. |
+
+One accepted gesture produces one undo step. Undo/redo must restore affected model state and keep selection coherent; returning a deleted selected modifier through undo must restore the expected selection. Phase 3 verifies these behaviors before QML controls start mutating datasets.
 
 ---
 
@@ -203,7 +251,20 @@ Modifier Selected in Pipeline
           └── NO  ──► Fallback to AutoPropertyEditor.qml (Reflected basic sliders/toggles)
 ```
 
-This guarantees 100% parameter coverage on Day 1 via reflection, while providing an unconstrained path to deliver bespoke, pixel-perfect UX for OVITO's most critical modifiers.
+Fallback coverage is explicit and incremental. Reflection does not guarantee that every parameter is editable. Phase 0 records each user-editable field of the initial modifier set as supported by fallback, assigned to a specialized editor, or unsupported with a reason and delivery phase.
+
+### 6.3 Initial Fallback Contract
+
+| Parameter kind | Initial support and limits |
+| :--- | :--- |
+| Plain numeric fields | Integer and floating-point entry using available units, precision, and bounds metadata. |
+| Boolean and color fields | Basic controls with shared validation, notification, and undo behavior. |
+| Scalar animation controllers | Read/write through the controller at the current animation time; honor auto-key behavior and expose the animation entry point. Never replace the controller reference with a scalar value. |
+| Enums, property selectors, vectors/matrices, reference collections, plots, and custom actions | Require audited metadata adapters or specialized editors; do not infer editability from a reflected value alone. |
+
+Use OVITO property descriptors and controller APIs. Specialized and fallback editors share the command/undo contract, refresh on time and object changes, and enforce read-only state and parameter bounds.
+
+An unsupported user-editable parameter must be visibly identified with a reason; show its value read-only where a meaningful representation exists. It remains a parity gap until supported. Phase 4 may ship a partial inspector for development, but Phase 7 cannot claim complete parity with unresolved coverage gaps.
 
 ---
 
@@ -225,6 +286,14 @@ Tokens are codified in `Theme.qml`:
 
 ---
 
-## 8. Summary
+## 8. Completion Criteria and Source References
 
-This design specification anchors the new frontend in **strict interaction parity with classic OVITO**, establishes **impenetrable architectural boundaries** preventing entanglement with `gui/desktop`, tackles the **QRhi ownership spike upfront**, and deploys a **pragmatic hybrid property inspector** that handles real-world scientific tool complexity.
+The [implementation plan](UI_PLAN.md) defines phase gates and the initial parity matrix. Phase 0 expands that matrix against the classic frontend's audited feature set for the same build configuration. Complete parity requires evidence for each applicable row; an explicitly deferred feature still prevents a complete-parity claim. Workflow enhancements follow that gate, and retirement of the classic frontend remains a separate future decision.
+
+Source anchors for implementation and audit:
+
+- [ViewportWindow](../../src/ovito/core/viewport/ViewportWindow.h) and [BaseViewportWindow](../../src/ovito/gui/base/viewport/BaseViewportWindow.h): object inheritance and viewport/input contracts.
+- [RenderThread](../../src/ovito/core/rendering/RenderThread.h): existing QRhi ownership, target lifecycle, and picking.
+- [PipelineListModel](../../src/ovito/gui/base/mainwin/PipelineListModel.h) and [AvailableModifiersModel](../../src/ovito/gui/base/mainwin/AvailableModifiersModel.h): shared models and pipeline operations.
+- [FloatParameterUI](../../src/ovito/gui/desktop/properties/FloatParameterUI.cpp) and [NumericalParameterUI](../../src/ovito/gui/desktop/properties/NumericalParameterUI.cpp): reference behavior for controller values, units, bounds, and undo.
+- [AnimationTrackBar](../../src/ovito/gui/desktop/widgets/animation/AnimationTrackBar.cpp) and [MainWindowUI](../../src/ovito/gui/desktop/mainwin/MainWindowUI.cpp): reference behavior for key editing and session lifecycle. Desktop sources are audit references, not dependencies of the QML module.
