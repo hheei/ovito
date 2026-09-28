@@ -212,6 +212,18 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      seconds — a crash or a failed startup exits differently, so a "stays up" assertion catches startup regressions
      without inventing a test-only command line option. macOS has no `timeout`, so that check uses a background process
      plus `sleep`/`kill` and closes the window afterwards (testing rules in [UI_TEST_ENV.md](UI_TEST_ENV.md)).
+- **Status (deliverables 1-3 implemented)**: `ovito --gui=qml` starts the Qt Quick workbench and renders a trajectory
+  imported from the command line, while plain `ovito` still starts the classic main window. The mechanism is the
+  registry of decision **D15** in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) (frontends register themselves; the classic
+  one stays the default; an unknown or unbuilt name prints the available frontends and exits with code 1 instead of
+  falling back), and the shared workbench base class of decision **D16** in the same document now provides the import
+  orchestration, the task-progress bookkeeping, error reporting and the auto-key mode for both frontends. Open from the
+  deliverables below: 4 (layout from `layoutRootCell()`; the QML grid still follows the dataset's viewport list), 5 (the
+  QML frontend has no file selection UI and no progress display - open item O12), 6 (resource packaging from the
+  deployed layout), 7 (O1, O2, O4, O7/O11, O8) and 8 (the shell smoke check in CI). What has been verified locally is
+  recorded in the Phase 1 testing notes ([UI_TEST_ENV.md](UI_TEST_ENV.md)); a full native build, `ctest` 6/6, the
+  headless start, the classic start, the `--gui` error paths (with and without the QML module in the build) and the
+  spike's picking regression all pass.
 - **Non-goals of this phase** (so the shell does not swallow the later ones): pipeline and property models, the pipeline
   view and editors, timeline and animation, render settings and output, data inspector, session saving, command palette.
 - **Exit Gate**: With `OVITO_BUILD_QML_FRONTEND=ON`, `ovito --gui=qml` starts the QML workbench and loads a real

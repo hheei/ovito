@@ -9,9 +9,9 @@
 > **Status**: Proposed Design; the Qt Quick viewport rendering bridge and the asynchronous picking path are validated on
 > the Linux/OpenGL, Linux/Vulkan and macOS/Metal backends, with a measured performance baseline against the classic
 > frontend (see [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md) and [UI_TEST_ENV.md](UI_TEST_ENV.md)); the Windows/D3D12 target
-> and a hardware-driver Vulkan run remain unverified. The next phase is scoped in [UI_PLAN.md](UI_PLAN.md): the
-> `--gui=qml` frontend selection seam, the shared `gui/base` workbench extraction, the workbench shell and the import
-> path
+> and a hardware-driver Vulkan run remain unverified. The frontend selection (`--gui=qml`) and the shared `gui/base`
+> workbench base class are implemented; the workbench shell, the import UI and the remaining Phase 2 deliverables are
+> scoped in [UI_PLAN.md](UI_PLAN.md)
 >
 > **Execution Plan**: [UI_PLAN.md](UI_PLAN.md)
 

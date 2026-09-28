@@ -98,6 +98,45 @@ integration is exercised too.
 
 ---
 
+### 2.2 Smoke-checking and screenshotting the real frontends
+
+The commands above exercise the prototype executable. The real entry point is the `ovito` binary, whose frontend is
+selected with `--gui` (classic `qt-widgets` is the default, `qml` is the Qt Quick workbench):
+
+```bash
+# A headless smoke check of the real application. It has no capture option, so the check is "starts and stays up":
+# a crash or a failed startup exits differently, which is enough to catch startup regressions without adding a
+# test-only command line option to the product.
+Xvfb :99 -screen 0 1280x800x24 &
+DISPLAY=:99 LD_LIBRARY_PATH="$PWD/.qt/6.10.2/gcc_64/lib" ./build-native/bin/ovito --gui=qml /tmp/lattice_512.xyz &
+APP=$!
+sleep 10 && kill -0 $APP && echo "still running"
+```
+
+To *see* what such a run rendered, grab the X11 display with ffmpeg instead of adding a screenshot API:
+
+```bash
+DISPLAY=:99 ffmpeg -y -f x11grab -video_size 1280x800 -i :99 -frames:v 1 /tmp/workbench.png
+```
+
+Traps encountered here, in order of how much time they cost:
+
+* **A startup error in app mode opens a modal dialog.** `GuiApplication::reportError()` displays an application-modal
+  message box in `Application::AppMode`, so an automated run of an unavailable `--gui` name blocked forever under
+  `QT_QPA_PLATFORM=offscreen` until the dialog was dismissed (with no `xdotool` installed, only `kill` was left). For
+  that reason the unavailable-frontend path prints to the terminal and aborts the startup with exit code 1 instead of
+  reporting an exception, and any other *automated* run has to expect modal dialogs on fatal errors.
+* **`SIGKILL` by pattern can kill the test harness.** `pkill -9 -f build-native/bin/ovito` matches the invoking shell as
+  well, because the pattern occurs in its own command line; start GUI processes in the background, keep their PID and
+  kill that.
+* **An unattended classic-frontend *import* cannot be verified on this box.** The classic frontend blocks first on the
+  `NewGraphicsSystemService` first-run dialog and then on `FileImporterEditor`/import-mode dialogs (open item O10), and
+  there is no `xdotool`/`xte` installed to dismiss them. What can be verified is that the classic window starts, that
+  `--nogui` works, and that the classic import path compiles and runs the shared `WorkbenchUI::importFiles()` code (the
+  dialog that appears *is* the `inspectImporterFiles()` hook being reached).
+* The spike's `QQuickWindow::grabWindow()` (section 9) remains the reliable way to capture the *viewport* pixels; the
+  ffmpeg grab captures the whole X11 screen including window decorations.
+
 ## 3. Classic frontend in a headless environment
 
 * `RenderThread::pickGraphicsApi()` hardcodes the graphics API per platform, and on Linux it is always **Vulkan**. There is
