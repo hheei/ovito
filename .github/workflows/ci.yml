@@ -276,11 +276,14 @@ jobs:
           set-env: true
 
       - name: Configure CMake
+        shell: pwsh
         run: |
+          # $env:VCPKG_INSTALLATION_ROOT is a machine-level variable of the runner image and therefore not part of
+          # the Actions env context (${{ env.* }} would be empty here).
           cmake -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
-            -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}" `
-            -DBOOST_ROOT="${{ env.VCPKG_INSTALLATION_ROOT }}/installed/x64-windows" `
+            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR" `
+            -DBOOST_ROOT="$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" `
             -DOVITO_BUILD_CPP_TESTS=ON `
             -DOVITO_BUILD_QML_FRONTEND=ON
 

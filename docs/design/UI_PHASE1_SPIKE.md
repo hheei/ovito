@@ -217,22 +217,31 @@ set; the assertion-enabled configuration in section 3.1 exists for that reason.)
 
 ### 3.4 Object picking (measured)
 
-All runs use the same data set and the same test position (300,300) in the first viewport item (496 × 380 logical
-pixels) and scan a 5 × 5 grid of positions spaced 4 logical pixels apart:
+All runs scan a 5 × 5 grid of positions spaced 4 logical pixels around a point of the first viewport item. Every report names
+the probe centre and the item size it was clipped to, because the item size depends on the window size and the device
+pixel ratio, and a probe that falls outside a small HiDPI item would otherwise measure `0 of 0 positions`:
 
-| Run | Command additions | First successful pick | Grid hits, 1st pass | Grid hits, 2nd pass | Hit example |
-|-----|-------------------|----------------------|--------------------|---------------------|-------------|
-| Default render loop | – | 127–149 ms | 0/25 | 19/25 | subobject 335, hit location (16.946, 3.908, 25.368) |
-| `basic` render loop | `QSG_RENDER_LOOP=basic` | 110 ms | 0/25 | 19/25 | identical |
-| `threaded` render loop | `QSG_RENDER_LOOP=threaded` | 119 ms | 0/25 | 19/25 | identical |
-| 2× HiDPI | `QT_SCALE_FACTOR=2` | 120 ms | 0/25 | 14/25 | subobject 335, (17.030, 4.075, 25.324) |
-| Assertions + 4 lifecycle cycles | `build-asserts` binary | 120 ms | 0/25 | 19/25 | identical to the default run |
+| Run | Host / Qt Quick backend | Probe | 1st pass | 2nd pass | Example hit |
+|-----|-------------------------|-------|----------|----------|-------------|
+| Default render loop | Linux/OpenGL (llvmpipe) | (300,300) in 496×380 | 0/25 | 19/25 | subobject 335, (16.946, 3.908, 25.368) |
+| `QSG_RENDER_LOOP=basic` | Linux/OpenGL | (300,300) in 496×380 | 0/25 | 19/25 | identical |
+| `QSG_RENDER_LOOP=threaded` | Linux/OpenGL | (300,300) in 496×380 | 0/25 | 19/25 | identical |
+| Qt Quick Vulkan (lavapipe) | Linux/Vulkan | (300,300) in 496×380 | 0/25 | 19/25 | identical (agrees to 10⁻³ Å) |
+| Assertions, 4 lifecycle cycles | Linux/OpenGL, `OVITO_DEBUG` | (300,300) in 496×380 | 0/25 | 19/25 | identical |
+| Metal, 512 atoms | macOS ARM64/Metal | (300,300) in 496×381 | 0/25 | 19/25 | subobject 335, (16.9346, 3.88916, 25.3201) |
+| Metal, 32768 atoms | macOS ARM64/Metal | (250,250) in 496×381 | 25/25 | 25/25 | subobject 15743, (53.8032, 38.9933, 112.325) |
+| Metal, 2× scaling | macOS ARM64/Metal | (200,150) in 336×216 | 11/25 | 11/25 | subobject 343, (16.9375, 7.45384, 25.3556) |
+| After a window resize | Linux/OpenGL and macOS/Metal | (300,300) in 406×361 | 12–13/25 | 12–13/25 | subobject 399, (20.69–20.80, 2.98–3.05, 25.38–25.55) |
 
 * **0/25 on the first pass** is the expected behavior of the asynchronous design: the first pick finds no buffer, starts the
   picking pass and returns `std::nullopt`. After ~110–150 ms the buffer is available and subsequent picks hit.
-* **Identical results across the three Qt Quick render loops** and identical hit locations across runs show that the picking
-  path does not depend on the scene graph's threading model (this is expected, because it runs off the interactive frame
-  entirely).
+* **Identical results across the three Qt Quick render loops** and across the OpenGL, Vulkan and Metal backends show that the
+  picking path does not depend on the scene graph's threading model or on the graphics API (expected, because it runs off the
+  interactive frame entirely, and the picking pass is rendered by OVITO's own renderer).
+* **Both passes at the same position must agree.** They did not before defect F5 was fixed in the adapter (19/25 versus 13/25
+  at the same position, with different atoms reported): the previous viewport's buffer was still being used after a resize.
+  The current code answers `nullopt` until a buffer for the new viewport geometry exists, so the consistency of the two
+  probes is a regression check that is worth keeping.
 * **Negative control**: picking at the corner (2,2) returns nothing, i.e. the empty background is not reported as a hit.
 * **End-to-end selection**: a synthetic `QMouseEvent` press/release at the test position is delivered through
   `ViewportInputManager`'s `SelectionMode` and selects the pipeline (`PICK_TEST synthetic click selected "lattice.xyz [XYZ]"`),
@@ -241,11 +250,14 @@ pixels) and scan a 5 × 5 grid of positions spaced 4 logical pixels apart:
   frontends, i.e. it covers half the logical distance at 2× scaling. This matches the classic frontend's coordinate handling
   (`WidgetViewportWindow::pick()` also multiplies by `devicePixelRatio()`); the slightly different hit locations stem from the
   different device-pixel grid.
-* **Latency caveat**: the measurement covers the *first* pass, which includes creating the shared `RenderThread`, its QRhi and
-  the offscreen target. The steady-state cost of a later refresh (which reuses all of them) was not measured separately and
-  remains part of the open performance gate.
+* **Latency**: the first successful pick costs 99 ms (macOS/Metal) to 150 ms (Linux/OpenGL with the software rasterizer),
+  which includes creating the shared `RenderThread`, its QRhi and the offscreen target. A refresh on the warm path — after a
+  resize invalidated the buffer — completes in 19–27 ms (
+  bounded by the 10 ms poll interval of the harness), and a hide/show cycle, which releases and re-acquires the GPU resources,
+  recovers after ~500 ms on both hosts. A probe fired *during* scene evaluation returns immediately (0 ms) with no deadlock.
 * Evidence: `docs/design/evidence/phase1_picking.png` is captured *after* the synthetic click; its viewport region is
-  pixel-identical to the pre-picking baseline capture.
+  pixel-identical to the pre-picking baseline capture. `docs/design/evidence/phase1_macos_metal_buddy.png` is the Metal
+  capture of the 32768-atom run (1280×800, device pixel ratio 1).
 
 ### 3.5 Cross-backend results
 
