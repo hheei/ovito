@@ -53,7 +53,7 @@ Phase 0 expands these rows against the classic frontend for the same build confi
 | Workflow | Delivery phase | Minimum acceptance evidence |
 | :--- | :--- | :--- |
 | Viewport rendering and lifecycle | 1, integrated in 2 | Four viewports, picking, resize/HiDPI, hide/show, invalidation/recreation, and teardown pass on target backends. |
-| Launch, basic import, and task states | 2 | Both launch modes work; a real trajectory loads; progress, failure, and supported cancellation remain responsive. |
+| Launch, basic import, and task states | 2 | `ovito`, `ovito --nogui` and `ovito --gui=qml` all start correctly (and a `--gui` name that is not built fails loudly); a real multi-frame trajectory loads through the QML import path *and* from the command line; busy/progress/cancelled/error states are visible and responsive, and a cancelled import leaves no partial data set. |
 | Session save/load and close | 3 | Save/reopen preserves scene state; modified-session close offers save/discard/cancel without losing changes on cancellation or save failure. |
 | Pipeline edits and selection | 3–4 | Insert/toggle/reorder/delete, group/shared-object behavior, and selection updates agree with classic; invalid drops leave the pipeline unchanged. |
 | Parameter edits and undo/redo | 3–4, specialized in 6 | One gesture is one undo step; cancellation restores values; units, bounds, controllers, and read-only state are respected. |
@@ -137,25 +137,101 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   assertions enabled. The frontend was exercised with Qt Quick **OpenGL** and **Vulkan** on Linux x86_64 and with
   **Metal** on macOS ARM64, and its frame times (512–262144 atoms) were compared against the classic frontend on macOS.
   Results, evidence and the exact reproduction commands are recorded in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md); the
-  environment recipes and testing traps are collected in [UI_TEST_ENV.md](UI_TEST_ENV.md). Still open: D3D12/Windows (no
-  such machine is available), Qt Quick Vulkan on a hardware driver (Xvfb lacks DRI3), and mixed-DPI multi-monitor setups.
+  environment recipes and testing traps are collected in [UI_TEST_ENV.md](UI_TEST_ENV.md). Still open: the **D3D12 runtime
+  path** (the CI runner now *builds* the frontend on Windows x86_64, but the smoke test has not run there yet), Qt Quick
+  Vulkan on a hardware driver (Xvfb lacks DRI3), and mixed-DPI multi-monitor setups.
 
 ---
 
-### Phase 2: Minimal QML Shell & Build Scaffolding
-- **Objective**: Integrate QML build pipeline cleanly into CMake and create the basic window frame.
+### Phase 2: Frontend Selection, Workbench Shell & Import Path
+- **Objective**: Turn the Phase 1 prototype into a selectable, self-contained frontend: `ovito --gui=qml` starts the QML
+  workbench, a real trajectory can be imported through it, and nothing in the QML module depends on `gui/desktop`.
+- **Carried in from Phase 1** (already in the tree, listed so the phase is not planned twice):
+  1. The CMake option `OVITO_BUILD_QML_FRONTEND` (default `OFF`) and the `src/ovito/gui/qml` module (`GuiQml`, a standard
+     plugin that depends on `GuiBase` only).
+  2. The viewport path — `QuickViewportItem` + `QuickViewportWindow` (a `BaseViewportWindow`) + `QuickViewportRenderer`
+     (a `QQuickRhiItemRenderer` and `RendererService`) — including asynchronous picking, the verification harness
+     (`OvitoQmlSpike`) and the CI smoke test on four platforms.
+  3. A prototype shell: `QmlMainWindowUI`, `QmlViewportController`, `WorkbenchWindow.qml`, `Theme.qml`, loaded from a
+     hand-written `.qrc`, plus a spike-only application class (`QmlFrontendApplication` in `spike/Main.cpp`) that this
+     phase replaces with the real entry point.
 - **Deliverables**:
-  1. CMake option `OVITO_BUILD_QML_FRONTEND=ON`.
-  2. CLI runtime flag: `ovito --gui=qml` launches QML shell; standard `ovito` launches classic QtWidgets.
-  3. Base directory: `src/ovito/gui/qml/`.
-  4. `WorkbenchWindow.qml` reproducing classic OVITO spatial layout (central viewport area + right-hand command panel).
-  5. `Theme.qml` encoding VS Code Dark/Light Modern palettes.
-  6. Select the frontend in application startup without making the QML module depend on `gui/desktop`; define behavior when the QML build option is disabled. Load and package QML resources through the existing build/deployment flow.
-  7. Basic local-file/trajectory import through shared backend services, with empty, busy, error, and cancellation states. Importing a real dataset must be possible before building editors.
-  8. Resizable panels, an initial minimum window size, keyboard focus order, and accessible control names following design section 3.2.
-- **Exit Gate**: With QML enabled, both `ovito` and `ovito --gui=qml` launch and a real trajectory renders in the QML shell. With QML disabled, classic and headless builds still work. Verify both themes, resizing, import failure/cancellation, and packaged QML loading on target platforms.
-
----
+  1. **Frontend selection seam (`--gui=<name>`).** Add a frontend registry to `gui/base` that maps a name to the code that
+     builds a workbench, and let `GuiApplication` look up the selected frontend instead of constructing `MainWindowUI`
+     directly (the current hard-coded construction in `startupApplication()`). The classic frontend registers
+     `qt-widgets` and stays the default, so `ovito` behaves exactly as before; the QML module registers `qml` from its own
+     `ApplicationService::applicationInitializing()`, which is the documented plugin hook for exactly this (the class
+     registry instantiates services after plugin loading and before `startupApplication()`). `--gui` is registered by
+     `GuiApplication::registerCommandLineParameters()`; an unknown name, or `--gui=qml` in a build without
+     `OVITO_BUILD_QML_FRONTEND`, prints the available frontends and exits non-zero. A silent fallback to the classic UI is
+     forbidden: it would let an automated run pass while testing the wrong frontend.
+  2. **Remove the remaining desktop coupling from application startup.** `GuiApplication::initializeUserInterface()` is
+     already written against `UserInterface&` for session loading, but reaches `MainWindowUI::importFiles()` and
+     `openWorkingDirectory()` through two `dynamic_object_cast<MainWindowUI>` sites. Introduce a small shared interface in
+     `gui/base` for command-line file/directory import and for status/error/progress reporting, implement it in both
+     workbenches, and keep everything widget-specific (`FileImporterEditor`, the import-mode dialog, recent-directory
+     lists, save dialogs) in `gui/desktop`.
+  3. **Extract the widget-free part of `MainWindowUI` into `gui/base`** — import orchestration over
+     `FileImporter`/`FileImporterClass`, status-bar message plumbing, error reporting, task-progress bookkeeping,
+     `checkLoadedDataset`, auto-key mode — so both frontends share one implementation and differ only in presentation.
+     Session loading at startup (`.ovito` argument, `defaults.ovito`, empty fallback dataset) already lives in the
+     frontend-neutral part of `GuiApplication::initializeUserInterface()` and must keep working unchanged; session
+     *saving*, modified-close handling and QML dialogs remain Phase 3.
+  4. **Workbench shell.** `WorkbenchWindow.qml` reproducing the classic spatial layout: a viewport area built
+     **recursively from `ViewportConfiguration::layoutRootCell()`** (the node's `splitDirection` and `childWeights` drive
+     draggable splitters that write back through the undoable transaction path, and `maximizedViewport` drives maximize),
+     the right-hand command panel (placeholders here, populated in Phases 3–4), a status bar fed by
+     `showStatusBarMessage()`/`clearStatusBarMessage()`, a window title derived from the data set or session file, an
+     initial and a minimum window size, a documented keyboard focus order and accessible names for the shell controls as
+     specified in design section 3.2, and both themes with the system color scheme followed where the platform provides
+     one. This closes decision D14, which Phase 1 explicitly deferred (cell-derived pane placement, maximize state).
+  5. **Import path with real states.** A QML import entry point (file dialog plus drag & drop on the window) that drives
+     the shared import service, with empty, busy, cancelling, cancelled and error states wired through
+     `taskProgressBegin()/taskProgressChanged()/taskProgressEnd()`, `reportError()` and `showMessageBox()`, correct
+     behavior for an unsupported or misdetected format, and the command-line import path using the *same* code. A
+     cancelled import must leave no half-imported data set behind, and the UI must stay responsive while a large file
+     imports (this is the Phase 2 slice of the "launch, basic import, and task states" row of the parity matrix).
+  6. **Resource and packaging flow.** Move from the prototype's hand-written `qml.qrc` to the project's normal resource
+     registration, keeping the deliberate decision *not* to use `qt_add_qml_module` (it conflicts with the
+     `OVITO_STANDARD_PLUGIN` target and library naming recorded in the Phase 1 report), and verify that QML resources load
+     from the deployed layout — the macOS bundle and the Windows plugin directory, not only from the build tree. With
+     `OVITO_BUILD_QML_FRONTEND=OFF` the build must contain no QML sources and no QML-linked target.
+  7. **Phase 1 leftovers that a real shell needs** (each already recorded in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md)):
+     **O4** one `RendererService` per window instead of one per viewport item (the default threaded render loop measured
+     ~2× the frame time of the `basic` loop on Linux); **O7/O11** a shared core `PickingBufferTarget` and one shared
+     frame-graph render-pass helper over `RendererService*` (the QML renderer currently replays ~100 lines of
+     `RenderThread::renderFrameGraph()` and duplicates the pick radius of 4); **O8** a helper that wraps QML-facing calls
+     in a `Task::Scope` bound to the `UserInterface` (Qt event handlers run in a task without a UI — defect F4 in the
+     Phase 1 report); **D14** as described above. **O1** (the `ovitoheadless` QPA plugin does not exist in this tree, which
+     is why headless Linux verification needs `xvfb` plus `QT_QPA_PLATFORM=xcb`) and **O2** (the Vulkan
+     `VUID-VkApplicationInfo-apiVersion` validation error in `RenderThread`) must be either fixed or explicitly documented
+     as constraints in this phase — an undocumented environment requirement is a support burden.
+  8. **Verification harness for the shell.** `OvitoQmlSpike` stays the viewport and picking regression net (CI, four
+     platforms). The shell gets a smoke check that needs no product-side test API: launch `ovito --gui=qml <file>` under
+     `xvfb` (Linux) or the runner's own session (macOS/Windows) and require the process to *still be running* after N
+     seconds — a crash or a failed startup exits differently, so a "stays up" assertion catches startup regressions
+     without inventing a test-only command line option. macOS has no `timeout`, so that check uses a background process
+     plus `sleep`/`kill` and closes the window afterwards (testing rules in [UI_TEST_ENV.md](UI_TEST_ENV.md)).
+- **Non-goals of this phase** (so the shell does not swallow the later ones): pipeline and property models, the pipeline
+  view and editors, timeline and animation, render settings and output, data inspector, session saving, command palette.
+- **Exit Gate**: With `OVITO_BUILD_QML_FRONTEND=ON`, `ovito --gui=qml` starts the QML workbench and loads a real
+  trajectory rendered in its viewports, while plain `ovito` and `ovito --nogui` behave as before and
+  `OVITO_BUILD_QML_FRONTEND=OFF` still builds classic and headless. Verify: window and viewport layout derived from the
+  session's layout cell (including maximize and a dragged splitter that undoes), import of a real multi-frame trajectory
+  including failure and cancellation, both themes, resizing and minimum size, keyboard focus order, and QML resource
+  loading from the deployed layout. Record the platform results (Linux, macOS, Windows) in the parity matrix and the
+  environment notes; D3D12 runtime evidence is still outstanding from Phase 1 and must be recorded as such rather than
+  silently assumed.
+- **Risks**:
+  * Two workbench implementations can drift apart. Mitigation: the shared `gui/base` extraction of deliverables 2–3 is
+    mandatory before the QML shell grows, and the classic frontend must keep passing the existing checks after each step.
+  * Frontend selection can break console/headless modes, session loading or `--noviewports`. Mitigation: the selection
+    happens in `startupApplication()` only, and the exit gate re-checks all launch modes.
+  * Qt Quick Controls styling differs from the classic Fusion look. Decision needed in this phase: use one
+    `QtQuick.Controls` style plus the QML `Theme.qml` palette (recommended, matches the design section on themes) and
+    follow the platform color scheme, rather than trying to imitate the widget style per platform.
+  * Packaging QML resources for three platforms has already produced one gap (the macOS `@rpath` issue, O9). Mitigation:
+    verify from the deployed layout in this phase, not only from the build tree.
 
 ### Phase 3: Presentation Models & Command Layer
 - **Objective**: Expose shared state and editing operations with explicit lifecycle and undo semantics.
@@ -246,4 +322,14 @@ These lists identify starting controls, not complete editor specifications. Incl
 
 ## 5. Immediate Next Step
 
-Start **Phase 0** by recording shared-model reuse decisions, the expanded parity matrix, and the initial parameter coverage inventory. Then run **Phase 1** in an isolated prototype branch using the composition architecture from design section 4. Resolve and document the rendering handoff and lifecycle before production integration. This roadmap describes planned work; no phase is marked complete by this document revision.
+**Phase 2**, scoped above: first the frontend-selection seam and the `gui/base` extractions (deliverables 1–3), because
+every later step depends on a real entry point and on a workbench that is not entangled with `gui/desktop`; then the shell,
+the import path and the packaging work. Two items from the Phase 0 audit remain open and should be finished alongside,
+because they are cheap while the relevant code is being touched: the **action/editor inventory and the expanded parity
+matrix** (Phase 0 deliverables 1, 3 and 4, still pending) and the **D3D12 runtime evidence** that the Phase 1 gate left
+open.
+
+Phase 1 is closed to the extent this environment allows: the rendering bridge, the picking path and the performance
+baseline are documented in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md), and the architecture status stays **proposed** only
+because of the outstanding D3D12 runtime result. This roadmap describes planned work; no phase is marked complete by this
+document revision.
