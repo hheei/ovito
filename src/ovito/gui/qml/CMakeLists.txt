@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 # Find the required Qt modules for the Qt Quick / QML frontend.
-OVITO_FIND_PACKAGE(Qt6 ${OVITO_MINIMUM_REQUIRED_QT_VERSION} COMPONENTS Quick REQUIRED)
+OVITO_FIND_PACKAGE(Qt6 ${OVITO_MINIMUM_REQUIRED_QT_VERSION} COMPONENTS Quick QuickControls2 REQUIRED)
 
 # Define plugin module.
 OVITO_STANDARD_PLUGIN(GuiQml
@@ -12,6 +12,7 @@ OVITO_STANDARD_PLUGIN(GuiQml
         mainwin/QmlMainWindowUI.cpp
         mainwin/QmlViewportController.cpp
         mainwin/QmlViewportLayout.cpp
+        mainwin/QmlWorkbenchController.cpp
         viewport/QuickViewportWindow.cpp
         viewport/QuickViewportItem.cpp
         viewport/QuickViewportRenderer.cpp
@@ -22,7 +23,9 @@ OVITO_STANDARD_PLUGIN(GuiQml
         QmlFrontend.h
 )
 
-TARGET_LINK_LIBRARIES(GuiQml PUBLIC Qt6::Quick)
+# Qt6::QuickControls2 is what makes the shell's controls (buttons, progress bar, dialogs) available; Qt6::QuickDialogs is
+# the file selection dialog. The QML modules themselves are loaded by the QML engine at run time.
+TARGET_LINK_LIBRARIES(GuiQml PUBLIC Qt6::Quick Qt6::QuickControls2)
 
 # Build the Phase 1 prototype application, which renders an OVITO scene inside a Qt Quick window.
 # This is a technical spike; it is not the final frontend entry point (see docs/design/UI_PLAN.md).

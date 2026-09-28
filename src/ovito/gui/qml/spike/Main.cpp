@@ -18,13 +18,19 @@
 #include <ovito/core/app/StandaloneApplication.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
+#include <ovito/core/dataset/io/FileSource.h>
+#include <ovito/core/dataset/scene/Pipeline.h>
+#include <ovito/core/dataset/animation/AnimationSettings.h>
 #include <ovito/core/dataset/scene/Scene.h>
 #include <ovito/core/dataset/scene/SelectionSet.h>
 #include <ovito/core/viewport/Viewport.h>
 #include <ovito/core/app/Application.h>
 #include <ovito/core/utilities/Exception.h>
 
+#include <QDir>
+#include <QFile>
 #include <QMouseEvent>
+#include <QTextStream>
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <ovito/core/app/undo/UndoStack.h>
@@ -429,6 +435,239 @@ QString layoutSnapshot(QmlViewportLayout* layout, QString* visiblePanes = nullpt
     return parts.join(QLatin1Char(' '));
 }
 
+/// Writes a simple-cubic lattice to an XYZ file and returns the path of the file.
+///
+/// The comment line must not contain the word "atoms": OVITO's importer autodetection then hands the file to the
+/// LAMMPS data importer, which parses an empty scene out of it (see docs/design/UI_TEST_ENV.md).
+QString writeLatticeFile(const QString& path, int atomsPerEdge, double latticeConstant)
+{
+    QFile file(path);
+    if(!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        reportVerificationFailure(QStringLiteral("cannot write the data file %1").arg(path));
+        return {};
+    }
+    QTextStream stream(&file);
+    stream << atomsPerEdge * atomsPerEdge * atomsPerEdge << "\n";
+    stream << "simple cubic lattice, a=" << latticeConstant << "\n";
+    for(int i = 0; i < atomsPerEdge; i++) {
+        for(int j = 0; j < atomsPerEdge; j++) {
+            for(int k = 0; k < atomsPerEdge; k++)
+                stream << "Ar " << i * latticeConstant << ' ' << j * latticeConstant << ' ' << k * latticeConstant << "\n";
+        }
+    }
+    return path;
+}
+
+/// Writes a VASP POSCAR file with the given number of atoms and returns the path of the file.
+///
+/// Unlike the XYZ importer, the VASP importer loads the data while the file is being imported
+/// (POSCARImporter::setupPipeline() evaluates the pipeline), so importing this file makes the import operation long
+/// enough to be cancelled - which is what the cancellation check needs.
+QString writePoscarFile(const QString& path, int atomsPerEdge)
+{
+    QFile file(path);
+    if(!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        reportVerificationFailure(QStringLiteral("cannot write the data file %1").arg(path));
+        return {};
+    }
+    const double latticeConstant = 50.0;
+    QTextStream stream(&file);
+    stream << "simple cubic lattice\n";
+    stream << "1.0\n";
+    stream << latticeConstant << " 0 0\n0 " << latticeConstant << " 0\n0 0 " << latticeConstant << "\n";
+    stream << "Ar\n";
+    stream << atomsPerEdge * atomsPerEdge * atomsPerEdge << "\n";
+    stream << "Direct\n";
+    for(int i = 0; i < atomsPerEdge; i++) {
+        for(int j = 0; j < atomsPerEdge; j++) {
+            for(int k = 0; k < atomsPerEdge; k++)
+                stream << (i + 0.5) / atomsPerEdge << ' ' << (j + 0.5) / atomsPerEdge << ' ' << (k + 0.5) / atomsPerEdge << "\n";
+        }
+    }
+    return path;
+}
+
+/// Returns the number of objects in the scene, or -1 if there is no scene.
+int sceneObjectCount(QmlMainWindowUI* ui)
+{
+    const Scene* scene = ui->datasetContainer().activeScene();
+    return scene ? static_cast<int>(scene->children().size()) : -1;
+}
+
+/// Returns whether any pipeline of the scene reads the given file, i.e. whether the import of that file left a
+/// pipeline behind.
+bool sceneReadsFile(QmlMainWindowUI* ui, const QString& fileName)
+{
+    const Scene* scene = ui->datasetContainer().activeScene();
+    if(!scene)
+        return false;
+    for(const SceneNode* node : scene->children()) {
+        const Pipeline* pipeline = node->pipeline();
+        const FileSource* fileSource = pipeline ? dynamic_object_cast<FileSource>(pipeline->source()) : nullptr;
+        if(!fileSource)
+            continue;
+        for(const QUrl& url : fileSource->sourceUrls()) {
+            if(QFileInfo(url.toLocalFile()).fileName() == fileName)
+                return true;
+        }
+    }
+    return false;
+}
+
+/// Returns the file source of the first pipeline of the scene, or null.
+const FileSource* firstFileSource(QmlMainWindowUI* ui)
+{
+    const Scene* scene = ui->datasetContainer().activeScene();
+    if(!scene || scene->children().size() != 1)
+        return nullptr;
+    const Pipeline* pipeline = scene->children().front()->pipeline();
+    return pipeline ? dynamic_object_cast<FileSource>(pipeline->source()) : nullptr;
+}
+
+/// Step 3 of the import check: imports a large file and cancels the operation as soon as it is running, verifying that
+/// the shell reports the cancellation and that the data set contains no partially loaded pipeline afterwards.
+void verifyCancelledImport(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    QmlWorkbenchController* controller = ui->workbenchController();
+    const int objectsBefore = sceneObjectCount(ui);
+
+    const QString poscarFile = QDir::tempPath() + QStringLiteral("/ovito-qml-import-test/large.poscar");
+    if(writePoscarFile(poscarFile, 80).isEmpty()) {
+        continuation();
+        return;
+    }
+
+    // The import blocks the main thread while it loads the data, but it keeps processing events, so the cancellation is
+    // requested from a timer that fires while the import is running.
+    auto* timer = new QTimer(ui->view());
+    QObject::connect(timer, &QTimer::timeout, controller, [controller, timer]() {
+        if(controller->cancellable()) {
+            timer->stop();
+            qInfo() << "IMPORT_TEST requesting the cancellation of the running import";
+            controller->cancelCurrentOperation();
+        }
+    });
+    timer->start(20);
+
+    QElapsedTimer elapsed;
+    elapsed.start();
+    controller->importFiles(QVariantList{ QUrl::fromLocalFile(poscarFile) });
+    const qint64 duration = elapsed.elapsed();
+    timer->stop();
+    timer->deleteLater();
+
+    qInfo() << "IMPORT_TEST canceled import: took" << duration << "ms," << sceneObjectCount(ui) << "object(s) in the scene"
+            << "(was" << objectsBefore << "before), status" << controller->statusMessage();
+    // The cancelled import must not leave its own pipeline behind. (A ResetScene import deletes the previous objects
+    // before it creates the new pipeline, so they are gone by then - the same order of events the classic frontend's
+    // import follows; what matters is that no pipeline with a data source that was never filled remains.)
+    if(sceneReadsFile(ui, QFileInfo(poscarFile).fileName()))
+        reportVerificationFailure(QStringLiteral("the canceled import left a partially loaded pipeline in the scene"));
+    if(!controller->statusMessage().startsWith(QStringLiteral("Import cancelled")))
+        reportVerificationFailure(QStringLiteral("the canceled import did not report the cancelled state (status: %1)").arg(controller->statusMessage()));
+    continuation();
+}
+
+/// Step 2 of the import check: imports a file of an unsupported format, which must report an error and leave the scene
+/// alone, and answers the error dialog the shell shows for it.
+///
+/// The frontend presents that dialog from the event loop and waits for it, so the run continues only after the dialog
+/// has been answered - which is exactly what this verifies.
+void verifyUnsupportedFileImport(QmlMainWindowUI* ui, const QString& directory, std::function<void()> continuation)
+{
+    QmlWorkbenchController* controller = ui->workbenchController();
+    const QString unsupportedFile = directory + QStringLiteral("/unsupported.dat");
+    {
+        QFile file(unsupportedFile);
+        if(!file.open(QIODevice::WriteOnly)) {
+            reportVerificationFailure(QStringLiteral("cannot write the unsupported data file"));
+            continuation();
+            return;
+        }
+        file.write(QByteArray(4096, '\x01'));
+    }
+
+    const int objectsBefore = sceneObjectCount(ui);
+    controller->importFiles(QVariantList{ QUrl::fromLocalFile(unsupportedFile) });
+    qInfo() << "IMPORT_TEST unsupported format:" << sceneObjectCount(ui) << "object(s) in the scene, status"
+            << controller->statusMessage();
+    if(sceneObjectCount(ui) != objectsBefore)
+        reportVerificationFailure(QStringLiteral("the failed import changed the scene"));
+    if(controller->statusMessage().isEmpty())
+        reportVerificationFailure(QStringLiteral("the failed import did not report anything"));
+
+    pollUntil(ui, 50, 10000, [controller]() { return controller->messageBoxVisible(); }, [ui, controller, continuation](bool appeared) {
+        if(appeared) {
+            qInfo() << "IMPORT_TEST error dialog:" << controller->messageBoxTitle() << "/"
+                    << controller->messageBoxText().split(QLatin1Char('\n')).first();
+            controller->answerMessageBox(static_cast<int>(UserInterface::MessageBoxButton::Ok));
+        }
+        else {
+            reportVerificationFailure(QStringLiteral("the failed import did not show an error dialog"));
+        }
+        verifyCancelledImport(ui, std::move(continuation));
+    });
+}
+
+/// Verifies the import path of the shell: a multi-frame trajectory becomes one pipeline spanning three animation
+/// frames, a file of an unsupported format reports an error without changing the scene, and a canceled import leaves no
+/// partially loaded pipeline behind.
+void runImportTest(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    QmlWorkbenchController* controller = ui->workbenchController();
+    if(controller == nullptr) {
+        reportVerificationFailure(QStringLiteral("the workbench has no shell controller"));
+        continuation();
+        return;
+    }
+
+    const QString directory = QDir::tempPath() + QStringLiteral("/ovito-qml-import-test");
+    QDir().mkpath(directory);
+
+    // ---------------------------------------------------------------------------------------------
+    // 1. A trajectory of three files becomes a single pipeline spanning three animation frames.
+    // ---------------------------------------------------------------------------------------------
+    QVariantList trajectoryUrls;
+    for(int frame = 0; frame < 3; frame++) {
+        const QString path = writeLatticeFile(QStringLiteral("%1/frame_%2.xyz").arg(directory).arg(frame), 4, 3.6 + 0.05 * frame);
+        if(path.isEmpty()) {
+            continuation();
+            return;
+        }
+        trajectoryUrls.push_back(QUrl::fromLocalFile(path));
+    }
+
+    const int objectsBefore = sceneObjectCount(ui);
+    const bool hadDataBefore = controller->hasData();
+    qInfo() << "IMPORT_TEST before:" << objectsBefore << "object(s) in the scene, hasData" << hadDataBefore;
+    controller->importFiles(trajectoryUrls);
+
+    // The importer sets up a file source and returns; the list of frames of a multi-file trajectory is discovered when
+    // the pipeline is evaluated for the first time, which the viewports trigger. So the result of the import has to be
+    // polled for instead of being read right away.
+    pollUntil(ui, 100, 20000, [ui]() {
+        const FileSource* fileSource = firstFileSource(ui);
+        return fileSource && fileSource->numberOfSourceFrames() == 3;
+    }, [ui, controller, directory, continuation](bool ready) {
+        const FileSource* fileSource = firstFileSource(ui);
+        const int frameCount = fileSource ? fileSource->numberOfSourceFrames() : -1;
+        const Scene* scene = ui->datasetContainer().activeScene();
+        const AnimationSettings* animation = scene ? scene->animationSettings() : nullptr;
+        qInfo() << "IMPORT_TEST trajectory:" << sceneObjectCount(ui) << "object(s) in the scene, first pipeline has"
+                << frameCount << "frame(s), animation interval"
+                << (animation ? animation->firstFrame() : -1) << ".." << (animation ? animation->lastFrame() : -1);
+        if(frameCount != 3)
+            reportVerificationFailure(QStringLiteral("importing three files did not produce one pipeline with three animation frames (got %1)").arg(frameCount));
+        if(animation && animation->numberOfFrames() != 3)
+            reportVerificationFailure(QStringLiteral("the animation interval does not span the three imported frames"));
+        if(!controller->hasData())
+            reportVerificationFailure(QStringLiteral("the empty state was not left after the import"));
+
+        verifyUnsupportedFileImport(ui, directory, std::move(continuation));
+    });
+    return;
+}
+
 /// Verifies the viewport area of the workbench shell: the panes come from the layout tree of the dataset, dragging a
 /// handle resizes them through the undo system, and maximizing a viewport keeps exactly one pane visible.
 void runLayoutTest(QmlMainWindowUI* ui, std::function<void()> continuation)
@@ -651,6 +890,8 @@ protected:
             QStringLiteral("WxH")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-layout-check"),
             tr("Verify the viewport layout: pane geometry, undoable splitter drags and maximizing a viewport.")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-import-check"),
+            tr("Verify the import path of the shell: a multi-frame trajectory, an unsupported file and a cancelled import.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-hide-show"),
             tr("Hide the viewport items for a moment and show them again, verifying that rendering and picking recover.")));
     }
@@ -733,6 +974,7 @@ protected:
         const int frameStatsDuration = cmdLineParser().value(QStringLiteral("qml-frame-stats")).toInt();
         const bool hideShowTest = cmdLineParser().isSet(QStringLiteral("qml-hide-show"));
         const bool layoutCheck = cmdLineParser().isSet(QStringLiteral("qml-layout-check"));
+        const bool importCheck = cmdLineParser().isSet(QStringLiteral("qml-import-check"));
         const int lifecycleCycles = cmdLineParser().value(QStringLiteral("qml-lifecycle-cycles")).toInt();
         QSize resizeSize;
         const QStringList resizeArguments = cmdLineParser().value(QStringLiteral("qml-resize")).split(QLatin1Char('x'));
@@ -745,7 +987,7 @@ protected:
         const int holdMs = cmdLineParser().value(QStringLiteral("qml-hold-ms")).toInt();
 
         // Interactive mode: without a verification option, keep the window open.
-        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck)
+        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck)
             return;
 
         int delay = cmdLineParser().value(QStringLiteral("qml-startup-delay")).toInt();
@@ -817,6 +1059,12 @@ protected:
         if(verifyPicking) {
             _verificationSteps.push_back([ui = mainWinUI, pickPos = *pickPosition](std::function<void()> next) {
                 runPickTest(ui, pickPos, std::move(next));
+            });
+        }
+        if(importCheck) {
+            // Last, because it imports data sets of its own.
+            _verificationSteps.push_back([ui = mainWinUI](std::function<void()> next) {
+                runImportTest(ui, std::move(next));
             });
         }
 

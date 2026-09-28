@@ -4,6 +4,7 @@
 #include <ovito/gui/desktop/GUI.h>
 #include <ovito/gui/desktop/app/QtWidgetsFrontend.h>
 #include <ovito/gui/desktop/mainwin/MainWindow.h>
+#include <ovito/gui/desktop/mainwin/MainWindowUI.h>
 #include <ovito/gui/desktop/mainwin/OvitoStyle.h>
 #include <ovito/gui/desktop/mainwin/RecentFilesList.h>
 #include <ovito/gui/desktop/dialogs/MessageDialog.h>
@@ -366,6 +367,26 @@ void GuiApplication::reportError(const Exception& ex, bool blocking)
     if(Application::runMode() == Application::AppMode) {
         // Require a Qt event loop to show message box.
         createQtApplication(true);
+
+        // If the active frontend is not the classic main window, let it show the message itself: a frontend that
+        // presents its own dialogs must not be interrupted by a widget dialog it did not ask for. The classic main
+        // window keeps the dialog below, which shows the message in the style of the widgets frontend.
+        if(std::shared_ptr<UserInterface> userInterface = this_task::get() ? this_task::get()->userInterface() : nullptr) {
+            if(!dynamic_object_cast<MainWindowUI>(userInterface.get())) {
+                QString detailText;
+                for(int i = 1; i < ex.messages().size(); i++)
+                    detailText += ex.messages()[i] + QStringLiteral("\n");
+                if(!ex.traceback().isEmpty()) {
+                    if(!detailText.isEmpty())
+                        detailText += QChar('\n');
+                    detailText += ex.traceback();
+                }
+                userInterface->showMessageBox(MessageBoxIcon::CriticalIcon,
+                    tr("Error - %1").arg(applicationName()), ex.message(),
+                    MessageBoxButton::Ok, MessageBoxButton::Ok, detailText);
+                return;
+            }
+        }
 
         MessageDialog msgbox;
         msgbox.setWindowTitle(tr("Error - %1").arg(applicationName()));

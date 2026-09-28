@@ -7,6 +7,7 @@
 #include <ovito/gui/qml/QmlFrontend.h>
 #include <ovito/gui/qml/mainwin/QmlViewportController.h>
 #include <ovito/gui/qml/mainwin/QmlViewportLayout.h>
+#include <ovito/gui/qml/mainwin/QmlWorkbenchController.h>
 #include <ovito/gui/base/app/WorkbenchUI.h>
 
 namespace Ovito {
@@ -19,7 +20,8 @@ namespace Ovito {
  * are provided by the WorkbenchUI base class (see gui/base).
  *
  * Note that UserInterface is not a QObject, so the parts of this class that need to be reachable from QML are provided
- * by the separate QmlViewportController object.
+ * by the separate QmlWorkbenchController (the shell: status line, task progress, message dialogs, import commands),
+ * QmlViewportController (the viewport items and the undo stack) and QmlViewportLayout (the pane layout) objects.
  */
 class OVITO_GUIQML_EXPORT QmlMainWindowUI : public WorkbenchUI
 {
@@ -39,14 +41,14 @@ public:
     /// Returns the Qt Quick window displaying the workbench.
     QQuickView* view() const { return _view; }
 
-    /// Returns the object that exposes the frontend to the QML scene.
+    /// Returns the object that exposes the shell of the frontend to the QML scene.
+    QmlWorkbenchController* workbenchController() const { return _workbenchController; }
+
+    /// Returns the object that exposes the viewports of the frontend to the QML scene.
     QmlViewportController* qmlController() const { return _qmlController; }
 
     /// Returns the model that lays the viewport panes of the workbench out.
     QmlViewportLayout* viewportLayout() const { return _viewportLayout; }
-
-    /// Returns the status message currently displayed in the workbench window.
-    const QString& statusMessage() const { return _statusMessage; }
 
     /// Displays a message string in the window's status bar.
     void showStatusBarMessage(const QString& message, int timeout = 0) override;
@@ -70,26 +72,38 @@ protected:
     /// Creates the action manager of this workbench.
     virtual ActionManager* createActionManager(QObject* parent) override;
 
-    /// Shows the error message in the status line of the workbench window.
+    /// Shows the error message in a message dialog, and its first line in the status bar of the workbench window.
     /// The message has already been written to the terminal by WorkbenchUI::reportError().
     virtual void displayErrorMessage(const Exception& ex, bool blocking) override;
+
+    /// Shows the file selection dialog of the QML scene.
+    virtual void openImportDialog(const QString& directoryPath) override;
+
+    /// Runs the import operation while keeping track of the task, so that the user can cancel it.
+    virtual void runFileImport(FileImporter& importer, Scene* scene, std::vector<std::pair<QUrl, OORef<FileImporter>>> urlImporters, FileImporter::ImportMode importMode) override;
+
+    /// Forwards the changed progress state of the running tasks to the QML scene.
+    virtual void progressTasksChanged() override;
 
 private:
 
     /// Creates the default dataset if no dataset has been loaded yet.
     void initializeDataset();
 
+    /// Shows the message of an exception in a message dialog of the QML scene.
+    void showErrorMessage(const Exception& ex);
+
     /// The Qt Quick window displaying the workbench UI.
     QPointer<QQuickView> _view;
 
-    /// The object exposing this frontend to the QML scene.
+    /// The object exposing the shell of this frontend to the QML scene.
+    QPointer<QmlWorkbenchController> _workbenchController;
+
+    /// The object exposing the viewports of this frontend to the QML scene.
     QPointer<QmlViewportController> _qmlController;
 
     /// The layout of the viewport panes displayed by this window.
     QPointer<QmlViewportLayout> _viewportLayout;
-
-    /// The message currently shown in the status line.
-    QString _statusMessage;
 };
 
 }   // End of namespace

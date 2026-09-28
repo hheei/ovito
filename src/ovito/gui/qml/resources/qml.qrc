@@ -3,8 +3,10 @@
 <qresource prefix="/ovito/gui/qml">
 	<file>Theme.qml</file>
 	<file>WorkbenchWindow.qml</file>
-	<file>ViewportPane.qml</file>
-	<file>ViewportSplitter.qml</file>
+	<file>WorkbenchPane.qml</file>
+	<file>WorkbenchSplitter.qml</file>
+	<file>WorkbenchStatusBar.qml</file>
+	<file>WorkbenchMessageBox.qml</file>
 </qresource>
 
 </RCC>

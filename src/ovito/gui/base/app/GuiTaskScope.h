@@ -30,6 +30,10 @@ namespace Ovito {
  * The scope is bound to the task that is current when the callback runs, if there is one, so nesting it inside an
  * operation that already has a context is harmless.
  *
+ * The task of the scope can be handed to a cancellation UI (see task()), so that the user can abort the operation while
+ * it is running - which is only useful if the operation is long enough to be interrupted, so it is up to the caller to
+ * offer that.
+ *
  * See item O8 in docs/design/UI_PHASE0_AUDIT.md.
  */
 class OVITO_GUIBASE_EXPORT GuiTaskScope
@@ -39,6 +43,9 @@ public:
     /// Opens a task context for the given user interface.
     explicit GuiTaskScope(UserInterface& userInterface, bool isInteractive = true) :
         _operation(userInterface, MainThreadOperation::Bound, isInteractive) {}
+
+    /// Returns the task that provides the context. Cancelling it cancels the work the callback started.
+    const TaskPtr& task() const { return _operation.task(); }
 
 private:
 

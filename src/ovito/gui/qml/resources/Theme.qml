@@ -3,23 +3,46 @@
 
 import QtQuick
 
-// Design tokens of the modern workbench UI.
-// See docs/design/UI_DESIGN.md section 7 for the rationale behind the individual values.
+// Design tokens of the QML workbench (see docs/design/UI_DESIGN.md section 7).
+//
+// The palette follows the color scheme of the operating system and falls back to the dark scheme, which is the one the
+// design is drawn for. Each component of the shell declares its own Theme instance, so that a component can be looked
+// at in isolation - the tokens are constants, not shared state.
 QtObject {
-    // Layout
+    id: theme
+
+    readonly property bool dark: Application.styleHints.colorScheme !== Qt.ColorScheme.Light
+
+    // Spacing and sizing.
     readonly property int spacing: 6
     readonly property int panelWidth: 264
+    readonly property int headerHeight: 34
     readonly property int fontSize: 12
 
-    // Surfaces
-    readonly property color surfaceWorkbench: "#181818"
-    readonly property color surfacePanel: "#1f1f1f"
-    readonly property color surfaceSelected: "#04395e"
-    readonly property color borderSubtle: "#2b2b2b"
-    readonly property color borderFocus: "#0078d4"
+    // Surfaces.
+    readonly property color surfaceWorkbench: dark ? "#181818" : "#f3f3f3"
+    readonly property color surfacePanel: dark ? "#1f1f1f" : "#ffffff"
+    readonly property color surfaceHeader: dark ? "#252526" : "#e8e8e8"
+    readonly property color surfaceHover: dark ? "#2a2d2e" : "#e0e0e0"
+    readonly property color surfaceSelected: dark ? "#04395e" : "#cce4f7"
+    readonly property color surfaceOverlay: dark ? "#000000cc" : "#ffffffcc"
 
-    // Content
-    readonly property color accentPrimary: "#0078d4"
-    readonly property color textPrimary: "#cccccc"
-    readonly property color textSecondary: "#858585"
+    // Lines.
+    readonly property color borderSubtle: dark ? "#2b2b2b" : "#d4d4d4"
+    readonly property color borderFocus: dark ? "#0078d4" : "#005a9e"
+    readonly property color accentPrimary: dark ? "#0078d4" : "#007acc"
+    readonly property color accentWarning: dark ? "#cca700" : "#b8860b"
+    readonly property color accentError: dark ? "#f14c4c" : "#c62828"
+
+    // Text.
+    readonly property color textPrimary: dark ? "#cccccc" : "#333333"
+    readonly property color textSecondary: dark ? "#858585" : "#6b6b6b"
+    readonly property color textDisabled: dark ? "#5a5a5a" : "#a0a0a0"
+    readonly property color textOnAccent: "#ffffff"
+
+    // Controls. Qt Quick Controls draws itself from the palette of the application; the shell overrides the entries it
+    // uses with the tokens above, so that the Controls look like the rest of the shell on every platform.
+    readonly property color controlBackground: dark ? "#333333" : "#fdfdfd"
+    readonly property color controlDisabledBackground: dark ? "#2a2a2a" : "#e8e8e8"
+    readonly property color controlBorder: dark ? "#3c3c3c" : "#c8c8c8"
 }

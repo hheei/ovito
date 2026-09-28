@@ -1,0 +1,231 @@
+// SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
+// SPDX-License-Identifier: GPL-3.0-only OR MIT
+
+#pragma once
+
+
+#include <ovito/gui/qml/QmlFrontend.h>
+#include <ovito/core/utilities/concurrent/Task.h>
+
+class QEventLoop;
+
+namespace Ovito {
+
+class QmlMainWindowUI;
+
+/**
+ * \brief Exposes the state and the commands of the workbench shell to the QML scene.
+ *
+ * This class is registered as the "workbenchController" context property of the QML engine. It carries everything the
+ * shell displays that is not a viewport: the status line, the progress of the running operations, the window title, the
+ * empty state of the scene, and the message dialog the frontend is waiting on.
+ *
+ * The commands it offers are the shell's entry points into the shared workbench code of gui/base: importing data files
+ * (from the file dialog, from a drop onto the window, or from the command line) and cancelling the import that is
+ * currently running. It deliberately does not own the presentation - the QML scene decides how the states it reports
+ * look - and it does not own the viewports, which belong to QmlViewportController.
+ */
+class OVITO_GUIQML_EXPORT QmlWorkbenchController : public QObject
+{
+    Q_OBJECT
+
+    /// The title of the workbench window, derived from the data set or session file.
+    Q_PROPERTY(QString windowTitle READ windowTitle NOTIFY windowTitleChanged)
+
+    /// The message displayed in the status line of the workbench window.
+    Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
+
+    /// Whether the current scene contains any data to display. False means the shell shows its empty state.
+    Q_PROPERTY(bool hasData READ hasData NOTIFY hasDataChanged)
+
+    /// Whether an operation that reports its progress is running.
+    Q_PROPERTY(bool busy READ busy NOTIFY taskStateChanged)
+
+    /// The description of the running operation, or an empty string if it does not describe itself.
+    Q_PROPERTY(QString taskText READ taskText NOTIFY taskStateChanged)
+
+    /// The progress value of the running operation, and its maximum. A maximum of zero means the progress is unknown.
+    Q_PROPERTY(int taskProgress READ taskProgress NOTIFY taskStateChanged)
+    Q_PROPERTY(int taskMaximum READ taskMaximum NOTIFY taskStateChanged)
+
+    /// Whether the operation that is currently running can be cancelled by the user.
+    Q_PROPERTY(bool cancellable READ cancellable NOTIFY taskStateChanged)
+
+    /// Whether the user has requested the cancellation of the running operation, i.e. the operation is winding down.
+    Q_PROPERTY(bool cancelling READ cancelling NOTIFY taskStateChanged)
+
+    /// The message dialog the frontend is waiting on. The scene displays it while it is visible and answers it by
+    /// calling answerMessageBox().
+    Q_PROPERTY(bool messageBoxVisible READ messageBoxVisible NOTIFY messageBoxChanged)
+    Q_PROPERTY(QString messageBoxTitle READ messageBoxTitle NOTIFY messageBoxChanged)
+    Q_PROPERTY(QString messageBoxText READ messageBoxText NOTIFY messageBoxChanged)
+    Q_PROPERTY(int messageBoxIcon READ messageBoxIcon NOTIFY messageBoxChanged)
+    Q_PROPERTY(QVariantList messageBoxButtons READ messageBoxButtons NOTIFY messageBoxChanged)
+
+    /// The button value the dialog answers with when it is dismissed instead of answered (the caller's default).
+    Q_PROPERTY(int defaultMessageBoxButton READ defaultMessageBoxButton NOTIFY messageBoxChanged)
+
+public:
+
+    /// Constructor.
+    explicit QmlWorkbenchController(QmlMainWindowUI& ui, QObject* parent = nullptr);
+
+    /// Returns the title of the workbench window.
+    QString windowTitle() const { return _windowTitle; }
+
+    /// Returns the message currently shown in the status line.
+    QString statusMessage() const { return _statusMessage; }
+
+    /// Replaces the message shown in the status line.
+    void setStatusMessage(const QString& message);
+
+    /// Returns whether the current scene contains data to display.
+    bool hasData() const { return _hasData; }
+
+    /// Returns whether an operation that reports its progress is running.
+    bool busy() const { return _busy; }
+
+    /// Returns the description of the running operation.
+    QString taskText() const { return _taskText; }
+
+    /// Returns the progress value of the running operation.
+    int taskProgress() const { return _taskProgress; }
+
+    /// Returns the progress maximum of the running operation, or zero if the progress is unknown.
+    int taskMaximum() const { return _taskMaximum; }
+
+    /// Returns whether the running operation can be cancelled by the user.
+    bool cancellable() const { return _cancellable; }
+
+    /// Returns whether the cancellation of the running operation has been requested.
+    bool cancelling() const { return _cancelling; }
+
+    /// Returns whether the frontend is waiting on a message dialog.
+    bool messageBoxVisible() const { return _messageBoxVisible; }
+
+    /// Returns the title of the message dialog.
+    QString messageBoxTitle() const { return _messageBoxTitle; }
+
+    /// Returns the text of the message dialog.
+    QString messageBoxText() const { return _messageBoxText; }
+
+    /// Returns the icon of the message dialog, as a UserInterface::MessageBoxIcon value.
+    int messageBoxIcon() const { return _messageBoxIcon; }
+
+    /// Returns the buttons of the message dialog as a list of { button, text, isDefault } maps.
+    QVariantList messageBoxButtons() const { return _messageBoxButtons; }
+
+    /// Returns the button value the message dialog answers with when it is dismissed instead of answered.
+    int defaultMessageBoxButton() const { return static_cast<int>(_messageBoxAnswer); }
+
+    /// Imports the given files (QUrl values) into the current dataset, reporting the states they produce.
+    Q_INVOKABLE void importFiles(const QVariantList& urls);
+
+    /// Asks the scene to open the file selection dialog, starting in the last used directory.
+    Q_INVOKABLE void showImportDialog();
+
+    /// Asks the scene to open the file selection dialog, starting in the given directory.
+    void requestImportDialog(const QString& directoryPath);
+
+    /// Requests the cancellation of the import operation that is currently running.
+    Q_INVOKABLE void cancelCurrentOperation();
+
+    /// Answers the message dialog the frontend is waiting on with one of its buttons.
+    Q_INVOKABLE void answerMessageBox(int button);
+
+    /// Updates the state derived from the current dataset: the window title and the empty state.
+    /// Called by the frontend when the data set changes or an operation that may have changed it has finished.
+    void refreshDataSetState();
+
+    /// Updates the state derived from the registered task progress records. Called by the frontend's
+    /// progressTasksChanged() hook.
+    void updateTaskState();
+
+    /// Makes the given task the operation that the Cancel command cancels, or clears it when passing a null task.
+    /// Called by the frontend while it runs an operation on behalf of the user.
+    void setRunningOperation(TaskPtr task);
+
+    /// Presents a message dialog and blocks until the user answers it, like the modal dialog of the desktop frontend.
+    UserInterface::MessageBoxButton presentMessageBox(UserInterface::MessageBoxIcon icon, const QString& title, const QString& text, int buttons, UserInterface::MessageBoxButton defaultButton, const QString& detailedText);
+
+Q_SIGNALS:
+
+    /// Is emitted when the window title has changed.
+    void windowTitleChanged();
+
+    /// Is emitted when the status line message has changed.
+    void statusMessageChanged();
+
+    /// Is emitted when the current scene became empty or gained its first object.
+    void hasDataChanged();
+
+    /// Is emitted when the progress state of the running operations has changed.
+    void taskStateChanged();
+
+    /// Is emitted when the message dialog appeared, changed or was answered.
+    void messageBoxChanged();
+
+    /// Is emitted when the scene should open the file selection dialog for the given directory.
+    void importDialogRequested(const QUrl& directoryUrl);
+
+    /// Is emitted when the message dialog has been answered.
+    void messageBoxAnswered();
+
+private:
+
+    /// Determines the title of the workbench window from the current data set.
+    QString determineWindowTitle() const;
+
+    /// Determines whether the current scene contains data to display.
+    bool determineHasData() const;
+
+    /// Builds the list of buttons of the message dialog from the given UserInterface button mask.
+    static QVariantList makeButtonList(int buttons, UserInterface::MessageBoxButton defaultButton);
+
+private:
+
+    /// The user interface this controller belongs to.
+    QmlMainWindowUI& _ui;
+
+    /// The title of the workbench window.
+    QString _windowTitle;
+
+    /// The message shown in the status line.
+    QString _statusMessage;
+
+    /// Whether the current scene contains data to display.
+    bool _hasData = false;
+
+    /// Whether an operation that reports its progress is running.
+    bool _busy = false;
+
+    /// The description of the running operation.
+    QString _taskText;
+
+    /// The progress value and maximum of the running operation.
+    int _taskProgress = 0;
+    int _taskMaximum = 0;
+
+    /// Whether the running operation can be cancelled by the user, and whether its cancellation was requested.
+    bool _cancellable = false;
+    bool _cancelling = false;
+
+    /// The operation that the Cancel command cancels.
+    TaskPtr _runningOperation;
+
+    /// The state of the message dialog the frontend is waiting on.
+    bool _messageBoxVisible = false;
+    QString _messageBoxTitle;
+    QString _messageBoxText;
+    int _messageBoxIcon = 0;
+    QVariantList _messageBoxButtons;
+    UserInterface::MessageBoxButton _messageBoxAnswer = UserInterface::MessageBoxButton::NoButton;
+
+    /// The event loop that presentMessageBox() blocks in, or null when no message dialog is open.
+    QEventLoop* _messageBoxLoop = nullptr;
+
+    /// The directory the file selection dialog should start in.
+    QString _importDialogDirectory;
+};
+
+}   // End of namespace

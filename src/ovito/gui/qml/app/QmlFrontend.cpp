@@ -3,6 +3,7 @@
 
 #include <ovito/gui/qml/QmlFrontend.h>
 #include <ovito/gui/qml/mainwin/QmlMainWindowUI.h>
+#include <QtQuickControls2/QQuickStyle>
 #include "QmlFrontend.h"
 
 namespace Ovito {
@@ -30,6 +31,11 @@ MainThreadOperation QmlFrontend::createWorkbench() const
 {
     OVITO_ASSERT(this_task::isMainThread());
     OVITO_ASSERT(this_task::get());
+
+    // The shell uses the platform-independent Basic style of Qt Quick Controls and colors it from its own theme, so that
+    // the workbench looks the same everywhere instead of inheriting the look of the platform's widget style. This must
+    // happen before the QML scene is created.
+    QQuickStyle::setStyle(QStringLiteral("Basic"));
 
     // Create the Qt Quick workbench, which opens its window right away.
     OORef<QmlMainWindowUI> workbench = OORef<QmlMainWindowUI>::create();

@@ -40,22 +40,6 @@ QmlViewportController::QmlViewportController(QmlMainWindowUI& ui, QObject* paren
 }
 
 /******************************************************************************
-* Returns the status message displayed in the status line.
-******************************************************************************/
-QString QmlViewportController::statusMessage() const
-{
-    return _ui.statusMessage();
-}
-
-/******************************************************************************
-* Sets the status message displayed in the status line.
-******************************************************************************/
-void QmlViewportController::setStatusMessage(const QString& message)
-{
-    _ui.showStatusBarMessage(message);
-}
-
-/******************************************************************************
 * Returns the number of viewports of the current dataset.
 ******************************************************************************/
 int QmlViewportController::viewportCount() const

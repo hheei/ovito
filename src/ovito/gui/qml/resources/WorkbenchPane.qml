@@ -4,7 +4,7 @@
 import QtQuick
 import Ovito.Qml
 
-// One pane of the workbench's viewport area. The layout model supplies the geometry and the state of the pane
+// One pane of the workbench's viewport area (the view of a ViewportPane object of the layout model). The layout model supplies the geometry and the state of the pane
 // (see QmlViewportPane); the pane itself holds the viewport item the frontend creates inside it, which renders the
 // OVITO scene of one viewport.
 Item {

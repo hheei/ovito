@@ -2,18 +2,29 @@
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 import QtQuick
+import QtQuick.Controls
+import QtQuick.Dialogs
+import Ovito.Qml
 
-// Minimal prototype of the OVITO modern workbench: a central viewport area, a right-hand command panel
-// and a status line. The pipeline view, the property inspector and the timeline are not implemented yet;
-// see docs/design/UI_PLAN.md for the phase they belong to.
+// The workbench window of the Qt Quick frontend: a header with the window title and the Import command, the viewport
+// area whose panes come from the data set's viewport layout, a right-hand command panel, a status line with the
+// progress of the running operations, and the dialogs of the shell.
+//
+// The pipeline view, the property inspector and the timeline are not implemented yet; see docs/design/UI_PLAN.md for
+// the phase they belong to.
 Rectangle {
     id: workbench
     color: theme.surfaceWorkbench
 
     Theme { id: theme }
 
-    // Workbench-wide keyboard commands. The command layer of Phase 3 replaces them with the regular action system;
-    // until then, undo/redo and maximizing the active viewport are the commands the shell owes the user.
+    // Commands of the shell. The command layer of Phase 3 replaces them with the regular action system; until then these
+    // are the commands the shell owes the user, and the ones the design specifies as keyboard shortcuts.
+    Shortcut {
+        sequences: [StandardKey.Open]
+        onActivated: workbenchController.showImportDialog()
+    }
+
     Shortcut {
         sequences: [StandardKey.Undo]
         enabled: viewportController.canUndo
@@ -32,31 +43,77 @@ Rectangle {
         onActivated: viewportLayout.toggleMaximize(viewportLayout.activeViewportIndex)
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Header: the window title and the commands that do not need a data set.
+    // ---------------------------------------------------------------------------------------------
+    Rectangle {
+        id: header
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        height: theme.headerHeight
+        color: theme.surfaceHeader
+
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 1
+            color: theme.borderSubtle
+        }
+
+        Text {
+            id: titleText
+            anchors.left: parent.left
+            anchors.leftMargin: theme.spacing * 2
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.right: importButton.left
+            anchors.rightMargin: theme.spacing * 2
+            text: workbenchController.windowTitle
+            color: theme.textPrimary
+            font.pixelSize: theme.fontSize
+            font.bold: true
+            elide: Text.ElideRight
+        }
+
+        Button {
+            id: importButton
+            anchors.right: parent.right
+            anchors.rightMargin: theme.spacing
+            anchors.verticalCenter: parent.verticalCenter
+            // The first stop of the keyboard focus chain: the command that brings data into the workbench.
+            focus: true
+            text: qsTr("Import Data…")
+            Accessible.name: qsTr("Import data files into the current scene")
+            onClicked: workbenchController.showImportDialog()
+
+            palette.button: theme.controlBackground
+            palette.buttonText: theme.textPrimary
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // Status line at the bottom of the window.
-    Text {
-        id: statusLine
+    // ---------------------------------------------------------------------------------------------
+    WorkbenchStatusBar {
+        id: statusBar
+        controller: workbenchController
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.leftMargin: theme.spacing
-        anchors.rightMargin: theme.spacing
-        anchors.bottomMargin: theme.spacing
-        height: implicitHeight
-        text: viewportController.statusMessage.length > 0 ? viewportController.statusMessage : qsTr("Ready")
-        color: theme.textSecondary
-        font.pixelSize: theme.fontSize
-        elide: Text.ElideRight
     }
 
+    // ---------------------------------------------------------------------------------------------
     // Central area hosting the viewport panes. The arrangement of the panes - including the handles the user can drag
     // to resize them - follows the layout tree of the current dataset, i.e. the same tree the classic frontend lays out
     // with widgets (see QmlViewportLayout).
+    // ---------------------------------------------------------------------------------------------
     Item {
         id: viewportHost
         objectName: "viewportHost"
         anchors.left: parent.left
-        anchors.top: parent.top
-        anchors.bottom: statusLine.top
+        anchors.top: header.bottom
+        anchors.bottom: statusBar.top
         anchors.right: commandPanel.left
         anchors.margins: theme.spacing
         anchors.bottomMargin: theme.spacing
@@ -71,7 +128,7 @@ Rectangle {
         Repeater {
             model: viewportLayout.panes
 
-            delegate: ViewportPane {
+            delegate: WorkbenchPane {
                 controller: viewportController
                 layout: viewportLayout
             }
@@ -82,18 +139,59 @@ Rectangle {
         Repeater {
             model: viewportLayout.splitters
 
-            delegate: ViewportSplitter {
+            delegate: WorkbenchSplitter {
                 layout: viewportLayout
+            }
+        }
+
+        // Empty state: while the scene has no object to display, the viewports only show the construction grid, so the
+        // shell offers the one command that can change that.
+        Rectangle {
+            id: emptyState
+            anchors.fill: parent
+            visible: !workbenchController.hasData && !dropArea.containsDrag
+            color: theme.surfaceOverlay
+            Accessible.role: Accessible.Grouping
+
+            Column {
+                anchors.centerIn: parent
+                spacing: theme.spacing * 2
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: qsTr("No data loaded")
+                    color: theme.textPrimary
+                    font.pixelSize: theme.fontSize + 4
+                }
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: qsTr("Import a simulation file, or drop one onto this window.")
+                    color: theme.textSecondary
+                    font.pixelSize: theme.fontSize
+                }
+
+                Button {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: qsTr("Import Data…")
+                    Accessible.name: qsTr("Import data files into the current scene")
+                    onClicked: workbenchController.showImportDialog()
+
+                    palette.button: theme.controlBackground
+                    palette.buttonText: theme.textPrimary
+                }
             }
         }
     }
 
+    // ---------------------------------------------------------------------------------------------
     // Right-hand command panel.
+    // ---------------------------------------------------------------------------------------------
     Rectangle {
         id: commandPanel
         anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.bottom: statusLine.top
+        anchors.top: header.bottom
+        anchors.bottom: statusBar.top
         anchors.margins: theme.spacing
         width: theme.panelWidth
         color: theme.surfacePanel
@@ -140,6 +238,60 @@ Rectangle {
                 color: theme.textSecondary
                 font.pixelSize: theme.fontSize
             }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Files can be dropped onto the window, which imports them the same way the file dialog and the command line do.
+    // ---------------------------------------------------------------------------------------------
+    DropArea {
+        id: dropArea
+        anchors.fill: parent
+        onDropped: (drop) => {
+            if(drop.hasUrls)
+                workbenchController.importFiles(drop.urls)
+            drop.acceptProposedAction()
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            visible: dropArea.containsDrag
+            color: theme.surfaceOverlay
+            border.color: theme.accentPrimary
+            border.width: 2
+
+            Text {
+                anchors.centerIn: parent
+                text: qsTr("Drop the files to import them")
+                color: theme.textPrimary
+                font.pixelSize: theme.fontSize + 2
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Dialogs. They are opened by the frontend through the workbench controller, so that the file dialog and the
+    // message dialog are the only places that know how this frontend asks the user a question.
+    // ---------------------------------------------------------------------------------------------
+    FileDialog {
+        id: importDialog
+        title: qsTr("Import Data")
+        fileMode: FileDialog.OpenFiles
+        onAccepted: workbenchController.importFiles(selectedFiles)
+    }
+
+    WorkbenchMessageBox {
+        id: messageBox
+        controller: workbenchController
+    }
+
+    Connections {
+        target: workbenchController
+
+        function onImportDialogRequested(directoryUrl) {
+            if(directoryUrl.toString().length > 0)
+                importDialog.currentFolder = directoryUrl
+            importDialog.open()
         }
     }
 }

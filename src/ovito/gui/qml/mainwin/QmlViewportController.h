@@ -12,7 +12,8 @@ namespace Ovito {
  * \brief Exposes the C++ side of the Qt Quick frontend to the QML scene.
  *
  * This class is registered as the "viewportController" context property of the QML engine. It creates the viewport
- * items that the QML layout asks for and carries the state that the QML scene displays, e.g. the status line message.
+ * items that the QML layout asks for and exposes the operations on them, i.e. the undo stack of the workbench. The
+ * state of the window itself - the status line, the task progress and the dialogs - belongs to QmlWorkbenchController.
  *
  * The viewports are those of the current dataset. Whenever that dataset is replaced, the controller discards its
  * viewport items and emits viewportConfigurationChanged(), which tells the QML scene to ask for viewport items again -
@@ -21,9 +22,6 @@ namespace Ovito {
 class OVITO_GUIQML_EXPORT QmlViewportController : public QObject
 {
     Q_OBJECT
-
-    /// The message displayed in the status line of the workbench window.
-    Q_PROPERTY(QString statusMessage READ statusMessage WRITE setStatusMessage NOTIFY statusMessageChanged)
 
     /// The number of viewports of the current dataset, i.e. the number of viewport items the QML scene should have.
     Q_PROPERTY(int viewportCount READ viewportCount NOTIFY viewportConfigurationChanged)
@@ -44,12 +42,6 @@ public:
 
     /// Constructor.
     explicit QmlViewportController(QmlMainWindowUI& ui, QObject* parent = nullptr);
-
-    /// Returns the status message displayed in the status line.
-    QString statusMessage() const;
-
-    /// Sets the status message displayed in the status line.
-    void setStatusMessage(const QString& message);
 
     /// Returns the number of viewports of the current dataset.
     int viewportCount() const;
@@ -84,9 +76,6 @@ public:
     QString redoText() const;
 
 Q_SIGNALS:
-
-    /// Is emitted when the status message has changed.
-    void statusMessageChanged();
 
     /// Is emitted when the current dataset or its set of viewports has changed.
     void viewportConfigurationChanged();
