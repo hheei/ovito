@@ -158,20 +158,26 @@ frontend entry point that starts asynchronous work, not a picking-specific issue
 | D18 | **Viewport items are never destroyed synchronously from the code that creates or replaces them.** `QmlViewportController::createViewportItem()` is reached from QML while the scene builds its pane delegates, and `discardViewportItems()` runs on a dataset change; in both cases the item may be handling an event at that moment, and `delete` crashed the process inside Qt's event dispatch. Both paths use `deleteLater()`, each pane delegate owns exactly one item (no reuse across delegates, because the delegate that owned it is destroyed afterwards and would take the item with it), and a pane whose item creation failed retries when its geometry changes. Found and fixed while verifying the Phase 2 shell (defect F11 in the Phase 1 report). |
 | D14 | Phase 1 uses a fixed 2x2 QML grid. Deriving the pane arrangement from `ViewportConfiguration::layoutRootCell()` (including the maximized cell) is deferred to Phase 2. | The layout tree is the correct source of truth; the prototype only needs four simultaneous viewports to prove multi-viewport rendering. |
 
----
-
-### Phase 2 shell status
-
-Deliverable 4 (the layout-derived workbench shell) is implemented and verified on Linux/OpenGL: panes and handles come
-from the layout tree in the classic arrangement (Top | Front over Left | Perspective), a splitter drag produces exactly
-one `"Resize viewports"` undo step whose undo/redo restore the pane rectangles, maximizing leaves one visible pane, and
-the viewport items survive the layout changes (measured, with picking and the frame rate unaffected: 96 fps in the
-screenshot run, 19/25 probe hits and a working synthetic selection in all runs). Deliverables 5-8 remain: the QML
-import UI with its empty/busy/cancel/error states (O12), resource packaging, the Phase 1 leftovers listed below, and a
-shell smoke check in CI (the CI smoke test now also runs `--qml-layout-check`).
-
+| D19 | The QML shell state and commands live in a separate `QmlWorkbenchController` (context property `workbenchController`), not in `QmlViewportController`: the status line, the task progress of the running operations, the empty state of the scene, the window title, the message dialog the frontend is waiting on, and the import commands. `QmlViewportController` keeps the viewport items and the undo stack. | The two have different lifetimes and different owners: the status line and the progress bar describe the *window*, the viewport items belong to the viewports of one data set and are recreated with it. Splitting them also keeps the "no desktop dependency" rule intact - the shell talks to `WorkbenchUI` (import orchestration) and to the QML scene, never to QtWidgets. |
+| D20 | The QML frontend runs an import in a task of its own (`GuiTaskScope`) and hands that task to the shell as the operation the Cancel command cancels; `QmlMainWindowUI::runFileImport()` removes the scene objects the canceled import created before it rethrows, so a canceled import leaves no pipeline whose data source was never filled. | `WorkbenchUI` prescribes the order of events (a ResetScene import deletes the previous objects before it creates the new pipeline), so the previous content cannot be restored - but the half-imported pipeline can and must be removed. The task handle comes from the scope the callback needs anyway (open item O8), and Cancellation is offered exactly where the classic frontend offers it: for the import operation of the progress dialog. Note that OVITO's `importFileSet()` sets up the file source and returns, so a plain import is usually too short to be canceled - the same is true of the classic frontend; a slow operation (large VASP file, slow file system, many files) is cancellable. |
+| D21 | The shell uses Qt Quick Controls with the platform-independent `Basic` style (set before the QML scene is created) and colors it from `Theme.qml`; the theme follows the color scheme of the operating system and offers a light and a dark palette. | One style everywhere keeps the workbench looking the same on all three platforms and keeps the palette in one file (UI_DESIGN.md section 7), instead of inheriting the platform widget style and fighting it. `Theme.qml` also carries the sizes the shell lays out with, so a component can be read without a second source of truth. |
+| D22 | `GuiApplication::reportError()` gives the message to the active user interface when that is not a `MainWindowUI`, instead of always opening a QtWidgets dialog. | The application object must not assume that the frontend presenting the error is the classic main window: the QML frontend has its own message dialog (Decision D19), and the message box of the frontend is what the *user* sees. The desktop path keeps its own dialog unchanged. |
 
 ---
+
+### Phase 2 status
+
+Deliverables 1-6 are implemented: the frontend is selected with `--gui` (D15), the widget-free parts of the workbench
+live in `gui/base` (D16), the shell lays its panes out from the layout tree of the data set with draggable handles,
+undoable resizing and maximizing (D17, verified on Linux/OpenGL), the shell state and its dialogs are separate from the
+viewport controller (D19, D21, D22), and the import path offers its states - empty, busy, cancelling, cancelled and
+error - through the file dialog, drag & drop, the status bar and the message dialog (D20). With
+`OVITO_BUILD_QML_FRONTEND=OFF` the build contains no QML sources and no QML target (verified by inspecting the
+generated build files and by building the classic frontend from that tree).
+
+What remains open from the phase: deliverable 7 (the carried-over Phase 1 items O1, O2, O4, O7/O11 - the shared
+picking target, the single render-pass helper and the per-window `RendererService`) and the runtime verification on
+macOS and Windows that the exit gate asks for (D3D12 has no test host, see the Phase 1 report).
 
 ## 4. Changes to Existing Code Made Under This Audit
 

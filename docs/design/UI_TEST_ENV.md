@@ -527,6 +527,42 @@ silent-empty-scene trap of §3.1: it must be ≥ 1.
   13/25 was the symptom), that is a defect in the buffer bookkeeping, not a measurement artefact - it is how the missing
   buffer-size check of `QuickViewportWindow::pick()` was found.
 
+## 9.1 Testing the import path of the QML shell
+
+The shell imports data through `WorkbenchUI::importFiles()` (the same code the classic frontend uses), so the spike can
+verify the whole path without a file dialog: `--qml-import-check` writes its own data files, drives the shell's import
+command and checks the states.
+
+Traps and facts that cost time here, in order:
+
+* **An import is not a long operation.** `FileImporter::importFileSet()` sets up a `FileSource` and returns; the data is
+  loaded later, when the pipeline is evaluated for the first time - which the viewports trigger. Consequences:
+  * The number of frames of a multi-file trajectory is `0` immediately after the import and becomes correct after the
+    first frame is rendered, so a check has to **poll** for it (the spike waits up to 20 s). The animation interval
+    (0..2 for three files) follows at the same moment.
+  * Cancelling an import of a plain XYZ file has nothing to cancel, because the operation is over in about a
+    millisecond. The operation can only be cancelled while it is really running, so the spike uses a **large VASP
+    POSCAR** file: `POSCARImporter::setupPipeline()` evaluates the pipeline while the file is being imported (only in
+    interactive mode), which is the one in-tree format that loads the data inside the import call. The XYZ importer
+    does not.
+  * A cancel request needs a running Qt event loop. A `QTimer` only fires while the import is inside a nested loop
+    (the shell keeps processing events while it waits); during the format detection of a long list of files the main
+    thread never returns to the event loop, so a cancel requested then is only noticed when the loop is entered again.
+* **`QQuickWindow::grabWindow()` is unusable with the `QQuickRhiItem` viewports** (§2.2 and §9): the shell is
+  screenshotted from the X server.
+* **QML components must not share their name with a C++ type registered in the same module.** `WorkbenchWindow.qml`
+  imports `Ovito.Qml`, and registering the pane model object as `ViewportPane` while a `ViewportPane.qml` also existed
+  failed with `Panes are created by the viewport layout model.` - the module type shadowed the local component. The
+  views of the shell's model objects are therefore named `WorkbenchPane.qml`, `WorkbenchSplitter.qml`,
+  `WorkbenchStatusBar.qml` and `WorkbenchMessageBox.qml`, and the model types keep the names of their C++ classes
+  (`ViewportPane`, `ViewportSplitter`, `ViewportLayout`, `ViewportController`, `WorkbenchController`).
+* **The message dialog blocks the caller.** `showMessageBox()` runs a nested event loop while the dialog is open (like
+  the desktop frontend's modal `QMessageBox::exec()`), so an automated run that triggers an error has to answer it -
+  the spike polls for `messageBoxVisible` and calls `answerMessageBox(Ok)`, which also verifies the dialog.
+* **Qt Quick Controls needs its style set before the QML scene is created.** The shell sets `Basic` in
+  `QmlFrontend::createWorkbench()` and colors the controls from `Theme.qml`; the styles of the platform are deliberately
+  not used, so the workbench looks the same on every platform.
+
 ## 10. Quick checklist
 
 1. Build the frontend: `cmake --preset native -DOVITO_BUILD_QML_FRONTEND=ON && cmake --build --preset native -j 16`.
@@ -534,6 +570,7 @@ silent-empty-scene trap of §3.1: it must be ≥ 1.
 3. Rendering: `QT_QPA_PLATFORM=xcb` + `xvfb-run` (+ `QSG_RHI_BACKEND=vulkan` with lavapipe for the Vulkan path).
 4. Picking/selection: `--qml-pick X,Y` (grid probe, negative control, synthetic click through `SelectionMode`).
 5. Lifecycle: `--qml-lifecycle-cycles N`, `--qml-hide-show`, `--qml-resize WxH`.
+   Import path: `--qml-import-check` (trajectory, unsupported file, cancelled import; see §9.1).
 6. Frame rate: `--qml-frame-stats MS` (state vsync and the render loop; only compare equal configurations).
 7. Non-Linux validation: run the same commands on the macOS host (§5) — and **close the windows afterwards** (§5.3).
 8. Screenshots: `--qml-hold-ms` + a private `Xvfb` display + `ffmpeg -f x11grab` (§2.2); never `grabWindow()` (§9).

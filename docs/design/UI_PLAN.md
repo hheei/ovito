@@ -4,10 +4,10 @@
 >
 > **Guiding Principle**: Validate high risks first, interaction parity before redesign
 >
-> **Status**: Proposed Roadmap; Phase 0 audit (partially), Phase 1 rendering spike and Phase 2 deliverables 1–4
-> executed — the frontend selection (`--gui=qml`), the shared `gui/base` workbench base class and the layout-derived
-> workbench shell with undoable splitter drags are in the tree and verified on Linux/OpenGL, see
-> [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) and [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md)
+> **Status**: Proposed Roadmap; Phase 0 audit (partially), Phase 1 rendering spike and Phase 2 deliverables 1–6
+> executed — the frontend selection (`--gui=qml`), the shared `gui/base` workbench base class, the layout-derived
+> workbench shell and the import path with its empty/busy/cancelling/cancelled/error states are in the tree and verified
+> on Linux/OpenGL, see [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) and [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md)
 >
 > **Design Contract**: [UI_DESIGN.md](UI_DESIGN.md)
 
@@ -214,18 +214,20 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      seconds — a crash or a failed startup exits differently, so a "stays up" assertion catches startup regressions
      without inventing a test-only command line option. macOS has no `timeout`, so that check uses a background process
      plus `sleep`/`kill` and closes the window afterwards (testing rules in [UI_TEST_ENV.md](UI_TEST_ENV.md)).
-- **Status (deliverables 1-3 implemented)**: `ovito --gui=qml` starts the Qt Quick workbench and renders a trajectory
-  imported from the command line, while plain `ovito` still starts the classic main window. The mechanism is the
-  registry of decision **D15** in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) (frontends register themselves; the classic
-  one stays the default; an unknown or unbuilt name prints the available frontends and exits with code 1 instead of
-  falling back), and the shared workbench base class of decision **D16** in the same document now provides the import
-  orchestration, the task-progress bookkeeping, error reporting and the auto-key mode for both frontends. Open from the
-  deliverables below: 4 (layout from `layoutRootCell()`; the QML grid still follows the dataset's viewport list), 5 (the
-  QML frontend has no file selection UI and no progress display - open item O12), 6 (resource packaging from the
-  deployed layout), 7 (O1, O2, O4, O7/O11, O8) and 8 (the shell smoke check in CI). What has been verified locally is
-  recorded in the Phase 1 testing notes ([UI_TEST_ENV.md](UI_TEST_ENV.md)); a full native build, `ctest` 6/6, the
-  headless start, the classic start, the `--gui` error paths (with and without the QML module in the build) and the
-  spike's picking regression all pass.
+- **Status (deliverables 1-6 implemented)**: `ovito --gui=qml` starts the Qt Quick workbench, renders a trajectory
+  imported from the command line, and plain `ovito` still starts the classic main window. Deliverable 1-3 are the
+  frontend registry of decision **D15**, the shared workbench base class of decision **D16** and the shell's own state
+  and dialog objects (**D19**, **D22**) in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md). Deliverable 4 lays the viewport
+  pans out from `ViewportConfiguration::layoutRootCell()` with draggable, undoable handles and maximizing (**D17**).
+  Deliverable 5 (the import path) offers empty, busy, cancelling, cancelled and error states: a file dialog
+  (`Ctrl+O`), drag & drop onto the window, a status bar with the running operations' progress and a Cancel command, an
+  error dialog for a file whose format cannot be detected, and the cleanup that removes a half-imported pipeline after a
+  cancellation (**D20**). Deliverable 6 (resources and packaging) is verified by building with
+  `OVITO_BUILD_QML_FRONTEND=OFF`, which contains neither QML sources nor a QML target. **Open from this phase**:
+  deliverable 7 (the carried-over Phase 1 items O1, O2, O4, O7/O11) and the exit-gate verification on macOS and Windows
+  (D3D12 has no test host). The spike verifies the shell with `--qml-layout-check` and `--qml-import-check` in CI; the
+  testing recipe is [UI_TEST_ENV.md](UI_TEST_ENV.md).
+
 - **Non-goals of this phase** (so the shell does not swallow the later ones): pipeline and property models, the pipeline
   view and editors, timeline and animation, render settings and output, data inspector, session saving, command palette.
 - **Exit Gate**: With `OVITO_BUILD_QML_FRONTEND=ON`, `ovito --gui=qml` starts the QML workbench and loads a real
@@ -233,7 +235,9 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   `OVITO_BUILD_QML_FRONTEND=OFF` still builds classic and headless. Verify: window and viewport layout derived from the
   session's layout cell (including maximize and a dragged splitter that undoes), import of a real multi-frame trajectory
   including failure and cancellation, both themes, resizing and minimum size, keyboard focus order, and QML resource
-  loading from the deployed layout. Record the platform results (Linux, macOS, Windows) in the parity matrix and the
+  loading from the deployed layout. The first two are automated in the spike harness (`--qml-layout-check`,
+  `--qml-import-check`); the remaining ones are checked by running the frontend in its themes and window sizes (see
+  [UI_TEST_ENV.md](UI_TEST_ENV.md)). Record the platform results (Linux, macOS, Windows) in the parity matrix and the
   environment notes; D3D12 runtime evidence is still outstanding from Phase 1 and must be recorded as such rather than
   silently assumed.
 - **Risks**:
