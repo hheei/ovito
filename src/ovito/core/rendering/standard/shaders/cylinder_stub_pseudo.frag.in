@@ -1,0 +1,52 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+// Generated pseudo-color fragment shader stub. Do not edit; see cylinder_stub_pseudo.frag.in and cylinder_variants.cmake.
+// Surface: @SURFACE_SNIPPET@
+// FragOut: @FRAGOUT_SNIPPET@
+// The vertex shader passes a normalized scalar in color.r and a sentinel -1.0 in color.g.
+// This stub applies the colormap transfer function per-fragment after surface interpolation.
+
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+
+#include "../../scene_params.glsl"
+#include "../../cylinders_draw_params.glsl"
+#include "../common.glsl"
+#include "@SURFACE_SNIPPET@"
+#include "@FRAGOUT_SNIPPET@"
+
+layout(binding = 2) uniform sampler2D colorMap;
+
+void main()
+{
+    SurfaceSample s = sampleSurface();
+    // color.g < 0 is the sentinel set by vbo_visual_pseudo.glsl: color.r holds the
+    // interpolated normalized scalar; apply the transfer function here so the lookup
+    // happens after per-pixel interpolation, not per-endpoint in the vertex shader.
+    if(s.color.g < 0.0) {
+        float alpha = s.color.a;
+        s.color = vec4(texture(colorMap, vec2(s.color.r, 0.5)).rgb, alpha);
+    }
+    gl_FragDepth = s.depth;
+    writeOut(s);
+}

@@ -1,0 +1,81 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/crystalanalysis/CrystalAnalysis.h>
+#include <ovito/crystalanalysis/objects/DislocationNetwork.h>
+#include <ovito/core/dataset/io/FileExporter.h>
+
+namespace Ovito {
+
+/**
+ * \brief Exporter that exports dislocation lines to a Crystal Analysis Tool (CA) file.
+ */
+class OVITO_CRYSTALANALYSIS_EXPORT CAExporter : public FileExporter
+{
+    /// Defines a metaclass specialization for this exporter type.
+    class OOMetaClass : public FileExporter::OOMetaClass
+    {
+    public:
+
+        /// Inherit standard constructor from base meta class.
+        using FileExporter::OOMetaClass::OOMetaClass;
+
+        /// Returns the file filter that specifies the extension of files written by this service.
+        virtual QString fileFilter() const override { return QStringLiteral("*.ca *.ca.gz"); }
+
+        /// Returns the filter description that is displayed in the drop-down box of the file dialog.
+        virtual QString fileFilterDescription() const override { return tr("Crystal Analysis"); }
+    };
+
+    OVITO_CLASS_META(CAExporter, OOMetaClass)
+
+public:
+
+    /// Constructor.
+    using FileExporter::FileExporter;
+
+    /// Returns whether the DXA defect mesh is exported (in addition to the dislocation lines).
+    bool meshExportEnabled() const { return _meshExportEnabled; }
+
+    /// Sets whether the DXA defect mesh is exported (in addition to the dislocation lines).
+    void setMeshExportEnabled(bool enable) { _meshExportEnabled = enable; }
+
+    /// \brief Returns the type(s) of data objects that this exporter service can export.
+    virtual std::vector<DataObjectClassPtr> exportableDataObjectClass() override {
+        return { &DislocationNetwork::OOClass() };
+    }
+
+protected:
+
+    /// Creates a worker performing the actual data export.
+    virtual OORef<FileExportJob> createExportJob(const QString& filePath, int numberOfFrames) override;
+
+private:
+
+    /// Controls whether the DXA defect mesh is exported (in addition to the dislocation lines).
+    bool _meshExportEnabled = true;
+};
+
+}   // End of namespace

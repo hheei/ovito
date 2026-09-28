@@ -1,0 +1,348 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/particles/Particles.h>
+#include <ovito/particles/objects/Particles.h>
+#include <ovito/particles/objects/ParticleType.h>
+#include <ovito/stdobj/properties/InputColumnMapping.h>
+#include <ovito/stdobj/simcell/SimulationCell.h>
+#include <ovito/core/utilities/io/CompressedTextReader.h>
+#include "CFGImporter.h"
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(CFGImporter);
+OVITO_CLASSINFO(CFGImporter, "DisplayName", "CFG");
+
+struct CFGHeader {
+
+    int64_t numParticles;
+    FloatType unitMultiplier;
+    Matrix3 H0;
+    Matrix3 transform;
+    FloatType rateScale;
+    bool isExtendedFormat;
+    bool containsVelocities;
+    QStringList auxiliaryFields;
+
+    void parse(CompressedTextReader& stream);
+};
+
+/******************************************************************************
+* Checks if the given file has format that can be read by this importer.
+******************************************************************************/
+bool CFGImporter::OOMetaClass::checkFileFormat(const FileHandle& file) const
+{
+    // Open input file.
+    CompressedTextReader stream(file);
+
+    // Look for the magic string 'Number of particles'.
+    // It must appear within the first 20 lines of the CFG file.
+    for(int i = 0; i < 20 && !stream.eof(); i++) {
+        const char* line = stream.readLineTrimLeft(1024);
+
+        // CFG files start with the string "Number of particles".
+        if(stream.lineStartsWith("Number of particles"))
+            return true;
+
+        // Terminate early if line is non-empty and contains anything else than a comment (#).
+        if(line[0] > ' ' && line[0] != '#')
+            return false;
+    }
+
+    return false;
+}
+
+/******************************************************************************
+* Parses the header of a CFG file.
+******************************************************************************/
+void CFGHeader::parse(CompressedTextReader& stream)
+{
+    using namespace std;
+
+    numParticles = -1;
+    unitMultiplier = 1;
+    H0.setIdentity();
+    transform.setIdentity();
+    rateScale = 1;
+    isExtendedFormat = false;
+    containsVelocities = true;
+
+    while(!stream.eof()) {
+
+        string line(stream.readLineTrimLeft());
+
+        // Ignore comments
+        size_t commentChar = line.find('#');
+        if(commentChar != string::npos) line.resize(commentChar);
+
+        // Skip empty lines.
+        size_t trimmedLine = line.find_first_not_of(" \t\n\r");
+        if(trimmedLine == string::npos) continue;
+        if(trimmedLine != 0) line = line.substr(trimmedLine);
+
+        size_t splitChar = line.find('=');
+        if(splitChar == string::npos) {
+            if(stream.lineStartsWithToken(".NO_VELOCITY.")) {
+                containsVelocities = false;
+                continue;
+            }
+            break;
+        }
+
+        string key = line.substr(0, line.find_last_not_of(" \t\n\r", splitChar - 1) + 1);
+        size_t valuestart = line.find_first_not_of(" \t\n\r", splitChar + 1);
+        if(valuestart == string::npos) valuestart = splitChar+1;
+        string value = line.substr(valuestart);
+
+        if(key == "Number of particles") {
+            if(sscanf(value.c_str(), "%" SCNd64, &numParticles) != 1 || numParticles < 0 || numParticles > 100'000'000'000ll)
+                throw Exception(CFGImporter::tr("CFG file parsing error. Invalid number of atoms (line %1): %2").arg(stream.lineNumber()).arg(QString::fromStdString(value)));
+        }
+        else if(key == "A") unitMultiplier = atof(value.c_str());
+        else if(key == "H0(1,1)") H0(0,0) = atof(value.c_str()) * unitMultiplier;
+        else if(key == "H0(1,2)") H0(0,1) = atof(value.c_str()) * unitMultiplier;
+        else if(key == "H0(1,3)") H0(0,2) = atof(value.c_str()) * unitMultiplier;
+        else if(key == "H0(2,1)") H0(1,0) = atof(value.c_str()) * unitMultiplier;
+        else if(key == "H0(2,2)") H0(1,1) = atof(value.c_str()) * unitMultiplier;
+        else if(key == "H0(2,3)") H0(1,2) = atof(value.c_str()) * unitMultiplier;
+        else if(key == "H0(3,1)") H0(2,0) = atof(value.c_str()) * unitMultiplier;
+        else if(key == "H0(3,2)") H0(2,1) = atof(value.c_str()) * unitMultiplier;
+        else if(key == "H0(3,3)") H0(2,2) = atof(value.c_str()) * unitMultiplier;
+        else if(key == "Transform(1,1)") transform(0,0) = atof(value.c_str());
+        else if(key == "Transform(1,2)") transform(0,1) = atof(value.c_str());
+        else if(key == "Transform(1,3)") transform(0,2) = atof(value.c_str());
+        else if(key == "Transform(2,1)") transform(1,0) = atof(value.c_str());
+        else if(key == "Transform(2,2)") transform(1,1) = atof(value.c_str());
+        else if(key == "Transform(2,3)") transform(1,2) = atof(value.c_str());
+        else if(key == "Transform(3,1)") transform(2,0) = atof(value.c_str());
+        else if(key == "Transform(3,2)") transform(2,1) = atof(value.c_str());
+        else if(key == "Transform(3,3)") transform(2,2) = atof(value.c_str());
+        else if(key == "eta(1,1)") {}
+        else if(key == "eta(1,2)") {}
+        else if(key == "eta(1,3)") {}
+        else if(key == "eta(2,2)") {}
+        else if(key == "eta(2,3)") {}
+        else if(key == "eta(3,3)") {}
+        else if(key == "R") rateScale = atof(value.c_str());
+        else if(key == "entry_count") {
+            //entry_count = atoi(value.c_str());
+            isExtendedFormat = true;
+        }
+        else if(key.compare(0, 10, "auxiliary[") == 0) {
+            isExtendedFormat = true;
+            size_t endOfName = value.find_first_of(" \t");
+            auxiliaryFields.push_back(QString::fromStdString(value.substr(0, endOfName)).trimmed());
+        }
+        else {
+            throw Exception(CFGImporter::tr("Unknown key in CFG file header at line %1: %2").arg(stream.lineNumber()).arg(QString::fromStdString(line)));
+        }
+    }
+    if(numParticles < 0)
+        throw Exception(CFGImporter::tr("Invalid file header. This is not a valid CFG file."));
+}
+
+/******************************************************************************
+* Parses the given input file.
+******************************************************************************/
+void CFGImporter::FrameLoader::loadFile()
+{
+    TaskProgress progress(this_task::ui());
+    progress.setText(tr("Reading CFG file %1").arg(fileHandle().toString()));
+
+    // Open file for reading.
+    CompressedTextReader stream(fileHandle(), frame().byteOffset, frame().lineNumber);
+
+    // Parse header of CFG file.
+    CFGHeader header;
+    header.parse(stream);
+
+    ParticleInputColumnMapping cfgMapping;
+    if(header.isExtendedFormat == false) {
+        cfgMapping.resize(8);
+        cfgMapping.mapColumnToStandardProperty(0, Particles::MassProperty);
+        cfgMapping.mapColumnToStandardProperty(1, Particles::TypeProperty);
+        cfgMapping.mapColumnToStandardProperty(2, Particles::PositionProperty, 0);
+        cfgMapping.mapColumnToStandardProperty(3, Particles::PositionProperty, 1);
+        cfgMapping.mapColumnToStandardProperty(4, Particles::PositionProperty, 2);
+        cfgMapping.mapColumnToStandardProperty(5, Particles::VelocityProperty, 0);
+        cfgMapping.mapColumnToStandardProperty(6, Particles::VelocityProperty, 1);
+        cfgMapping.mapColumnToStandardProperty(7, Particles::VelocityProperty, 2);
+    }
+    else {
+        cfgMapping.resize(header.containsVelocities ? 6 : 3);
+        cfgMapping.mapColumnToStandardProperty(0, Particles::PositionProperty, 0);
+        cfgMapping.mapColumnToStandardProperty(1, Particles::PositionProperty, 1);
+        cfgMapping.mapColumnToStandardProperty(2, Particles::PositionProperty, 2);
+        if(header.containsVelocities) {
+            cfgMapping.mapColumnToStandardProperty(3, Particles::VelocityProperty, 0);
+            cfgMapping.mapColumnToStandardProperty(4, Particles::VelocityProperty, 1);
+            cfgMapping.mapColumnToStandardProperty(5, Particles::VelocityProperty, 2);
+        }
+        generateAutomaticColumnMapping(cfgMapping, header.auxiliaryFields);
+    }
+
+    progress.setMaximum(header.numParticles);
+    setParticleCount(header.numParticles);
+
+    // Prepare the mapping between input file columns and particle properties.
+    InputColumnReader columnParser(*this, cfgMapping, particles(), false);
+
+    // Create particle mass and type properties.
+    int currentAtomType = 0;
+    FloatType currentMass = 0;
+    Property* typeProperty = nullptr;
+    Property* massProperty = nullptr;
+    if(header.isExtendedFormat) {
+        typeProperty = particles()->createProperty(Particles::TypeProperty);
+        massProperty = particles()->createProperty(Particles::MassProperty);
+    }
+    BufferWriteAccess<int32_t, access_mode::discard_write> typePropertyAccess(typeProperty);
+    BufferWriteAccess<FloatType, access_mode::discard_write> massPropertyAccess(massProperty);
+
+    // Read per-particle data.
+    bool isFirstLine = true;
+    for(int64_t particleIndex = 0; particleIndex < header.numParticles; ) {
+
+        // Update progress bar and check for user cancellation.
+        progress.setValueIntermittent(particleIndex);
+
+        if(!isFirstLine)
+            stream.readLine();
+        else
+            isFirstLine = false;
+
+        if(header.isExtendedFormat) {
+            bool isNewType = true;
+            const char* line = stream.line();
+            while(*line != '\0' && *line <= ' ') ++line;
+            for(; *line != '\0'; ++line) {
+                if(*line <= ' ') {
+                    for(; *line != '\0'; ++line) {
+                        if(*line > ' ') {
+                            isNewType = false;
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+            if(isNewType) {
+                // Parse mass and atom type name.
+                currentMass = atof(stream.line());
+                const char* line = stream.readLineTrimLeft();
+                const char* line_end = line;
+                while(*line_end != '\0' && *line_end > ' ') ++line_end;
+                currentAtomType = addNamedType(Particles::OOClass(), typeProperty, QLatin1String(line, line_end))->numericId();
+                continue;
+            }
+
+            typePropertyAccess[particleIndex] = currentAtomType;
+            massPropertyAccess[particleIndex] = currentMass;
+        }
+
+        try {
+            columnParser.readElement(particleIndex, stream.line());
+            particleIndex++;
+        }
+        catch(Exception& ex) {
+            throw ex.prependGeneralMessage(tr("Parsing error in line %1 of CFG file.").arg(stream.lineNumber()));
+        }
+    }
+    typePropertyAccess.reset();
+    massPropertyAccess.reset();
+
+    // Since we created particle types on the go while reading the particles, the ordering of the type list
+    // depends on the storage order of particles in the file. We rather want a well-defined particle type ordering, that's
+    // why we sort them now.
+    columnParser.sortElementTypes();
+    columnParser.reset();
+
+    if(header.isExtendedFormat)
+        typeProperty->sortElementTypesByName();
+
+    AffineTransformation H((header.transform * header.H0).transposed());
+    H.translation() = H * Vector3(-0.5, -0.5, -0.5);
+    simulationCell()->setCellMatrix(H);
+
+    // The CFG file stores particle positions in reduced coordinates.
+    // Rescale them now to absolute (Cartesian) coordinates.
+    // However, do this only if no absolute coordinates have been read from the extra data columns in the CFG file.
+    if(BufferWriteAccess<Point3, access_mode::read_write> posProperty = particles()->getMutableProperty(Particles::PositionProperty)) {
+        for(Point3& p : posProperty)
+            p = H * p;
+    }
+
+    // Sort particles by ID if requested.
+    if(_sortParticles)
+        particles()->sortById();
+
+    state().setStatus(tr("Number of particles: %1").arg(header.numParticles));
+
+    // Call base implementation to finalize the loaded particle data.
+    ParticleImporter::FrameLoader::loadFile();
+}
+
+/******************************************************************************
+ * Guesses the mapping of input file columns to internal particle properties.
+ *****************************************************************************/
+void CFGImporter::generateAutomaticColumnMapping(ParticleInputColumnMapping& columnMapping, const QStringList& columnNames)
+{
+    int i = columnMapping.size();
+    columnMapping.resize(columnMapping.size() + columnNames.size());
+    for(int j = 0; j < columnNames.size(); j++, i++) {
+        columnMapping[i].columnName = columnNames[j];
+        QString name = columnNames[j].toLower();
+        if(name == "vx" || name == "velocities") columnMapping.mapColumnToStandardProperty(i, Particles::VelocityProperty, 0);
+        else if(name == "vy") columnMapping.mapColumnToStandardProperty(i, Particles::VelocityProperty, 1);
+        else if(name == "vz") columnMapping.mapColumnToStandardProperty(i, Particles::VelocityProperty, 2);
+        else if(name == "v") columnMapping.mapColumnToStandardProperty(i, Particles::VelocityMagnitudeProperty);
+        else if(name == "id") columnMapping.mapColumnToStandardProperty(i, Particles::IdentifierProperty);
+        else if(name == "radius") columnMapping.mapColumnToStandardProperty(i, Particles::RadiusProperty);
+        else if(name == "q") columnMapping.mapColumnToStandardProperty(i, Particles::ChargeProperty);
+        else if(name == "ix") columnMapping.mapColumnToStandardProperty(i, Particles::PeriodicImageProperty, 0);
+        else if(name == "iy") columnMapping.mapColumnToStandardProperty(i, Particles::PeriodicImageProperty, 1);
+        else if(name == "iz") columnMapping.mapColumnToStandardProperty(i, Particles::PeriodicImageProperty, 2);
+        else if(name == "fx") columnMapping.mapColumnToStandardProperty(i, Particles::ForceProperty, 0);
+        else if(name == "fy") columnMapping.mapColumnToStandardProperty(i, Particles::ForceProperty, 1);
+        else if(name == "fz") columnMapping.mapColumnToStandardProperty(i, Particles::ForceProperty, 2);
+        else if(name == "mux") columnMapping.mapColumnToStandardProperty(i, Particles::DipoleOrientationProperty, 0);
+        else if(name == "muy") columnMapping.mapColumnToStandardProperty(i, Particles::DipoleOrientationProperty, 1);
+        else if(name == "muz") columnMapping.mapColumnToStandardProperty(i, Particles::DipoleOrientationProperty, 2);
+        else if(name == "mu") columnMapping.mapColumnToStandardProperty(i, Particles::DipoleMagnitudeProperty);
+        else if(name == "omegax") columnMapping.mapColumnToStandardProperty(i, Particles::AngularVelocityProperty, 0);
+        else if(name == "omegay") columnMapping.mapColumnToStandardProperty(i, Particles::AngularVelocityProperty, 1);
+        else if(name == "omegaz") columnMapping.mapColumnToStandardProperty(i, Particles::AngularVelocityProperty, 2);
+        else if(name == "angmomx") columnMapping.mapColumnToStandardProperty(i, Particles::AngularMomentumProperty, 0);
+        else if(name == "angmomy") columnMapping.mapColumnToStandardProperty(i, Particles::AngularMomentumProperty, 1);
+        else if(name == "angmomz") columnMapping.mapColumnToStandardProperty(i, Particles::AngularMomentumProperty, 2);
+        else if(name == "tqx") columnMapping.mapColumnToStandardProperty(i, Particles::TorqueProperty, 0);
+        else if(name == "tqy") columnMapping.mapColumnToStandardProperty(i, Particles::TorqueProperty, 1);
+        else if(name == "tqz") columnMapping.mapColumnToStandardProperty(i, Particles::TorqueProperty, 2);
+        else if(name == "spin") columnMapping.mapColumnToStandardProperty(i, Particles::SpinProperty);
+        else {
+            columnMapping.mapColumnToUserProperty(i, Property::makePropertyNameValid(columnNames[j]), Property::FloatDefault);
+        }
+    }
+}
+
+}   // End of namespace

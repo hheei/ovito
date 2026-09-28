@@ -1,0 +1,278 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/core/Core.h>
+#include <ovito/core/app/Application.h>
+#include <ovito/core/dataset/DataSet.h>
+#include <ovito/core/utilities/units/UnitsManager.h>
+#include "AnimationSettings.h"
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(AnimationSettings);
+DEFINE_PROPERTY_FIELD(AnimationSettings, currentFrame);
+DEFINE_PROPERTY_FIELD(AnimationSettings, firstFrame);
+DEFINE_PROPERTY_FIELD(AnimationSettings, lastFrame);
+DEFINE_PROPERTY_FIELD(AnimationSettings, framesPerSecond);
+DEFINE_PROPERTY_FIELD(AnimationSettings, playbackSpeed);
+DEFINE_PROPERTY_FIELD(AnimationSettings, loopPlayback);
+DEFINE_PROPERTY_FIELD(AnimationSettings, playbackEveryNthFrame);
+DEFINE_PROPERTY_FIELD(AnimationSettings, autoAdjustInterval);
+DEFINE_PROPERTY_FIELD(AnimationSettings, preferSimulationTimeDisplay);
+SET_PROPERTY_FIELD_UNITS_AND_MINIMUM(AnimationSettings, playbackEveryNthFrame, IntegerParameterUnit, 1);
+
+/******************************************************************************
+* Is called when the value of a non-animatable property field of this RefMaker has changed.
+******************************************************************************/
+void AnimationSettings::propertyChanged(const PropertyFieldDescriptor* field)
+{
+    if(field == PROPERTY_FIELD(autoAdjustInterval) && autoAdjustInterval() && !shouldIgnoreChanges()) {
+        updateAnimationFrameLabels();
+        adjustAnimationInterval();
+    }
+
+    RefTarget::propertyChanged(field);
+}
+
+/******************************************************************************
+* Loads the class' contents from an input stream.
+******************************************************************************/
+void AnimationSettings::loadFromStream(ObjectLoadStream& stream)
+{
+    RefTarget::loadFromStream(stream);
+
+    // For backward compatibility with OVITO 3.14:
+    if(stream.formatVersion() < 30016) {
+        // Save the human-readable labels associated with individual animation frames.
+        int version = stream.expectChunkRange(0x01, 2);
+        if(version >= 2) {
+            // Format version 30015: To reduce the state file size, OVITO 3.15 and later no longer serialize the frame labels.
+            // They are rebuilt by loadFromStreamComplete() after loading of the entire scene.
+        }
+        else if(version >= 1) {
+            // For backward compatibility with OVITO 3.14.
+            stream >> _frameLabels;
+        }
+        else {
+            // For backward compatibility with OVITO 3.13, where frame labels were simple strings.
+            QMap<int, QString> namedFrames;
+            stream >> namedFrames;
+            for(auto it = namedFrames.constBegin(); it != namedFrames.constEnd(); ++it) {
+                _frameLabels.insert(it.key(), AnimationFrameLabel::parse(it.value()));
+            }
+        }
+        stream.closeChunk();
+    }
+}
+
+/******************************************************************************
+* This method is called once for this object after it has been completely
+* loaded from a stream.
+******************************************************************************/
+void AnimationSettings::loadFromStreamComplete(ObjectLoadStream& stream)
+{
+    RefTarget::loadFromStreamComplete(stream);
+
+    if(_frameLabels.empty()) {
+        // Rebuild the list of human-readable labels assigned to animation frames.
+        updateAnimationFrameLabels();
+    }
+}
+
+/******************************************************************************
+* Creates a copy of this object.
+******************************************************************************/
+OORef<RefTarget> AnimationSettings::clone(bool deepCopy, CloneHelper& cloneHelper) const
+{
+    // Let the base class create an instance of this class.
+    OORef<AnimationSettings> clone = static_object_cast<AnimationSettings>(RefTarget::clone(deepCopy, cloneHelper));
+
+    // Copy internal data.
+    clone->_frameLabels = this->_frameLabels;
+
+    return clone;
+}
+
+/******************************************************************************
+* Converts a time value to its string representation.
+******************************************************************************/
+QString AnimationSettings::timeToString(AnimationTime time)
+{
+    return QString::number(time.frame());
+}
+
+/******************************************************************************
+* Converts a string to a time value.
+* Throws an exception when a parsing error occurs.
+******************************************************************************/
+AnimationTime AnimationSettings::stringToTime(const QString& stringValue)
+{
+    bool ok;
+    int frame = stringValue.toInt(&ok);
+    if(!ok)
+        throw Exception(tr("Invalid frame number format: %1").arg(stringValue));
+    return AnimationTime::fromFrame(frame);
+}
+
+/******************************************************************************
+* Sets the current animation time to the start of the animation interval.
+******************************************************************************/
+void AnimationSettings::jumpToAnimationStart()
+{
+    setCurrentFrame(firstFrame());
+}
+
+/******************************************************************************
+* Sets the current animation time to the end of the animation interval.
+******************************************************************************/
+void AnimationSettings::jumpToAnimationEnd()
+{
+    setCurrentFrame(lastFrame());
+}
+
+/******************************************************************************
+* Jumps to the previous animation frame.
+******************************************************************************/
+void AnimationSettings::jumpToPreviousFrame()
+{
+    setCurrentFrame(std::max(currentFrame() - 1, firstFrame()));
+}
+
+/******************************************************************************
+* Jumps to the previous animation frame.
+******************************************************************************/
+void AnimationSettings::jumpToNextFrame()
+{
+    setCurrentFrame(std::min(currentFrame() + 1, lastFrame()));
+}
+
+/******************************************************************************
+* Provides a custom function that takes care of the deserialization of a
+* serialized property field that has been removed from the class.
+* This is needed for file backward compatibility with OVITO 3.7.
+******************************************************************************/
+RefTarget::SerializedPropertyField::CustomDeserializationFunctionPtr AnimationSettings::OOMetaClass::overrideFieldDeserialization(LoadStream& stream, const SerializedPropertyField& field) const
+{
+    // For backward compatibility with OVITO 3.7:
+
+    // The AnimationSettings classes used to store the animation interval in a single property field.
+    if(field.definingClass == &AnimationSettings::OOClass() && field.identifier == "animationInterval") {
+        return [](const SerializedPropertyField& field, ObjectLoadStream& stream, RefMaker& owner) {
+            int intervalStart, intervalEnd;
+            stream >> intervalStart >> intervalEnd;
+            int ticksPerFrame = (int)std::round(4800.0f / static_cast<AnimationSettings&>(owner).framesPerSecond());
+            static_cast<AnimationSettings&>(owner).setFirstFrame(intervalStart / ticksPerFrame);
+            static_cast<AnimationSettings&>(owner).setLastFrame(intervalEnd / ticksPerFrame);
+        };
+    }
+
+    // The AnimationSettings classes used to store the current animation time in the field 'time'. Now it is in 'currentFrame'.
+    if(field.definingClass == &AnimationSettings::OOClass() && field.identifier == "time") {
+        return [](const SerializedPropertyField& field, ObjectLoadStream& stream, RefMaker& owner) {
+            int time; // Legacy TimePoint data type
+            stream >> time;
+            int ticksPerFrame = (int)std::round(4800.0f / static_cast<AnimationSettings&>(owner).framesPerSecond());
+            static_cast<AnimationSettings&>(owner).setCurrentFrame(time / ticksPerFrame);
+        };
+    }
+
+    // The AnimationSettings classes used to store the frame rate in the field 'ticksPerFrame'. Now it is in 'framesPerSecond'.
+    if(field.definingClass == &AnimationSettings::OOClass() && field.identifier == "ticksPerFrame") {
+        return [](const SerializedPropertyField& field, ObjectLoadStream& stream, RefMaker& owner) {
+            int ticksPerFrame;
+            stream >> ticksPerFrame;
+            static_cast<AnimationSettings&>(owner).setFramesPerSecond(4800.0f / ticksPerFrame);
+        };
+    }
+
+    return RefTarget::OOMetaClass::overrideFieldDeserialization(stream, field);
+}
+
+/******************************************************************************
+* Recalculates the length of the animation interval to accommodate all loaded
+* source animations in the scene.
+******************************************************************************/
+void AnimationSettings::adjustAnimationInterval()
+{
+    OVITO_ASSERT(this_task::get());
+
+    int firstFrame = std::numeric_limits<int>::max();
+    int lastFrame = std::numeric_limits<int>::lowest();
+
+    // Visit all scenes that reference this animation settings object.
+    visitDependents([&](RefMaker* dependent) {
+        if(Scene* scene = dynamic_object_cast<Scene>(dependent)) {
+            scene->visitPipelines([&](SceneNode* sceneNode) {
+                if(PipelineNode* head = sceneNode->pipeline()->head()) {
+                    int nframes = head->numberOfSourceFrames();
+                    if(nframes > 0) {
+                        // Final animation interval should encompass the local intervals
+                        // of all animated objects in the scene.
+                        int start = head->sourceFrameToAnimationTime(0).frame();
+                        if(start < firstFrame) firstFrame = start;
+                        int end = (head->sourceFrameToAnimationTime(nframes) - 1).frame();
+                        if(end > lastFrame) lastFrame = end;
+                    }
+                }
+            });
+        }
+    });
+    if(firstFrame > lastFrame)
+        firstFrame = lastFrame = 0;
+    setFirstFrame(firstFrame);
+    setLastFrame(lastFrame);
+    setCurrentFrame(qBound(firstFrame, currentFrame(), lastFrame));
+}
+
+/******************************************************************************
+* Rebuilds the list of human-readable labels assigned to animation frames.
+******************************************************************************/
+void AnimationSettings::updateAnimationFrameLabels()
+{
+    OVITO_ASSERT(this_task::get());
+
+    _frameLabels.clear();
+
+    // Query all scenes that reference this animation settings object.
+    visitDependents([&](RefMaker* dependent) {
+        if(Scene* scene = dynamic_object_cast<Scene>(dependent)) {
+            scene->visitPipelines([&](SceneNode* sceneNode) {
+                if(PipelineNode* head = sceneNode->pipeline()->head()) {
+                    if(head->numberOfSourceFrames() > 0) {
+                        // Save the list of the named animation frames.
+                        // Merge with other list(s) from other scene objects if there are any.
+                        if(_frameLabels.empty())
+                            _frameLabels = head->animationFrameLabels();
+                        else {
+                            auto additionalLabels = head->animationFrameLabels();
+                            if(!additionalLabels.empty())
+                                _frameLabels.insert(additionalLabels);
+                        }
+                    }
+                }
+            });
+        }
+    });
+}
+
+
+}   // End of namespace

@@ -1,0 +1,8 @@
+[Icon Theme]
+Name=Ovito
+Comment=OVITO's standard icon theme
+
+[actions]
+Size=22
+Context=Actions
+Type=Fixed

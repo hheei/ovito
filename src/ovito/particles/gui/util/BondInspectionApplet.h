@@ -1,0 +1,120 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/particles/gui/ParticlesGui.h>
+#include <ovito/particles/gui/util/BondPickingHelper.h>
+#include <ovito/particles/objects/Bonds.h>
+#include <ovito/particles/util/ParticleExpressionEvaluator.h>
+#include <ovito/stdobj/gui/properties/PropertyInspectionApplet.h>
+#include <ovito/gui/base/viewport/ViewportInputMode.h>
+#include <ovito/gui/base/viewport/ViewportInputManager.h>
+#include <ovito/core/viewport/ViewportGizmo.h>
+
+namespace Ovito {
+
+
+/**
+ * \brief Data inspector page for bonds.
+ */
+class BondInspectionApplet : public PropertyInspectionApplet
+{
+    OVITO_CLASS(BondInspectionApplet)
+    Q_OBJECT
+
+public:
+
+    /// Constructor.
+    void initializeObject() { PropertyInspectionApplet::initializeObject(Bonds::OOClass()); }
+
+    /// Returns the key value for this applet that is used for ordering the applet tabs.
+    virtual int orderingKey() const override { return 10; }
+
+    /// Lets the applet create the UI widget that is to be placed into the data inspector panel.
+    virtual QWidget* createWidget() override;
+
+    /// This is called when the applet is no longer visible.
+    virtual void deactivate() override;
+
+    /// Returns the help topic ID for the documentation page of this applet.
+    virtual QString helpTopicId() const override { return QStringLiteral("manual:data_inspector.bonds"); }
+
+protected:
+
+    /// Creates the evaluator object for filter expressions.
+    virtual std::unique_ptr<PropertyExpressionEvaluator> createExpressionEvaluator() override {
+        return std::make_unique<BondExpressionEvaluator>();
+    }
+
+private:
+
+    /// Viewport input mode that lets the user pick bonds.
+    class PickingMode : public ViewportInputMode, BondPickingHelper
+    {
+    public:
+
+        /// Constructor.
+        void initializeObject(BondInspectionApplet* applet) {
+            ViewportInputMode::initializeObject();
+            _applet = applet;
+        }
+
+        /// Handles the mouse up events for a viewport.
+        virtual void mouseReleaseEvent(ViewportWindow* vpwin, QMouseEvent* event) override;
+
+        /// Handles the mouse move event for the given viewport.
+        virtual void mouseMoveEvent(ViewportWindow* vpwin, QMouseEvent* event) override;
+
+        /// Clears the list of picked bonds.
+        void resetSelection() {
+            if(!_pickedElements.empty()) {
+                _pickedElements.clear();
+                requestViewportUpdate();
+            }
+        }
+
+    protected:
+
+        /// This is called by the system after the input handler is no longer the active handler.
+        virtual void deactivated(bool temporary) override {
+            _pickedElements.clear();
+            ViewportInputMode::deactivated(temporary);
+        }
+
+    private:
+
+        /// The owner object.
+        BondInspectionApplet* _applet;
+
+        /// The list of picked bonds.
+        std::vector<PickResult> _pickedElements;
+    };
+
+private:
+
+    /// The viewport input for picking bonds.
+    OORef<PickingMode> _pickingMode;
+};
+
+}   // End of namespace

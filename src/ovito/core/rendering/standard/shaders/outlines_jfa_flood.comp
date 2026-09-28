@@ -1,0 +1,102 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#version 450
+// Jump-flood outline path, stage 2/3: flood.
+// Replaces the outlines_expand.comp loop when the JFA path is active.
+//
+// Dispatched log2(firstStep)+1 times with step = firstStep, firstStep/2, ..., 1,
+// ping-ponging the seed buffers (vs. maxLineWidth+1 passes for the triangle
+// expansion). Each pixel inspects the 3x3 candidates at +-step offsets and
+// keeps the seed minimizing
+//
+//     score = distance(pixel, seedPos) - penSize(seed)
+//
+// i.e. an additively weighted Voronoi: a far edge with a fat pen correctly
+// beats a near edge with a thin pen, matching the max-combining semantics of
+// the triangle expansion. Plain JFA can leave rare single-pixel
+// misassignments; for an anti-aliased outline mask these are visually
+// undetectable (use JFA+1 — one extra step-1 pass — if ever needed).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(std140, binding = 0) uniform Params {
+    ivec2 size;
+    vec2  depthRange;
+    vec2  widthRange;
+    vec2  _pad;
+    vec4  color;
+    float nearPlane;
+    float farPlane;
+    int   isPerspective;
+    int   _padDepthRange; // unused (was depthZeroToOne)
+} P;
+
+layout(std140, binding = 1) uniform StepParams {
+    int step;
+} S;
+
+layout(std430, binding = 2) readonly  buffer SeedsIn  { uvec2 seedsIn[];  };
+layout(std430, binding = 3) writeonly buffer SeedsOut { uvec2 seedsOut[]; };
+
+const uint  INVALID_SEED = 0xFFFFFFFFu;
+const float REACH_SCALE  = 256.0; // must match outlines_jfa_seed.comp
+
+// Additively weighted distance: a far edge with a wide outline correctly beats a near edge with a
+// thin one. s.y holds the outline half-width (reach) as fixed-point, so decode it before use.
+float seedScore(uvec2 s, vec2 p)
+{
+    if(s.x == INVALID_SEED)
+        return 1e30;
+    vec2 sp = vec2(float(s.x & 0xFFFFu), float(s.x >> 16));
+    return distance(p, sp) - float(s.y) / REACH_SCALE;
+}
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if(p.x >= P.size.x || p.y >= P.size.y)
+        return;
+    int idx = p.y * P.size.x + p.x;
+
+    vec2 pf = vec2(p);
+    uvec2 best = seedsIn[idx];
+    float bestScore = seedScore(best, pf);
+
+    for(int dy = -1; dy <= 1; ++dy) {
+        for(int dx = -1; dx <= 1; ++dx) {
+            if(dx == 0 && dy == 0)
+                continue;
+            ivec2 q = p + ivec2(dx, dy) * S.step;
+            if(q.x < 0 || q.x >= P.size.x || q.y < 0 || q.y >= P.size.y)
+                continue;
+            uvec2 c = seedsIn[q.y * P.size.x + q.x];
+            float sc = seedScore(c, pf);
+            if(sc < bestScore) {
+                bestScore = sc;
+                best = c;
+            }
+        }
+    }
+
+    seedsOut[idx] = best;
+}

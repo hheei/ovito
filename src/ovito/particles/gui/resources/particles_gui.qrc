@@ -1,0 +1,21 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+
+<qresource prefix="/particles">
+	
+	<file>icons/export_color_scale.png</file>
+	<file>icons/particle_shape_sphere.png</file>
+	<file>icons/particle_shape_cube.png</file>
+	<file>icons/particle_shape_circle.png</file>
+	<file>icons/particle_shape_square.png</file>
+	<file>icons/particle_shape_cylinder.png</file>
+	<file>icons/particle_shape_spherocylinder.png</file>
+	<file>icons/particle_shape_mesh.png</file>
+
+	<file>icons/arrow_alignment_base.png</file>
+	<file>icons/arrow_alignment_center.png</file>
+	<file>icons/arrow_alignment_head.png</file>
+
+</qresource> 
+
+</RCC>

@@ -1,0 +1,144 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#version 450
+// Port of RemoveNoOutlineElementsKernel.
+//
+// Pixels belonging to "no outline" instances (bit 31 set) are replaced by the
+// median of valid 3x3 neighbours (or background, if any neighbour is
+// background). Run repeatedly, ping-ponging the depth/instance buffers, until
+// the update counter stays 0 (quality mode, with readback) or for a fixed
+// number of passes (interactive mode).
+//
+// In the OVITO integration this shader is dispatched 0 times because
+// outlineDepthTexture already excludes ExcludeFromOutline geometry; the
+// instance buffer is filled with 0 (valid) by outlines_init.comp.
+//
+// Deliberate deviations from the CUDA original:
+//  * computeMedian() in the CUDA code uses `float key` in its insertion sort
+//    for ALL T, including uint32 instance ids. Ids >= 2^24 lose precision
+//    there; this port sorts ids as uints.
+//  * For an even neighbour count the CUDA code averages the two middle
+//    elements. Averaging two instance IDs fabricates an id that may not
+//    exist; this port takes the upper-middle element instead. Depth keeps
+//    the true median (average of middles).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(std140, binding = 0) uniform Params {
+    ivec2 size;
+    vec2  depthRange;
+    vec2  widthRange;
+    vec2  _pad;
+    vec4  color;
+    float nearPlane;
+    float farPlane;
+    int   isPerspective;
+    int   _padDepthRange; // unused (was depthZeroToOne)
+} P;
+
+layout(std430, binding = 1) readonly  buffer DepthPrev { float depthPrev[]; };
+layout(std430, binding = 2) readonly  buffer InstPrev  { uint  instPrev[];  };
+layout(std430, binding = 3) writeonly buffer DepthNext { float depthNext[]; };
+layout(std430, binding = 4) writeonly buffer InstNext  { uint  instNext[];  };
+layout(std430, binding = 5) buffer Counter { uint numUpdated; };
+
+bool excludeInstance(uint id)    { return id != 0xFFFFFFFFu && (id & 0x80000000u) != 0u; }
+bool backgroundInstance(uint id) { return id == 0xFFFFFFFFu; }
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if(p.x >= P.size.x || p.y >= P.size.y)
+        return;
+    int idx = p.y * P.size.x + p.x;
+
+    uint inst0 = instPrev[idx];
+    if(!excludeInstance(inst0)) {
+        depthNext[idx] = depthPrev[idx];
+        instNext[idx]  = inst0;
+        return;
+    }
+
+    // Pixel needs fixing.
+    atomicAdd(numUpdated, 1u);
+
+    int xlo = max(p.x - 1, 0);
+    int xhi = min(p.x + 2, P.size.x);
+    int ylo = max(p.y - 1, 0);
+    int yhi = min(p.y + 2, P.size.y);
+
+    uint  localInst[9];
+    float localDepth[9];
+    int n0 = 0;
+    for(int yy = ylo; yy < yhi; ++yy) {
+        for(int xx = xlo; xx < xhi; ++xx) {
+            int j = yy * P.size.x + xx;
+            localInst[n0]  = instPrev[j];
+            localDepth[n0] = depthPrev[j];
+            n0++;
+        }
+    }
+
+    // Any background neighbour -> become background.
+    for(int i = 0; i < n0; ++i) {
+        if(backgroundInstance(localInst[i])) {
+            instNext[idx]  = localInst[i];
+            depthNext[idx] = localDepth[i];
+            return;
+        }
+    }
+
+    // Median over valid (non-excluded) neighbours.
+    uint  fi[9];
+    float fd[9];
+    int n1 = 0;
+    for(int i = 0; i < n0; ++i) {
+        if(!excludeInstance(localInst[i])) {
+            fi[n1] = localInst[i];
+            fd[n1] = localDepth[i];
+            n1++;
+        }
+    }
+
+    if(n1 > 0) {
+        // Insertion sort, independently per array (matches CUDA behaviour).
+        for(int i = 1; i < n1; ++i) {
+            float kd = fd[i];
+            int j = i - 1;
+            while(j >= 0 && fd[j] > kd) { fd[j + 1] = fd[j]; j--; }
+            fd[j + 1] = kd;
+        }
+        for(int i = 1; i < n1; ++i) {
+            uint ki = fi[i];
+            int j = i - 1;
+            while(j >= 0 && fi[j] > ki) { fi[j + 1] = fi[j]; j--; }
+            fi[j + 1] = ki;
+        }
+        depthNext[idx] = (n1 % 2 == 1) ? fd[n1 / 2]
+                                        : (fd[n1 / 2 - 1] + fd[n1 / 2]) * 0.5;
+        instNext[idx]  = fi[n1 / 2];
+    } else {
+        depthNext[idx] = depthPrev[idx];
+        instNext[idx]  = inst0;
+    }
+}

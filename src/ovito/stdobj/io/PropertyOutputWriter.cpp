@@ -1,0 +1,187 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/stdobj/StdObj.h>
+#include "PropertyOutputWriter.h"
+
+namespace Ovito {
+
+/******************************************************************************
+ * Saves the mapping to the given stream.
+ *****************************************************************************/
+void OutputColumnMapping::saveToStream(SaveStream& stream) const
+{
+    stream.beginChunk(0x01);
+    stream << (int)size();
+    for(const PropertyReference& col : *this) {
+        stream << col;
+    }
+    stream.endChunk();
+}
+
+/******************************************************************************
+ * Loads the mapping from the given stream.
+ *****************************************************************************/
+void OutputColumnMapping::loadFromStream(LoadStream& stream)
+{
+    stream.expectChunk(0x01);
+    int numColumns;
+    stream >> numColumns;
+    resize(numColumns);
+    for(PropertyReference& col : *this) {
+        stream >> col;
+    }
+    stream.closeChunk();
+}
+
+/******************************************************************************
+ * Saves the mapping into a byte array.
+ *****************************************************************************/
+QByteArray OutputColumnMapping::toByteArray() const
+{
+    QByteArray buffer;
+    QDataStream dstream(&buffer, QIODevice::WriteOnly);
+    SaveStream stream(dstream);
+    saveToStream(stream);
+    stream.close();
+    return buffer;
+}
+
+/******************************************************************************
+ * Loads the mapping from a byte array.
+ *****************************************************************************/
+void OutputColumnMapping::fromByteArray(const QByteArray& array)
+{
+    QDataStream dstream(array);
+    LoadStream stream(dstream);
+    loadFromStream(stream);
+    stream.close();
+}
+
+/******************************************************************************
+ * Initializes the writer object.
+ *****************************************************************************/
+PropertyOutputWriter::PropertyOutputWriter(const OutputColumnMapping& mapping, const PropertyContainer* sourceContainer, TypedPropertyMode typedPropertyMode)
+    : _sourceContainer(sourceContainer), _typedPropertyMode(typedPropertyMode)
+{
+    // Gather the source properties.
+    for(int i = 0; i < (int)mapping.size(); i++) {
+        QString errorDescription;
+        auto [property, vectorComponent] = mapping[i].findInContainerWithComponent(sourceContainer, errorDescription, false);
+        if(property == nullptr && mapping[i].name() != sourceContainer->getOOMetaClass().standardPropertyName(Property::GenericIdentifierProperty)) {
+            throw Exception(tr("Invalid output file column specification '%1': %2").arg(mapping[i].nameWithComponent()).arg(errorDescription));
+        }
+        if(vectorComponent < 0) {
+            // If the user did not specify a specific component for a vector property, generate multiple columns to export all property components.
+            if(property && property->componentCount() > 1) {
+                for(int component = 0; component < property->componentCount(); component++) {
+                    _properties.push_back(property);
+                    _vectorComponents.push_back(component);
+                    _accessors.emplace_back(property);
+                }
+                continue;
+            }
+            else {
+                vectorComponent = 0;
+            }
+        }
+        // Build internal list of property objects for fast look-up during writing.
+        _properties.push_back(property);
+        _vectorComponents.push_back(vectorComponent);
+        _accessors.emplace_back(property);
+    }
+    _cachedTypeNames.resize(_properties.size());
+}
+
+/******************************************************************************
+ * Writes the data record for a single data element to the output stream.
+ *****************************************************************************/
+void PropertyOutputWriter::writeElement(size_t index, CompressedTextWriter& stream)
+{
+    auto property = _properties.cbegin();
+    auto vcomp = _vectorComponents.cbegin();
+    auto accessor = _accessors.cbegin();
+    auto typeNameCache = _cachedTypeNames.begin();
+    for(; property != _properties.cend(); ++property, ++vcomp, ++accessor, ++typeNameCache) {
+        if(property != _properties.cbegin())
+            stream << ' ';
+        if(*property) {
+            const int dataType = (*property)->dataType();
+            if(dataType == Property::Float32) {
+                stream << *reinterpret_cast<const float*>(accessor->cdata(index, *vcomp));
+            }
+            else if(dataType == Property::Float64) {
+                stream << *reinterpret_cast<const double*>(accessor->cdata(index, *vcomp));
+            }
+            else if(dataType == Property::Int32) {
+                if(_typedPropertyMode == WriteNumericIds || (*property)->elementTypes().empty()) {
+                    stream << *reinterpret_cast<const int32_t*>(accessor->cdata(index, *vcomp));
+                }
+                else {
+                    // Write type name instead of type number.
+                    int32_t numericTypeId = *reinterpret_cast<const int32_t*>(accessor->cdata(index, *vcomp));
+                    auto entry = typeNameCache->find(numericTypeId);
+                    if(entry == typeNameCache->end()) {
+                        const ElementType* type = (*property)->elementType(numericTypeId);
+                        if(type && !type->name().isEmpty()) {
+                            if(_typedPropertyMode == WriteNamesUnmodified) {
+                                entry = typeNameCache->emplace(numericTypeId, type->name()).first;
+                            }
+                            else if(_typedPropertyMode == WriteNamesUnderscore) {
+                                // Replace spaces in the name with underscores.
+                                QString s = type->name();
+                                entry = typeNameCache->emplace(numericTypeId, s.replace(QChar(' '), QChar('_'))).first;
+                            }
+                            else if(_typedPropertyMode == WriteNamesInQuotes) {
+                                // Surround name with quotes if necessary.
+                                if(type->name().contains(QChar(' ')))
+                                    entry = typeNameCache->emplace(numericTypeId, QChar('"') + type->name() + QChar('"')).first;
+                                else
+                                    entry = typeNameCache->emplace(numericTypeId, type->name()).first;
+                            }
+                        }
+                        else {
+                            entry = typeNameCache->emplace(numericTypeId, QString::number(numericTypeId)).first;
+                        }
+                    }
+                    stream << entry->second;
+                }
+            }
+            else if(dataType == Property::Int64) {
+                stream << static_cast<qint64>(*reinterpret_cast<const int64_t*>(accessor->cdata(index, *vcomp)));
+            }
+            else if(dataType == Property::Int8) {
+                stream << static_cast<qint32>(*reinterpret_cast<const int8_t*>(accessor->cdata(index, *vcomp)));
+            }
+            else {
+                throw Exception(tr("The property '%1' cannot be written to the output file, because it has a non-standard data type.").arg((*property)->name()));
+            }
+        }
+        else {
+            // Write (implicit) element index:
+            stream << static_cast<quint64>(index + 1);
+        }
+    }
+    stream << '\n';
+}
+
+}   // End of namespace

@@ -1,0 +1,171 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * \file
+ * \brief Contains the definition of the Ovito::Exception class.
+ */
+
+#pragma once
+
+
+#include <ovito/core/Core.h>
+
+namespace Ovito {
+
+#ifdef QT_NO_EXCEPTIONS
+    #error "OVITO requires Qt exception support. It seems that Qt has been built without exceptions (the macro QT_NO_EXCEPTIONS is defined). Please turn on exception support and rebuild the Qt library."
+#endif
+
+/**
+ * \brief The standard exception type used by OVITO.
+ *
+ * The Exception class carries a message string that describes the error that has occurred.
+ * The reportError() method displays the error message to the user. A typical usage pattern is:
+ *
+ * \code
+ *     try {
+ *         ...
+ *         if(error condition) throw Exception("The operation failed.");
+ *         ...
+ *     }
+ *     catch(const Exception& ex) {
+ *         userInterface.reportError(ex);
+ *     }
+ * \endcode
+ *
+ * Internally, the Exception class stores a list of message strings. The first string always gives the most general description of the error,
+ * while any additional strings may describe the error in more detail or explain the low-level origin of the error.
+ * The appendDetailMessage() method can be used to add more detailed information about the error:
+ *
+ * \code
+ *     if(errorCode != 0) {
+ *         Exception ex("The operation failed.");
+ *         ex.appendDetailMessage(QString("Error code is %1").arg(errorCode));
+ *         throw ex;
+ *     }
+ * \endcode
+ *
+ * If an Exception is thrown by a low-level function, it might be necessary to prepend a more general message before displaying
+ * the error to the user. This can be done using the prependGeneralMessage() method:
+ *
+ * \code
+ *     try {
+ *         ...
+ *         if(error)
+ *             throw Exception(QString("Unexpected token in line %1.").arg(line));
+ *         ...
+ *     }
+ *     catch(Exception& ex) {
+ *         ex.prependGeneralMessage("The input file has an invalid format.");
+ *         ex.reportError();
+ *     }
+ * \endcode
+ *
+ */
+#ifndef OVITO_DISABLE_THREADING
+    class OVITO_CORE_EXPORT Exception : public QException
+#else
+    class OVITO_CORE_EXPORT Exception
+#endif
+{
+public:
+
+    /// Creates an exception with a default error message.
+    /// You should use the constructor taking a message string instead to construct an Exception.
+    Exception();
+
+    /// Initializes the Exception object with a message string describing the error that has occurred.
+    /// \param message The human-readable message describing the error, which will be displayed by showError().
+    Exception(const QString& message);
+
+    /// \brief Multi-message constructor that initializes the Exception object with multiple message string.
+    /// \param errorMessages The list of message strings describing the error. The list should be ordered with
+    ///                      the most general error description first, followed by the more detailed information.
+    explicit Exception(QStringList errorMessages);
+
+    /// Copy constructor.
+    Exception(const Exception& other) = default;
+
+    // Default destructor.
+    virtual ~Exception() = default;
+
+    /// \brief Appends a string to the list of message that describes the error in more detail.
+    /// \param message A human-readable description.
+    /// \return A reference to this Exception object.
+    Exception& appendDetailMessage(const QString& message);
+
+    /// Prepends a string to the list of messages that describes the error in a more general way than the existing message strings.
+    /// \param message The human-readable description of the error.
+    /// \return A reference to this Exception object.
+    Exception& prependGeneralMessage(const QString& message);
+
+    /// Prepends some text to the first message string of the exception.
+    /// \param message The text to prepend.
+    /// \return A reference to this Exception object.
+    Exception& prependToMessage(const QString& text);
+
+    /// Sets the list of error messages stored in this exception object.
+    /// \param messages The new list of messages, which completely replaces any existing messages.
+    void setMessages(const QStringList& messages) { this->_messages = messages; }
+
+    /// Returns the most general message string stored in this Exception object, which describes the occurred error.
+    const QString& message() const { return _messages.front(); }
+
+    /// Returns all message strings stored in this Exception object.
+    const QStringList& messages() const { return _messages; }
+
+    /// Logs the error message(s) stored in this Exception object by printing them to the console.
+    /// No modal dialog box is shown in GUI mode.
+    void logError() const;
+
+    /// Associates the exception with traceback information, e.g., from a Python exception.
+    void setTraceback(const QString& tb) { _traceback = tb; }
+
+    /// Returns optional traceback information associated with the exception, e.g., if the exception
+    /// was raised by Python code.
+    const QString& traceback() const { return _traceback; }
+
+#ifndef OVITO_DISABLE_THREADING
+
+    //////////////////////////////////////////////////////////////////////////////////////
+    // The following two functions are required by the base class QException
+
+    // Raises this exception object.
+    virtual void raise() const override { throw *this; }
+
+    // Creates a copy of this exception object.
+    virtual Exception* clone() const override { return new Exception(*this); }
+
+#endif
+
+private:
+
+    /// Message strings describing the error.
+    /// List is ordered with the most general description coming first followed by the more detailed information.
+    QStringList _messages;
+
+    /// Optional traceback information (e.g. from Python).
+    QString _traceback;
+};
+
+}   // namespace Ovito

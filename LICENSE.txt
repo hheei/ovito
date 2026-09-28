@@ -1,0 +1,15 @@
+OVITO is free software.
+
+This software is released under the terms of the GNU General Public License (GPL)
+version 3 as published by the Free Software Foundation. See the LICENSE.GPL.txt
+file in this directory for the precise terms and conditions.
+
+Please see each file in the implementation for specific copyright information.
+
+This repository also contains copies of third-party software libraries that are available
+under their own terms. These third-party libraries and their respective licenses are
+found under the src/3rdparty/ directory.
+
+The user documentation for OVITO is available to be redistributed and/or
+modified under the terms of the GNU Free Documentation License, version 1.2 or any
+later version published by the Free Software Foundation.

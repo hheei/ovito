@@ -1,0 +1,143 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#version 450
+// Port of ExpandTrianglesKernel. Run maxLineWidth+1 times, ping-ponging the
+// two triangle buffers (swap the shader resource bindings between dispatches).
+//
+// The hand-unrolled blocks of the CUDA version are collapsed into
+// table-driven loops; the semantics are identical:
+//   1. every step count decrements (saturating at 0)
+//   2. in-cell propagation: outer triangles feed their adjacent inner
+//      triangle, inner triangles feed their three neighbours
+//   3. cross-cell propagation from the 4 adjacent pixels
+// A propagation from triangle `a` (value v, flag set, v > 0) into triangle
+// `b` sets b's flag and raises b's value to max(current, v - 1).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(std140, binding = 0) uniform Params {
+    ivec2 size;
+    vec2  depthRange;
+    vec2  widthRange;
+    vec2  _pad;
+    vec4  color;
+    float nearPlane;
+    float farPlane;
+    int   isPerspective;
+    int   _padDepthRange; // unused (was depthZeroToOne)
+} P;
+
+layout(std430, binding = 1) readonly  buffer TriPrev { uvec2 triPrev[]; };
+layout(std430, binding = 2) writeonly buffer TriNext { uvec2 triNext[]; };
+
+const uint VAL_MASK = 63u;
+
+uint triGetVal(uvec2 t, uint i)
+{
+    return (i < 4u) ? ((t.x >> (8u + i * 6u)) & VAL_MASK)
+                    : ((t.y >> ((i - 4u) * 6u)) & VAL_MASK);
+}
+
+uvec2 triSetVal(uvec2 t, uint i, uint v)
+{
+    v &= VAL_MASK;
+    if(i < 4u) {
+        uint s = 8u + i * 6u;
+        t.x = (t.x & ~(VAL_MASK << s)) | (v << s);
+    } else {
+        uint s = (i - 4u) * 6u;
+        t.y = (t.y & ~(VAL_MASK << s)) | (v << s);
+    }
+    return t;
+}
+
+bool  triGetFlag(uvec2 t, uint i) { return (t.x & (1u << i)) != 0u; }
+uvec2 triSetFlag(uvec2 t, uint i) { t.x |= (1u << i); return t; }
+
+void prop(inout uvec2 next, uvec2 src, uint from, uint to)
+{
+    uint v = triGetVal(src, from);
+    if(v > 0u && triGetFlag(src, from)) {
+        next = triSetFlag(next, to);
+        next = triSetVal(next, to, max(triGetVal(next, to), v - 1u));
+    }
+}
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if(p.x >= P.size.x || p.y >= P.size.y)
+        return;
+    int idx = p.y * P.size.x + p.x;
+
+    uvec2 prev = triPrev[idx];
+    uvec2 next = prev;
+
+    // 1. Decrement all step counts (saturating).
+    for(uint i = 0u; i < 8u; ++i) {
+        uint v = triGetVal(prev, i);
+        next = triSetVal(next, i, (v > 0u) ? v - 1u : 0u);
+    }
+
+    // 2. In-cell propagation.
+    // Outer -> inner: 0->1, 2->3, 4->5, 6->7
+    for(uint i = 0u; i < 4u; ++i)
+        prop(next, prev, 2u * i, 2u * i + 1u);
+
+    // Inner -> three neighbouring triangles.
+    const uint innerSrc[4]    = uint[4](1u, 3u, 5u, 7u);
+    const uint innerDst[4][3] = uint[4][3](
+        uint[3](0u, 3u, 7u),   // from 1
+        uint[3](1u, 2u, 5u),   // from 3
+        uint[3](3u, 4u, 7u),   // from 5
+        uint[3](1u, 5u, 6u));  // from 7
+    for(uint i = 0u; i < 4u; ++i)
+        for(uint j = 0u; j < 3u; ++j)
+            prop(next, prev, innerSrc[i], innerDst[i][j]);
+
+    // 3. Incoming triangles from adjacent cells.
+    uvec2 zero = uvec2(0u);
+    uvec2 src;
+
+    // +x (right): its 0 -> my 2, its 6 -> my 4
+    src = (p.x + 1 < P.size.x) ? triPrev[idx + 1] : zero;
+    prop(next, src, 0u, 2u);
+    prop(next, src, 6u, 4u);
+
+    // -x (left): its 2 -> my 0, its 4 -> my 6
+    src = (p.x - 1 >= 0) ? triPrev[idx - 1] : zero;
+    prop(next, src, 2u, 0u);
+    prop(next, src, 4u, 6u);
+
+    // +y: its 6 -> my 0, its 4 -> my 2
+    src = (p.y + 1 < P.size.y) ? triPrev[idx + P.size.x] : zero;
+    prop(next, src, 6u, 0u);
+    prop(next, src, 4u, 2u);
+
+    // -y: its 0 -> my 6, its 2 -> my 4
+    src = (p.y - 1 >= 0) ? triPrev[idx - P.size.x] : zero;
+    prop(next, src, 0u, 6u);
+    prop(next, src, 2u, 4u);
+
+    triNext[idx] = next;
+}

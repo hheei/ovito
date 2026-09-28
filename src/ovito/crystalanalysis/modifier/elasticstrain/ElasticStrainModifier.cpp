@@ -1,0 +1,99 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/crystalanalysis/CrystalAnalysis.h>
+#include <ovito/crystalanalysis/objects/MicrostructurePhase.h>
+#include <ovito/stdobj/simcell/SimulationCell.h>
+#include <ovito/core/utilities/units/UnitsManager.h>
+#include <ovito/core/dataset/pipeline/ModificationNode.h>
+#include "ElasticStrainModifier.h"
+#include "ElasticStrainEngine.h"
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(ElasticStrainModifier);
+OVITO_CLASSINFO(ElasticStrainModifier, "DisplayName", "Elastic strain calculation");
+OVITO_CLASSINFO(ElasticStrainModifier, "Description", "Calculate atomic-level elastic strain in crystal lattices.");
+OVITO_CLASSINFO(ElasticStrainModifier, "ModifierCategory", "Analysis");
+DEFINE_PROPERTY_FIELD(ElasticStrainModifier, inputCrystalStructure);
+DEFINE_PROPERTY_FIELD(ElasticStrainModifier, calculateDeformationGradients);
+DEFINE_PROPERTY_FIELD(ElasticStrainModifier, calculateStrainTensors);
+DEFINE_PROPERTY_FIELD(ElasticStrainModifier, latticeConstant);
+DEFINE_PROPERTY_FIELD(ElasticStrainModifier, axialRatio);
+DEFINE_PROPERTY_FIELD(ElasticStrainModifier, pushStrainTensorsForward);
+SET_PROPERTY_FIELD_LABEL(ElasticStrainModifier, inputCrystalStructure, "Input crystal structure");
+SET_PROPERTY_FIELD_LABEL(ElasticStrainModifier, calculateDeformationGradients, "Output deformation gradient tensors");
+SET_PROPERTY_FIELD_LABEL(ElasticStrainModifier, calculateStrainTensors, "Output strain tensors");
+SET_PROPERTY_FIELD_LABEL(ElasticStrainModifier, latticeConstant, "Lattice constant");
+SET_PROPERTY_FIELD_LABEL(ElasticStrainModifier, axialRatio, "c/a ratio");
+SET_PROPERTY_FIELD_LABEL(ElasticStrainModifier, pushStrainTensorsForward, "Strain tensor in spatial frame (push-forward)");
+SET_PROPERTY_FIELD_UNITS_AND_MINIMUM(ElasticStrainModifier, latticeConstant, WorldParameterUnit, 0);
+SET_PROPERTY_FIELD_UNITS_AND_MINIMUM(ElasticStrainModifier, axialRatio, FloatParameterUnit, 0);
+
+/******************************************************************************
+* Constructor.
+******************************************************************************/
+void ElasticStrainModifier::initializeObject(ObjectInitializationFlags flags)
+{
+    StructureIdentificationModifier::initializeObject(flags);
+
+    if(!flags.testFlag(ObjectInitializationFlag::DontInitializeObject)) {
+        // Create the structure types.
+        ParticleType::PredefinedStructureType predefTypes[] = {
+                ParticleType::PredefinedStructureType::OTHER,
+                ParticleType::PredefinedStructureType::FCC,
+                ParticleType::PredefinedStructureType::HCP,
+                ParticleType::PredefinedStructureType::BCC,
+                ParticleType::PredefinedStructureType::CUBIC_DIAMOND,
+                ParticleType::PredefinedStructureType::HEX_DIAMOND
+        };
+        OVITO_STATIC_ASSERT(std::size(predefTypes) == StructureAnalysis::NUM_LATTICE_TYPES);
+        for(int id = 0; id < StructureAnalysis::NUM_LATTICE_TYPES; id++) {
+            OORef<MicrostructurePhase> stype = OORef<MicrostructurePhase>::create(flags);
+            stype->setNumericId(id);
+            stype->setDimensionality(MicrostructurePhase::Dimensionality::Volumetric);
+            stype->setName(ParticleType::getPredefinedStructureTypeName(predefTypes[id]));
+            stype->setColor(ElementType::getDefaultColor(OwnerPropertyRef(&Particles::OOClass(), Particles::StructureTypeProperty), stype->name(), id));
+            addStructureType(std::move(stype));
+        }
+    }
+}
+
+/******************************************************************************
+* Creates the engine that will perform the structure identification.
+******************************************************************************/
+std::shared_ptr<StructureIdentificationModifier::Algorithm> ElasticStrainModifier::createAlgorithm(const ModifierEvaluationRequest& request, const PipelineFlowState& input)
+{
+    // Build list of preferred crystal orientations.
+    std::vector<Matrix3> preferredCrystalOrientations;
+    if(inputCrystalStructure() == StructureAnalysis::LATTICE_FCC || inputCrystalStructure() == StructureAnalysis::LATTICE_BCC || inputCrystalStructure() == StructureAnalysis::LATTICE_CUBIC_DIAMOND) {
+        preferredCrystalOrientations.push_back(Matrix3::Identity());
+    }
+
+    // Create engine object. Pass all relevant modifier parameters to the engine as well as the input data.
+    return std::make_shared<ElasticStrainEngine>(*this, input,
+            inputCrystalStructure(), std::move(preferredCrystalOrientations),
+            calculateDeformationGradients(), calculateStrainTensors(),
+            latticeConstant(), axialRatio(), pushStrainTensorsForward());
+}
+
+}   // End of namespace

@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 470" role="img"
+     aria-label="Schematic comparing OVITO's former OpenGL-based rendering stack with the new Qt RHI-based stack targeting Direct3D 12, Metal and Vulkan">
+  <title>OVITO's new real-time rendering architecture</title>
+  <defs>
+    <marker id="arrow-old" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b3b3b3"/>
+    </marker>
+    <marker id="arrow-new" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2a7fd4"/>
+    </marker>
+  </defs>
+
+  <g font-family="Helvetica, Arial, sans-serif" text-anchor="middle">
+
+    <!-- ============================ Former architecture ============================ -->
+    <g>
+      <text x="170" y="28" font-size="17" font-weight="bold" fill="#8c8c8c">OVITO 3.15 and earlier</text>
+
+      <rect x="40" y="50" width="260" height="54" rx="8" fill="#f7f7f7" stroke="#b3b3b3" stroke-width="2"/>
+      <text x="170" y="83" font-size="19" fill="#8c8c8c">OVITO renderer</text>
+
+      <rect x="40" y="140" width="260" height="54" rx="8" fill="#f7f7f7" stroke="#b3b3b3" stroke-width="2"/>
+      <text x="170" y="166" font-size="19" fill="#8c8c8c">OpenGL</text>
+      <text x="170" y="185" font-size="13" fill="#a6a6a6">one API for all platforms</text>
+
+      <rect x="40" y="340" width="260" height="54" rx="8" fill="#f7f7f7" stroke="#b3b3b3" stroke-width="2"/>
+      <text x="170" y="373" font-size="19" fill="#8c8c8c">GPU</text>
+
+      <g stroke="#b3b3b3" stroke-width="2.5" fill="none">
+        <path d="M 170 104 L 170 132" marker-end="url(#arrow-old)"/>
+        <path d="M 170 194 L 170 332" marker-end="url(#arrow-old)"/>
+      </g>
+    </g>
+
+    <!-- ============================ Transition arrow ============================ -->
+    <path d="M 318 152 L 384 152 L 384 137 L 412 167 L 384 197 L 384 182 L 318 182 Z"
+          fill="#2a7fd4" opacity="0.85"/>
+
+    <!-- ============================ New architecture ============================ -->
+    <g>
+      <text x="690" y="28" font-size="19" font-weight="bold" fill="#2a7fd4">OVITO 3.16</text>
+
+      <rect x="420" y="50" width="540" height="54" rx="8" fill="#ffffff" stroke="#2a7fd4" stroke-width="2"/>
+      <text x="690" y="83" font-size="19" fill="#1a1a1a">OVITO rendering engine</text>
+
+      <rect x="420" y="140" width="540" height="54" rx="8" fill="#ffffff" stroke="#2a7fd4" stroke-width="2"/>
+      <text x="690" y="166" font-size="19" fill="#1a1a1a">Qt RHI</text>
+      <text x="690" y="185" font-size="13" fill="#5c5c5c">hardware abstraction layer</text>
+
+      <!-- Native platform graphics APIs -->
+      <rect x="420" y="232" width="166" height="62" rx="8" fill="#eaf3fc" stroke="#2a7fd4" stroke-width="2"/>
+      <text x="503" y="260" font-size="18" fill="#1a1a1a">Direct3D 12</text>
+      <text x="503" y="280" font-size="14" fill="#5c5c5c">Windows</text>
+
+      <rect x="607" y="232" width="166" height="62" rx="8" fill="#eaf3fc" stroke="#2a7fd4" stroke-width="2"/>
+      <text x="690" y="260" font-size="18" fill="#1a1a1a">Metal</text>
+      <text x="690" y="280" font-size="14" fill="#5c5c5c">macOS</text>
+
+      <rect x="794" y="232" width="166" height="62" rx="8" fill="#eaf3fc" stroke="#2a7fd4" stroke-width="2"/>
+      <text x="877" y="260" font-size="18" fill="#1a1a1a">Vulkan</text>
+      <text x="877" y="280" font-size="14" fill="#5c5c5c">Linux</text>
+
+      <rect x="420" y="340" width="540" height="54" rx="8" fill="#ffffff" stroke="#2a7fd4" stroke-width="2"/>
+      <text x="690" y="373" font-size="19" fill="#1a1a1a">GPU</text>
+
+      <g stroke="#2a7fd4" stroke-width="2.5" fill="none">
+        <path d="M 690 104 L 690 132" marker-end="url(#arrow-new)"/>
+        <!-- Fan out from Qt RHI to the three native APIs -->
+        <path d="M 690 194 L 690 213 L 503 213 L 503 224" marker-end="url(#arrow-new)"/>
+        <path d="M 690 194 L 690 224" marker-end="url(#arrow-new)"/>
+        <path d="M 690 194 L 690 213 L 877 213 L 877 224" marker-end="url(#arrow-new)"/>
+        <!-- Converge onto the GPU -->
+        <path d="M 503 294 L 503 317 L 690 317 L 690 332" marker-end="url(#arrow-new)"/>
+        <path d="M 690 294 L 690 332" marker-end="url(#arrow-new)"/>
+        <path d="M 877 294 L 877 317 L 690 317 L 690 332" marker-end="url(#arrow-new)"/>
+      </g>
+
+      <text x="690" y="434" font-size="15" fill="#5c5c5c">Faster viewports &#183; no particle-count limit &#183; GPU compute post-processing</text>
+      <text x="690" y="456" font-size="15" fill="#5c5c5c">Headless offscreen rendering &#183; multi-GPU selection</text>
+    </g>
+  </g>
+</svg>

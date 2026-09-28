@@ -1,0 +1,180 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+#include <ovito/stdobj/properties/Property.h>
+#include <ovito/stdobj/properties/PropertyColorMapping.h>
+#include <ovito/core/dataset/data/DataVis.h>
+#include <ovito/core/dataset/animation/controller/Controller.h>
+#include <ovito/core/dataset/animation/AnimationSettings.h>
+#include <ovito/core/rendering/CylinderPrimitive.h>
+#include <ovito/core/rendering/SceneRenderer.h>
+
+namespace Ovito {
+
+/**
+ * \brief Visualizes vector properties using arrow glyphs.
+ */
+class OVITO_STDOBJ_EXPORT VectorVis : public DataVis
+{
+    OVITO_CLASS(VectorVis)
+
+public:
+    /// The shading modes supported by the vector vis element.
+    enum ShadingMode
+    {
+        NormalShading = CylinderPrimitive::ShadingMode::NormalShading,
+        FlatShading = CylinderPrimitive::ShadingMode::FlatShading
+    };
+    Q_ENUM(ShadingMode);
+
+    /// The position mode for the arrows.
+    enum ArrowPosition
+    {
+        Base,
+        Center,
+        Head
+    };
+    Q_ENUM(ArrowPosition);
+
+    /// The coloring modes supported by the vis element.
+    enum ColoringMode
+    {
+        UniformColoring,
+        PseudoColoring,
+    };
+    Q_ENUM(ColoringMode);
+
+    /// Struct holding the per-vector data provided by the PropertyContainer or Vectors object the VectorVis is attached to.
+    struct VectorData {
+        ConstDataBufferPtr positions;
+        ConstDataBufferPtr directions;
+        ConstDataBufferPtr colors;
+        ConstDataBufferPtr transparencies;
+        ConstDataBufferPtr selection;
+    };
+
+public:
+
+    /// Constructor.
+    void initializeObject(ObjectInitializationFlags flags);
+
+    /// Lets the visualization element render the data object.
+    virtual PipelineStatus renderSynchronous(const ConstDataObjectPath& path, const PipelineFlowState& flowState, FrameGraph& frameGraph, const SceneNode* sceneNode) override;
+
+    /// Computes the bounding box of the object.
+    virtual Box3 boundingBoxImmediate(AnimationTime time, const ConstDataObjectPath& path, const Pipeline* pipeline,
+                                      const PipelineFlowState& flowState, TimeInterval& validityInterval) override;
+
+    /// Returns the transparency parameter.
+    FloatType transparency() const { return transparencyController()->getFloatValue(AnimationTime(0)); }
+
+    /// Sets the transparency parameter.
+    void setTransparency(FloatType t) { transparencyController()->setFloatValue(AnimationTime(0), t); }
+
+    /// Replaces this visual element with a shared visual element by telling all dependents to update their references.
+    virtual void replaceWithSharedElement(DataVis* sharedVis) const override;
+
+public:
+
+    Q_PROPERTY(Ovito::VectorVis::ShadingMode shadingMode READ shadingMode WRITE setShadingMode)
+
+protected:
+
+    /// Computes the bounding box of the arrows.
+    Box3 arrowBoundingBox(const DataBuffer* vectorProperty, const DataBuffer* basePositions) const;
+
+protected:
+
+    /// Reverses of the arrow pointing direction.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{false}, reverseArrowDirection, setReverseArrowDirection);
+    DECLARE_SNAPSHOT_PROPERTY_FIELD(reverseArrowDirection);
+
+    /// Controls how the arrows are positioned relative to the base points.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(ArrowPosition{Base}, arrowPosition, setArrowPosition, PROPERTY_FIELD_MEMORIZE);
+    DECLARE_SNAPSHOT_PROPERTY_FIELD(arrowPosition);
+
+    /// The uniform display color of the arrows.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS((Color{1,1,0}), arrowColor, setArrowColor, PROPERTY_FIELD_MEMORIZE);
+    DECLARE_SNAPSHOT_PROPERTY_FIELD(arrowColor);
+
+    /// The width of the arrows in world units.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(FloatType{0.5}, arrowWidth, setArrowWidth, PROPERTY_FIELD_MEMORIZE);
+    DECLARE_SNAPSHOT_PROPERTY_FIELD(arrowWidth);
+
+    /// The scaling factor applied to the vectors.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(FloatType{1}, scalingFactor, setScalingFactor, PROPERTY_FIELD_MEMORIZE);
+    DECLARE_SNAPSHOT_PROPERTY_FIELD(scalingFactor);
+
+    /// The shading mode for arrows.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(VectorVis::ShadingMode{FlatShading}, shadingMode, setShadingMode, PROPERTY_FIELD_MEMORIZE);
+    DECLARE_SNAPSHOT_PROPERTY_FIELD(shadingMode);
+
+    /// The transparency value of the arrows.
+    DECLARE_MODIFIABLE_REFERENCE_FIELD(OORef<Controller>, transparencyController, setTransparencyController);
+
+    /// Displacement offset to be applied to all arrows.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(Vector3{Vector3::Zero()}, offset, setOffset);
+
+    /// Determines how the arrows are colored.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(VectorVis::ColoringMode{UniformColoring}, coloringMode, setColoringMode);
+
+    /// Transfer function for pseudo-color visualization of an auxiliary property.
+    DECLARE_MODIFIABLE_REFERENCE_FIELD(OORef<PropertyColorMapping>, colorMapping, setColorMapping);
+};
+
+/**
+ * \brief This information record is attached to the arrows by the VectorVis when rendering
+ * them in the viewports. It facilitates the picking of arrows with the mouse.
+ */
+class OVITO_STDOBJ_EXPORT VectorPickInfo : public ObjectPickInfo
+{
+    OVITO_CLASS(VectorPickInfo)
+
+public:
+    /// Constructor.
+    void initializeObject(VectorVis* visElement, const ConstDataObjectPath& dataPath) {
+        ObjectPickInfo::initializeObject();
+        _visElement = visElement;
+        _dataPath = ConstDataObjectRefPath(dataPath.begin(), dataPath.end());
+    }
+
+    /// Returns the data collection path to the vector property.
+    const ConstDataObjectRefPath& dataPath() const { return _dataPath; }
+
+    /// Returns a human-readable string describing the picked object, which will be displayed in the status bar by OVITO.
+    virtual QString infoString(const Pipeline* pipeline, uint32_t subobjectId) override;
+
+    /// Given an sub-object ID returned by the Viewport::pick() method, looks up the
+    /// corresponding data element index.
+    size_t elementIndexFromSubObjectID(quint32 subobjID) const;
+
+private:
+    /// The vis element that rendered the arrows.
+    OORef<VectorVis> _visElement;
+
+    /// The data collection path to the vector property.
+    ConstDataObjectRefPath _dataPath;
+};
+
+}  // namespace Ovito

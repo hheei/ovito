@@ -1,0 +1,303 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/particles/Particles.h>
+#include <ovito/particles/objects/ParticleType.h>
+#include <ovito/particles/objects/Particles.h>
+#include <ovito/stdobj/properties/InputColumnMapping.h>
+#include <ovito/stdobj/simcell/SimulationCell.h>
+#include <ovito/core/utilities/io/CompressedTextReader.h>
+#include <ovito/core/utilities/io/FileManager.h>
+#include <ovito/core/app/Application.h>
+#include "OXDNAImporter.h"
+#include "NucleotidesVis.h"
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(OXDNAImporter);
+OVITO_CLASSINFO(OXDNAImporter, "DisplayName", "oxDNA");
+DEFINE_PROPERTY_FIELD(OXDNAImporter, topologyFileUrl);
+SET_PROPERTY_FIELD_LABEL(OXDNAImporter, topologyFileUrl, "Topology file");
+
+/******************************************************************************
+* Checks if the given file has format that can be read by this importer.
+******************************************************************************/
+bool OXDNAImporter::OOMetaClass::checkFileFormat(const FileHandle& file) const
+{
+    // Open input file for reading.
+    CompressedTextReader stream(file);
+
+    // Check for a valid "t = ..." line.
+    FloatType t;
+    if(sscanf(stream.readLineTrimLeft(128), "t = " FLOATTYPE_SCANF_STRING, &t) != 1)
+        return false;
+
+    // Check for a valid "b = ..." line.
+    Vector3 b;
+    if(sscanf(stream.readLineTrimLeft(128), "b = " FLOATTYPE_SCANF_STRING " " FLOATTYPE_SCANF_STRING " " FLOATTYPE_SCANF_STRING, &b.x(), &b.y(), &b.z()) != 3)
+        return false;
+
+    // Check for a valid "E = ..." line.
+    FloatType Etot, U, K;
+    if(sscanf(stream.readLineTrimLeft(128), "E = " FLOATTYPE_SCANF_STRING " " FLOATTYPE_SCANF_STRING " " FLOATTYPE_SCANF_STRING, &Etot, &U, &K) != 3)
+        return false;
+
+    return true;
+}
+
+/******************************************************************************
+* Scans the data file and builds a list of source frames.
+******************************************************************************/
+void OXDNAImporter::discoverFramesInFile(const FileHandle& fileHandle, QVector<FileSourceImporter::Frame>& frames) const
+{
+    CompressedTextReader stream(fileHandle);
+
+    TaskProgress progress(this_task::ui());
+    progress.setText(tr("Scanning file %1").arg(fileHandle.toString()));
+    progress.setMaximum(stream.underlyingSize());
+
+    Frame frame(fileHandle);
+    int frameNumber = 0;
+
+    frame.byteOffset = stream.byteOffset();
+    frame.lineNumber = stream.lineNumber();
+    while(!stream.eof() && !this_task::isCanceled()) {
+
+        // Check for a valid "t = ..." line.
+        FloatType t;
+        if(frameNumber == 0) stream.readLine();
+        if(sscanf(stream.line(), " t = " FLOATTYPE_SCANF_STRING, &t) != 1)
+            break;
+
+        // Check for a valid "b = ..." line.
+        Vector3 b;
+        if(sscanf(stream.readLineTrimLeft(), "b = " FLOATTYPE_SCANF_STRING " " FLOATTYPE_SCANF_STRING " " FLOATTYPE_SCANF_STRING, &b.x(), &b.y(), &b.z()) != 3)
+            break;
+
+        // Check for a valid "E = ..." line.
+        FloatType Etot, U, K;
+        if(sscanf(stream.readLineTrimLeft(), "E = " FLOATTYPE_SCANF_STRING " " FLOATTYPE_SCANF_STRING " " FLOATTYPE_SCANF_STRING, &Etot, &U, &K) != 3)
+            break;
+
+        // Create a new record for the time step.
+        frame.label.setFrameOfFile(frameNumber++);
+        frames.push_back(frame);
+
+        // Skip nucleotide lines.
+        while(!stream.eof()) {
+            frame.byteOffset = stream.byteOffset();
+            frame.lineNumber = stream.lineNumber();
+            stream.readLine();
+            if(stream.lineStartsWith("t", true))
+                break;
+            progress.setValueIntermittent(stream.underlyingByteOffset());
+        }
+    }
+}
+
+/******************************************************************************
+* Parses the given input file.
+******************************************************************************/
+void OXDNAImporter::FrameLoader::loadFile()
+{
+    // Locate the topology file.
+    QUrl topoFileUrl = _userSpecifiedTopologyUrl;
+    if(!topoFileUrl.isValid()) {
+        // If no explicit path for the topology file was specified by the user, try to infer it from the
+        // base name of the configuration file. Replace original suffix of configuration file name with ".top".
+        topoFileUrl = frame().sourceFile;
+        QFileInfo filepath(topoFileUrl.path());
+        topoFileUrl.setPath(filepath.path() + QStringLiteral("/") + filepath.completeBaseName() + QStringLiteral(".top"));
+
+        // Check if the topology file exists.
+        if(!topoFileUrl.isValid() || (topoFileUrl.isLocalFile() && !QFileInfo::exists(topoFileUrl.toLocalFile()))) {
+            if(this_task::isInteractive()) {
+                throw Exception(tr("Could not locate corresponding topology file for oxDNA configuration file '%1'.\n"
+                    "Tried automatically inferred path:\n\n%2\n\nBut the path does not exist. Please pick the topology file manually.")
+                        .arg(frame().sourceFile.fileName())
+                        .arg(topoFileUrl.toLocalFile()));
+            }
+            else {
+                throw Exception(tr("Could not locate corresponding topology file for oxDNA configuration file '%1'. "
+                    "Tried inferred path '%2', but the file does not exist. Please specify the path of the topology file explicitly.")
+                        .arg(frame().sourceFile.fileName())
+                        .arg(topoFileUrl.toLocalFile()));
+            }
+        }
+    }
+
+    // Fetch the oxDNA topology file if it is stored on a remote location.
+    SharedFuture<FileHandle> localTopologyFileFuture = Application::instance()->fileManager().fetchUrl(topoFileUrl);
+
+    // Open oxDNA topology file for reading.
+    CompressedTextReader topoStream(localTopologyFileFuture.blockForResult());
+
+    TaskProgress progress(this_task::ui());
+    progress.beginSubSteps(2);
+    progress.setText(tr("Reading oxDNA topology file %1").arg(localTopologyFileFuture.result().toString()));
+
+    // Parse number of nucleotides and number of strands.
+    unsigned long long numNucleotidesLong;
+    int numStrands;
+    if(sscanf(topoStream.readLine(), "%llu %i", &numNucleotidesLong, &numStrands) != 2)
+        throw Exception(tr("Invalid number of nucleotides or strands in line %1 of oxDNA topology file: %2").arg(topoStream.lineNumber()).arg(topoStream.lineString().trimmed()));
+    setParticleCount(numNucleotidesLong);
+
+    // Create a special visual element for rendering the nucleotides.
+    if(!dynamic_object_cast<NucleotidesVis>(particles()->visElement()))
+        particles()->setVisElement(OORef<NucleotidesVis>::create());
+
+    // Define nucleobase types.
+    Property* baseProperty = particles()->createProperty(Particles::NucleobaseTypeProperty);
+    addNumericType(Particles::OOClass(), baseProperty, 1, QStringLiteral("T"));
+    addNumericType(Particles::OOClass(), baseProperty, 2, QStringLiteral("C"));
+    addNumericType(Particles::OOClass(), baseProperty, 3, QStringLiteral("G"));
+    addNumericType(Particles::OOClass(), baseProperty, 4, QStringLiteral("A"));
+
+    // Define strands list.
+    Property* strandsProperty = particles()->createProperty(Particles::DNAStrandProperty);
+    for(int i = 1; i <= numStrands; i++)
+        addNumericType(Particles::OOClass(), strandsProperty, i, {});
+
+    BufferWriteAccess<int32_t, access_mode::discard_write> baseAccess(baseProperty);
+    BufferWriteAccess<int32_t, access_mode::discard_write> strandsAccess(strandsProperty);
+
+    // The list of bonds between nucleotides.
+    std::vector<ParticleIndexPair> bonds;
+    bonds.reserve(numNucleotidesLong);
+
+    // Parse the nucleotides list in the topology file.
+    progress.setMaximum(numNucleotidesLong);
+    auto* baseTypeIter = baseAccess.begin();
+    auto* strandId = strandsAccess.begin();
+    for(size_t i = 0; i < numNucleotidesLong; i++, ++strandId) {
+        progress.setValueIntermittent(i);
+
+        char baseName[32];
+        qlonglong neighbor1, neighbor2;
+        if(sscanf(topoStream.readLine(), "%u %31s %lld %lld", strandId, baseName, &neighbor1, &neighbor2) != 4)
+            throw Exception(tr("Invalid nucleotide specification in line %1 of oxDNA topology file: %2").arg(topoStream.lineNumber()).arg(topoStream.lineString()));
+
+        if(*strandId < 1 || *strandId > numStrands)
+            throw Exception(tr("Strand ID %2 in line %1 of oxDNA topology file is out of range.").arg(topoStream.lineNumber()).arg(*strandId));
+
+        if(neighbor1 < -1 || neighbor1 >= (qlonglong)numNucleotidesLong)
+            throw Exception(tr("3' neighbor %2 in line %1 of oxDNA topology file is out of range.").arg(topoStream.lineNumber()).arg(neighbor1));
+
+        if(neighbor2 < -1 || neighbor2 >= (qlonglong)numNucleotidesLong)
+            throw Exception(tr("5' neighbor %2 in line %1 of oxDNA topology file is out of range.").arg(topoStream.lineNumber()).arg(neighbor2));
+
+        if(neighbor2 != -1)
+            bonds.push_back({(qlonglong)i, neighbor2});
+
+        *baseTypeIter++ = addNamedType(Particles::OOClass(), baseProperty, QLatin1String(baseName))->numericId();
+    }
+    baseAccess.reset();
+    strandsAccess.reset();
+
+    // Create and fill bonds topology storage.
+    setBondCount(bonds.size());
+    BufferWriteAccess<ParticleIndexPair, access_mode::discard_write> bondTopologyAccess = this->bonds()->createProperty(Bonds::TopologyProperty);
+    std::ranges::copy(bonds, bondTopologyAccess.begin());
+
+    progress.nextSubStep();
+    progress.setText(tr("Reading oxDNA file %1").arg(fileHandle().toString()));
+    // Open oxDNA configuration file for reading.
+    CompressedTextReader stream(fileHandle(), frame().byteOffset, frame().lineNumber);
+
+    // Parse the 1st line: "t = T".
+    FloatType simulationTime;
+    if(sscanf(stream.readLineTrimLeft(), "t = " FLOATTYPE_SCANF_STRING, &simulationTime) != 1)
+        throw Exception(tr("Invalid header format encountered in line %1 of oxDNA configuration file: %2").arg(stream.lineNumber()).arg(stream.lineString()));
+    state().setAttribute(QStringLiteral("Time"), QVariant::fromValue(simulationTime), pipelineNode());
+
+    // Parse the 2nd line: "b = Lx Ly Lz".
+    AffineTransformation cellMatrix = AffineTransformation::Identity();
+    if(sscanf(stream.readLineTrimLeft(), "b = " FLOATTYPE_SCANF_STRING " " FLOATTYPE_SCANF_STRING " " FLOATTYPE_SCANF_STRING, &cellMatrix(0,0), &cellMatrix(1,1), &cellMatrix(2,2)) != 3)
+        throw Exception(tr("Invalid header format encountered in line %1 of oxDNA configuration file: %2").arg(stream.lineNumber()).arg(stream.lineString()));
+    cellMatrix.translation() = Vector3(-0.5 * cellMatrix(0,0), -0.5 * cellMatrix(1,1), -0.5 * cellMatrix(2,2));
+    simulationCell()->setCellMatrix(cellMatrix);
+
+    // Parse the 3rd line: "E = Etot U K".
+    FloatType Etot, U, K;
+    if(sscanf(stream.readLineTrimLeft(), "E = " FLOATTYPE_SCANF_STRING " " FLOATTYPE_SCANF_STRING " " FLOATTYPE_SCANF_STRING, &Etot, &U, &K) != 3)
+        throw Exception(tr("Invalid header format encountered in line %1 of oxDNA configuration file: %2").arg(stream.lineNumber()).arg(stream.lineString()));
+    state().setAttribute(QStringLiteral("Etot"), QVariant::fromValue(Etot), pipelineNode());
+    state().setAttribute(QStringLiteral("U"), QVariant::fromValue(U), pipelineNode());
+    state().setAttribute(QStringLiteral("K"), QVariant::fromValue(K), pipelineNode());
+
+    // Define the column data layout in the input file to be parsed.
+    ParticleInputColumnMapping columnMapping;
+    columnMapping.resize(15);
+    columnMapping.mapColumnToStandardProperty(0, Particles::PositionProperty, 0);
+    columnMapping.mapColumnToStandardProperty(1, Particles::PositionProperty, 1);
+    columnMapping.mapColumnToStandardProperty(2, Particles::PositionProperty, 2);
+    columnMapping.mapColumnToStandardProperty(3, Particles::NucleotideAxisProperty, 0);
+    columnMapping.mapColumnToStandardProperty(4, Particles::NucleotideAxisProperty, 1);
+    columnMapping.mapColumnToStandardProperty(5, Particles::NucleotideAxisProperty, 2);
+    columnMapping.mapColumnToStandardProperty(6, Particles::NucleotideNormalProperty, 0);
+    columnMapping.mapColumnToStandardProperty(7, Particles::NucleotideNormalProperty, 1);
+    columnMapping.mapColumnToStandardProperty(8, Particles::NucleotideNormalProperty, 2);
+    columnMapping.mapColumnToStandardProperty(9, Particles::VelocityProperty, 0);
+    columnMapping.mapColumnToStandardProperty(10, Particles::VelocityProperty, 1);
+    columnMapping.mapColumnToStandardProperty(11, Particles::VelocityProperty, 2);
+    columnMapping.mapColumnToStandardProperty(12, Particles::AngularVelocityProperty, 0);
+    columnMapping.mapColumnToStandardProperty(13, Particles::AngularVelocityProperty, 1);
+    columnMapping.mapColumnToStandardProperty(14, Particles::AngularVelocityProperty, 2);
+
+    // Parse data table.
+    InputColumnReader columnParser(*this, columnMapping, particles(), false);
+    for(size_t i = 0; i < numNucleotidesLong; i++) {
+        progress.setValueIntermittent(i);
+        try {
+            columnParser.readElement(i, stream.readLine());
+        }
+        catch(Exception& ex) {
+            throw ex.prependGeneralMessage(tr("Parsing error in line %1 of oxDNA configuration file (nucleotide index %2).").arg(stream.lineNumber()).arg(i));
+        }
+    }
+    columnParser.reset();
+
+    // Detect if there are more simulation frames following in the file.
+    if(!stream.eof())
+        signalAdditionalFrames();
+
+    // Displace particle positions. oxDNA stores center of mass coordinates, but OVITO expects particle coordinates to be backbone sphere centers.
+    BufferWriteAccess<Point3, access_mode::discard_read_write> centerOfMassPositionsArray = particles()->createProperty(QStringLiteral("Center Of Mass"), DataBuffer::FloatDefault, 3, QStringList() << QStringLiteral("X") << QStringLiteral("Y") << QStringLiteral("Z"));
+    BufferWriteAccess<Point3, access_mode::discard_write> basePositionsArray = particles()->createProperty(QStringLiteral("Base Position"), DataBuffer::FloatDefault, 3, QStringList() << QStringLiteral("X") << QStringLiteral("Y") << QStringLiteral("Z"));
+    BufferWriteAccess<Point3, access_mode::read_write> positionsArray = particles()->getMutableProperty(Particles::PositionProperty);
+    BufferReadAccess<Vector3> axisVectorArray = particles()->expectProperty(Particles::NucleotideAxisProperty);
+    for(size_t i = 0; i < numNucleotidesLong; i++) {
+        centerOfMassPositionsArray[i] = positionsArray[i];
+        positionsArray[i] -= 0.4 * axisVectorArray[i];
+        basePositionsArray[i] = centerOfMassPositionsArray[i] + 0.4 * axisVectorArray[i];
+    }
+
+    state().setStatus(tr("%1 nucleotides\n%2 strands").arg(numNucleotidesLong).arg(numStrands));
+
+    progress.endSubSteps();
+
+    // Call base implementation to finalize the loaded particle data.
+    ParticleImporter::FrameLoader::loadFile();
+}
+
+}   // End of namespace

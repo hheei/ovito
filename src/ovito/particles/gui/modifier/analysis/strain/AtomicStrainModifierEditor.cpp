@@ -1,0 +1,203 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/particles/gui/ParticlesGui.h>
+#include <ovito/particles/modifier/analysis/strain/AtomicStrainModifier.h>
+#include <ovito/gui/desktop/properties/BooleanParameterUI.h>
+#include <ovito/gui/desktop/properties/BooleanRadioButtonParameterUI.h>
+#include <ovito/gui/desktop/properties/IntegerParameterUI.h>
+#include <ovito/gui/desktop/properties/IntegerRadioButtonParameterUI.h>
+#include <ovito/gui/desktop/properties/FloatParameterUI.h>
+#include <ovito/gui/desktop/properties/ObjectStatusDisplay.h>
+#include <ovito/gui/desktop/properties/SubObjectParameterUI.h>
+#include <ovito/core/dataset/io/FileSource.h>
+#include "AtomicStrainModifierEditor.h"
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(AtomicStrainModifierEditor);
+SET_OVITO_OBJECT_EDITOR(AtomicStrainModifier, AtomicStrainModifierEditor);
+
+/******************************************************************************
+* Sets up the UI widgets of the editor.
+******************************************************************************/
+void AtomicStrainModifierEditor::createUI(const RolloutInsertionParameters& rolloutParams)
+{
+    // Create a rollout.
+    QWidget* rollout = createRollout(tr("Atomic strain"), rolloutParams, "manual:particles.modifiers.atomic_strain");
+
+    // Create the rollout contents.
+    QVBoxLayout* layout = new QVBoxLayout(rollout);
+    layout->setContentsMargins(4,4,4,4);
+    layout->setSpacing(4);
+
+    QGridLayout* gridlayout = new QGridLayout();
+    gridlayout->setContentsMargins(4,4,4,4);
+    gridlayout->setColumnStretch(1, 1);
+
+    // Cutoff parameter.
+    FloatParameterUI* cutoffRadiusPUI = createParamUI<FloatParameterUI>(PROPERTY_FIELD(AtomicStrainModifier::cutoff));
+    gridlayout->addWidget(cutoffRadiusPUI->label(), 0, 0);
+    gridlayout->addLayout(cutoffRadiusPUI->createFieldLayout(), 0, 1);
+
+    layout->addLayout(gridlayout);
+
+    QGroupBox* mappingGroupBox = new QGroupBox(tr("Affine mapping of simulation cell"));
+    layout->addWidget(mappingGroupBox);
+
+    QGridLayout* sublayout = new QGridLayout(mappingGroupBox);
+    sublayout->setContentsMargins(4,4,4,4);
+    sublayout->setSpacing(4);
+
+    IntegerRadioButtonParameterUI* affineMappingUI = createParamUI<IntegerRadioButtonParameterUI>(PROPERTY_FIELD(ReferenceConfigurationModifier::affineMapping));
+    sublayout->addWidget(affineMappingUI->addRadioButton(ReferenceConfigurationModifier::NO_MAPPING, tr("Off")), 0, 0);
+    sublayout->addWidget(affineMappingUI->addRadioButton(ReferenceConfigurationModifier::TO_REFERENCE_CELL, tr("To reference")), 0, 1);
+    sublayout->addWidget(affineMappingUI->addRadioButton(ReferenceConfigurationModifier::TO_CURRENT_CELL, tr("To current")), 1, 1);
+
+    BooleanParameterUI* useMinimumImageConventionUI = createParamUI<BooleanParameterUI>(PROPERTY_FIELD(ReferenceConfigurationModifier::useMinimumImageConvention));
+    sublayout->addWidget(useMinimumImageConventionUI->checkBox(), 2, 0, 1, 2);
+
+    QGroupBox* outputGroupBox = new QGroupBox(tr("Output options"));
+    layout->addWidget(outputGroupBox);
+
+    sublayout = new QGridLayout(outputGroupBox);
+    sublayout->setContentsMargins(4,4,4,4);
+    sublayout->setSpacing(4);
+
+    BooleanParameterUI* calculateDeformationGradientsUI = createParamUI<BooleanParameterUI>(PROPERTY_FIELD(AtomicStrainModifier::calculateDeformationGradients));
+    sublayout->addWidget(calculateDeformationGradientsUI->checkBox(), 0, 0);
+
+    BooleanParameterUI* calculateStrainTensorsUI = createParamUI<BooleanParameterUI>(PROPERTY_FIELD(AtomicStrainModifier::calculateStrainTensors));
+    sublayout->addWidget(calculateStrainTensorsUI->checkBox(), 1, 0);
+
+    BooleanParameterUI* calculateNonaffineSquaredDisplacementsUI = createParamUI<BooleanParameterUI>(PROPERTY_FIELD(AtomicStrainModifier::calculateNonaffineSquaredDisplacements));
+    sublayout->addWidget(calculateNonaffineSquaredDisplacementsUI->checkBox(), 2, 0);
+
+    BooleanParameterUI* calculateRotationsUI = createParamUI<BooleanParameterUI>(PROPERTY_FIELD(AtomicStrainModifier::calculateRotations));
+    sublayout->addWidget(calculateRotationsUI->checkBox(), 3, 0);
+
+    BooleanParameterUI* calculateStretchTensorsUI = createParamUI<BooleanParameterUI>(PROPERTY_FIELD(AtomicStrainModifier::calculateStretchTensors));
+    sublayout->addWidget(calculateStretchTensorsUI->checkBox(), 4, 0);
+
+    BooleanParameterUI* selectInvalidParticlesUI = createParamUI<BooleanParameterUI>(PROPERTY_FIELD(AtomicStrainModifier::selectInvalidParticles));
+    sublayout->addWidget(selectInvalidParticlesUI->checkBox(), 5, 0);
+
+    QGroupBox* referenceFrameGroupBox = new QGroupBox(tr("Reference frame"));
+    layout->addWidget(referenceFrameGroupBox);
+
+    sublayout = new QGridLayout(referenceFrameGroupBox);
+    sublayout->setContentsMargins(4,4,4,4);
+    sublayout->setSpacing(4);
+    sublayout->setColumnStretch(0, 5);
+    sublayout->setColumnStretch(2, 95);
+
+    // Add box for selection between absolute and relative reference frames.
+    BooleanRadioButtonParameterUI* useFrameOffsetUI = createParamUI<BooleanRadioButtonParameterUI>(PROPERTY_FIELD(ReferenceConfigurationModifier::useReferenceFrameOffset));
+    useFrameOffsetUI->buttonFalse()->setText(tr("Constant reference configuration"));
+    sublayout->addWidget(useFrameOffsetUI->buttonFalse(), 0, 0, 1, 3);
+
+    IntegerParameterUI* frameNumberUI = createParamUI<IntegerParameterUI>(PROPERTY_FIELD(ReferenceConfigurationModifier::referenceFrameNumber));
+    frameNumberUI->label()->setText(tr("Frame number:"));
+    sublayout->addWidget(frameNumberUI->label(), 1, 1, 1, 1);
+    sublayout->addLayout(frameNumberUI->createFieldLayout(), 1, 2, 1, 1);
+    frameNumberUI->setEnabled(false);
+    connect(useFrameOffsetUI->buttonFalse(), &QRadioButton::toggled, frameNumberUI, &IntegerParameterUI::setEnabled);
+
+    useFrameOffsetUI->buttonTrue()->setText(tr("Relative to current frame"));
+    sublayout->addWidget(useFrameOffsetUI->buttonTrue(), 2, 0, 1, 3);
+    IntegerParameterUI* frameOffsetUI = createParamUI<IntegerParameterUI>(PROPERTY_FIELD(ReferenceConfigurationModifier::referenceFrameOffset));
+    frameOffsetUI->label()->setText(tr("Frame offset:"));
+    sublayout->addWidget(frameOffsetUI->label(), 3, 1, 1, 1);
+    sublayout->addLayout(frameOffsetUI->createFieldLayout(), 3, 2, 1, 1);
+    frameOffsetUI->setEnabled(false);
+    connect(useFrameOffsetUI->buttonTrue(), &QRadioButton::toggled, frameOffsetUI, &IntegerParameterUI::setEnabled);
+
+    QGroupBox* referenceSourceGroupBox = new QGroupBox(tr("Reference configuration source"));
+    layout->addWidget(referenceSourceGroupBox);
+
+    sublayout = new QGridLayout(referenceSourceGroupBox);
+    sublayout->setContentsMargins(4,4,4,4);
+    sublayout->setSpacing(6);
+
+    _sourceButtonGroup = new QButtonGroup(this);
+    connect(_sourceButtonGroup, &QButtonGroup::idClicked, this, &AtomicStrainModifierEditor::onSourceButtonClicked);
+    QRadioButton* upstreamPipelineBtn = new QRadioButton(tr("Upstream pipeline"));
+    QRadioButton* externalFileBtn = new QRadioButton(tr("External file"));
+    _sourceButtonGroup->addButton(upstreamPipelineBtn, 0);
+    _sourceButtonGroup->addButton(externalFileBtn, 1);
+    sublayout->addWidget(upstreamPipelineBtn, 0, 0);
+    sublayout->addWidget(externalFileBtn, 1, 0);
+
+    // Status label.
+    layout->addSpacing(6);
+    layout->addWidget(createParamUI<ObjectStatusDisplay>()->statusWidget());
+
+    // Open a sub-editor for the reference object.
+    createParamUI<SubObjectParameterUI>(PROPERTY_FIELD(AtomicStrainModifier::referenceConfiguration), RolloutInsertionParameters().setTitle(tr("Reference: %1")));
+
+    connect(this, &PropertiesEditor::contentsChanged, this, &AtomicStrainModifierEditor::onContentsChanged);
+
+    // Whenever the pipeline input of the modifier changes, update the state of the UI.
+    connect(this, &PropertiesEditor::pipelineInputChanged, this, [this, mappingGroupBox]() {
+        mappingGroupBox->setEnabled(getPipelineInput().getObject<SimulationCell>() != nullptr);
+    });
+}
+
+
+/******************************************************************************
+* Is called when the user clicks one of the source mode buttons.
+******************************************************************************/
+void AtomicStrainModifierEditor::onSourceButtonClicked(int id)
+{
+    ReferenceConfigurationModifier* mod = static_object_cast<ReferenceConfigurationModifier>(editObject());
+    if(!mod) return;
+
+    performTransaction(tr("Set reference source mode"), [mod,id]() {
+        if(id == 1) {
+            // Create a file source object, which can be used for loading
+            // the reference configuration from a separate file.
+            mod->setReferenceConfiguration(OORef<FileSource>::create());
+        }
+        else {
+            mod->setReferenceConfiguration(nullptr);
+        }
+    });
+}
+
+/******************************************************************************
+* Is called when the object being edited changes.
+******************************************************************************/
+void AtomicStrainModifierEditor::onContentsChanged(RefTarget* editObject)
+{
+    ReferenceConfigurationModifier* mod = static_object_cast<ReferenceConfigurationModifier>(editObject);
+    if(mod) {
+        _sourceButtonGroup->button(0)->setEnabled(true);
+        _sourceButtonGroup->button(1)->setEnabled(true);
+        _sourceButtonGroup->button(mod->referenceConfiguration() ? 1 : 0)->setChecked(true);
+    }
+    else {
+        _sourceButtonGroup->button(0)->setEnabled(false);
+        _sourceButtonGroup->button(1)->setEnabled(false);
+    }
+}
+
+}   // End of namespace

@@ -1,0 +1,118 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/particles/Particles.h>
+#include <ovito/particles/objects/Particles.h>
+#include <ovito/particles/util/ParticleExpressionEvaluator.h>
+#include <ovito/stdmod/modifiers/ComputePropertyModifier.h>
+
+namespace Ovito {
+
+/**
+ * \brief Delegate plugin for the ComputePropertyModifier that operates on particles.
+ */
+class OVITO_PARTICLES_EXPORT ParticlesComputePropertyModifierDelegate : public ComputePropertyModifierDelegate
+{
+    /// Give the modifier delegate its own metaclass.
+    class OOMetaClass : public ComputePropertyModifierDelegate::OOMetaClass
+    {
+    public:
+
+        /// Inherit constructor from base class.
+        using ComputePropertyModifierDelegate::OOMetaClass::OOMetaClass;
+
+        /// Indicates which data objects in the given input data collection the modifier delegate is able to operate on.
+        virtual QVector<DataObjectReference> getApplicableObjects(const DataCollection& input) const override;
+
+        /// Indicates which class of data objects the modifier delegate is able to operate on.
+        virtual const DataObject::OOMetaClass& getApplicableObjectClass() const override { return Particles::OOClass(); }
+
+        /// The name by which Python scripts can refer to this modifier delegate.
+        virtual QString pythonDataName() const override { return QStringLiteral("particles"); }
+    };
+
+    OVITO_CLASS_META(ParticlesComputePropertyModifierDelegate, OOMetaClass)
+
+public:
+
+    enum NeighborMode {
+        Cutoff,    ///< Visit particles which are within a certain distance of the central particle.
+        Bonded,    ///< Visit particles which are connected to the central particle by a bond.
+    };
+    Q_ENUM(NeighborMode);
+
+    /// \brief Sets the math expression that is used to compute the neighbor-terms of the property function.
+    /// \param index The property component for which the expression should be set.
+    /// \param expression The math formula.
+    void setNeighborExpression(const QString& expression, int index = 0) {
+        if(index < 0 || index >= neighborExpressions().size())
+            throw Exception("Property component index is out of range.");
+        QStringList copy = _neighborExpressions;
+        copy[index] = expression;
+        setNeighborExpressions(std::move(copy));
+    }
+
+    /// \brief Returns the math expression that is used to compute the neighbor-terms of the property function.
+    /// \param index The property component for which the expression should be returned.
+    /// \return The math formula.
+    const QString& neighborExpression(int index = 0) const {
+        if(index < 0 || index >= neighborExpressions().size())
+            throw Exception("Property component index is out of range.");
+        return neighborExpressions()[index];
+    }
+
+    /// Sets the number of vector components of the property to compute.
+    virtual void setComponentCount(int componentCount) override;
+
+    /// Returns the title string to be displayed in the UI for the group box containing the math expression(s).
+    virtual QString expressionUITitle(int componentCount) const override { return componentCount <= 1 ? tr("Central expression") : tr("Central expressions"); }
+
+    /// Checks if math expressions are time-dependent, i.e. whether they involve the animation frame number.
+    virtual bool isExpressionTimeDependent(ComputePropertyModifier* modifier) const override;
+
+protected:
+
+    // Sets up the visual element(s) associated with the new property.
+    virtual void setupVisualElements(Property* outputProperty, ComputePropertyModificationNode* modNode) override;
+
+    /// Launches the actual computations.
+    virtual Future<PipelineFlowState> performComputation(const ComputePropertyModifier* modifier, ComputePropertyModificationNode* modNode, PipelineFlowState state, const PipelineFlowState& originalState, PropertyPtr outputProperty, ConstPropertyPtr selectionProperty, int frame) const override;
+
+private:
+
+    /// The math expressions for calculating the neighbor-terms of the property function.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(QStringList{}, neighborExpressions, setNeighborExpressions);
+
+    /// The neighbor mode.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(NeighborMode{Cutoff}, neighborMode, setNeighborMode, PROPERTY_FIELD_MEMORIZE);
+
+    /// Controls the cutoff distance for neighbor particles being visited.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(FloatType{3}, cutoff, setCutoff, PROPERTY_FIELD_MEMORIZE);
+
+    /// Controls whether multi-line input fields are shown in the UI for the expressions.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{false}, useMultilineFields, setUseMultilineFields);
+};
+
+}   // End of namespace

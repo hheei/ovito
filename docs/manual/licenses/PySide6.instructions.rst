@@ -1,0 +1,57 @@
+.. _appendix.license.pyside6.instructions:
+
+Build instructions for PySide6
+------------------------------
+
+*OVITO Pro* and the *OVITO Python package* use a distribution of the PySide6 module and Shiboken6 module licensed under the GNU Lesser General Public License (LGPLv3).
+In accordance with the requirements of this license, this page provides instructions on how to obtain or rebuild compatible versions of these binary modules from source.
+
+Windows
+"""""""
+
+*OVITO Pro* for Windows includes a copy of the PySide6-Essentials module (version 6.11.2) from
+the official `PyPI repository <https://pypi.org/project/PySide6/>`__.
+
+Linux
+"""""
+
+*OVITO Pro* for Linux ships with a copy of the PySide6 module that has been built from the original sources provided by
+the Qt Company, following the standard procedure described `here <https://doc.qt.io/qtforpython-6/gettingstarted/linux.html>`__.
+PySide6 v6.11.2 has been compiled against Qt 6.11.2 (see :ref:`here <appendix.license.qt6.instructions>`) and a custom build of the `CPython <https://www.python.org>`__ 3.14 interpreter::
+
+  git clone --recursive https://code.qt.io/pyside/pyside-setup
+  cd pyside-setup
+  git checkout v6.11.2
+  python3 setup.py install \
+    --qtpaths=/usr/local/lib/qt6/bin/qtpaths \
+    --ignore-git \
+    --parallel=8 \
+    --module-subset=Core,Gui,Widgets,Xml,Network,Svg,PrintSupport \
+    --verbose-build \
+    --no-qt-tools
+
+macOS
+"""""
+
+OVITO Pro for macOS ships with a copy of the PySide6 module that has been built from the original sources provided by
+the Qt Company, following the standard procedure described `here <https://doc.qt.io/qtforpython-6/gettingstarted/macOS.html>`__.
+PySide6 v6.11.2 has been compiled against Qt 6.11.2 (macOS) and a virtual environment of a standard installation of the
+`CPython <https://www.python.org>`__ 3.14 interpreter for macOS (universal2 binary)::
+
+  python3.14 -m venv $OVITO_DEPS_DIR/venv/3.14
+
+  git clone --recursive https://code.qt.io/pyside/pyside-setup
+  cd pyside-setup
+  git checkout v6.11.2
+
+  LLVM_INSTALL_DIR=$OVITO_DEPS_DIR/libclang \
+    $OVITO_DEPS_DIR/venv/3.14/bin/python setup.py install \
+    --qtpaths=`echo $HOME/Qt/6.11.*/macos/bin/qtpaths` \
+    --ignore-git \
+    --module-subset=Core,Gui,Widgets,Xml,Network,Svg,PrintSupport \
+    --no-qt-tools \
+    --macos-deployment-target=13.0 \
+    --macos-arch=arm64
+
+  cd $OVITO_DEPS_DIR/venv/3.14/lib/python3.14/site-packages/PySide6/
+  rm -r Qt

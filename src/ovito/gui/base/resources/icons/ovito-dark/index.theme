@@ -1,0 +1,8 @@
+[Icon Theme]
+Name=Ovito Dark
+Comment=OVITO's dark-mode icon theme
+
+[actions]
+Size=22
+Context=Actions
+Type=Fixed

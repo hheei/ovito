@@ -1,0 +1,505 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/core/Core.h>
+#include <ovito/core/utilities/units/UnitsManager.h>
+#include <ovito/core/utilities/concurrent/Task.h>
+#include <ovito/core/oo/OORef.h>
+#include <ovito/core/oo/OvitoObject.h>
+
+namespace Ovito {
+
+class RenderThread; // Forward declaration (defined in ovito/core/rendering/).
+
+/**
+ * \brief Abstract interface to the graphical user interface of the application.
+ *
+ * In OVITO, it is possible to open multiple GUI windows. Each window is a separate UserInterface object.
+ * Furthermore, the global Application object is also a UserInterface implementation, which
+ * is used while running in console mode or during application startup, when no main window exists yet.
+ *
+ * Typically, you can access the current UserInterface object via the this_task::ui() method.
+ */
+class OVITO_CORE_EXPORT UserInterface : public OvitoObject
+{
+    OVITO_CLASS(UserInterface)
+
+public:
+
+    /// Buttons that can be included in a GUI message box displayed to the user.
+    /// One or more buttons can be combined using the bitwise OR operator.
+    enum MessageBoxButton
+    {
+        NoButton = 0x00000000,
+        Ok = 0x00000400,
+        Cancel = 0x00400000,
+        Discard = 0x00800000,
+        Yes = 0x00004000,
+        No = 0x00010000,
+        Apply = 0x02000000,
+        Abort = 0x00040000,
+        Retry = 0x00080000,
+        Ignore = 0x00100000,
+    };
+
+    /// Icons to be displayed in a message box displayed to the user.
+    enum MessageBoxIcon
+    {
+        NoIcon = 0,
+        InformationIcon = 1,
+        WarningIcon = 2,
+        CriticalIcon = 3,
+        QuestionIcon = 4,
+    };
+
+public:
+
+    /// Constructor.
+    UserInterface();
+
+    /// Returns the container managing the current dataset.
+    DataSetContainer& datasetContainer() const { return *_datasetContainer; }
+
+    /// Sets the viewport input manager of the user interface.
+    void setViewportInputManager(ViewportInputManager* manager) { _viewportInputManager = manager; }
+
+    /// Returns the viewport input manager of the user interface.
+    ViewportInputManager* viewportInputManager() const { return _viewportInputManager; }
+
+    /// Returns the manager of ParameterUnit objects.
+    UnitsManager& unitsManager() { return _unitsManager; }
+
+    /// Gives the active viewport the input focus.
+    virtual void setViewportInputFocus() {}
+
+    /// Displays a message string in the status bar.
+    virtual void showStatusBarMessage(const QString& message, int timeout = 0) {}
+
+    /// Hides any messages currently displayed in the status bar.
+    virtual void clearStatusBarMessage() {}
+
+    /// Displays a modal message box to the user. Blocks until the user closes the message box.
+    /// This method wraps the QMessageBox class of the Qt library.
+    virtual MessageBoxButton showMessageBox(MessageBoxIcon icon, const QString& title, const QString& text, int buttons, MessageBoxButton defaultButton = NoButton, const QString& detailedText = {}) { OVITO_ASSERT(false); return defaultButton; }
+
+    /// Displays the error message(s) stored in the Exception object to the user.
+    ///
+    /// In the graphical program mode, this method will display a modal message box.
+    /// In console mode, this method just prints the error messages(s) to the console.
+    ///
+    /// Note that, unless 'blocking' is true, the reporting happens asynchronously in GUI mode.
+    /// The method returns immediately and the error message is displayed to the user at a later time,
+    /// as soon as control returns to the event loop.
+    virtual void reportError(const Exception& ex, bool blocking = false);
+
+    /// Closes the user interface and shuts down the entire application after displaying an error message.
+    virtual void exitWithFatalError(const Exception& ex);
+
+    /// Indicates that exitWithFatalError() has been called and the application is shutting down.
+    bool exitingDueToFatalError() const { return _exitingDueToFatalError; }
+
+    /// Cancels all running tasks associated with this user interface and closes the user interface as soon as possible (without asking user to save changes).
+    virtual bool shutdown();
+
+    /// Returns a shared_ptr to this UserInterface object.
+    std::shared_ptr<UserInterface> shared_from_this() {
+        return std::static_pointer_cast<UserInterface>(OvitoObject::shared_from_this());
+    }
+
+    /// Returns the manager of the user interface actions.
+    ActionManager* actionManager() const { return _actionManager; }
+
+    /// Queries the system's information and graphics capabilities.
+    QString generateSystemReport();
+
+    /// Creates a frame buffer of the requested size for rendering into and displays it in the user interface.
+    virtual std::shared_ptr<FrameBuffer> createAndShowFrameBuffer(int width, int height);
+
+    /// Shows a progress bar or a similar UI to indicate the current rendering progress and let the user cancel the operation if necessary.
+    virtual void showRenderingProgress(const std::shared_ptr<FrameBuffer>& frameBuffer, SharedFuture<void> renderingFuture) {}
+
+    /// Returns the undo stack, which keeps track of changes made by the user to the current dataset.
+    /// It may be none if not running as a desktop application.
+    UndoStack* undoStack() const { return _undoStack; }
+
+    /// Indicates whether the user has activated auto-key mode and controllers should automatically
+    /// generate new animation keys whenever their current value is changed by the user.
+    virtual bool isAutoGenerateAnimationKeysEnabled() const { return false; }
+
+    /// Suspends updates of the viewports whenever preliminary data pipeline results are available.
+    void suspendPreliminaryViewportUpdates() { _preliminaryViewportUpdatesSuspendCount++; }
+
+    /// Resumes updates of the viewports whenever preliminary data pipeline results are available.
+    void resumePreliminaryViewportUpdates() {
+        OVITO_ASSERT_MSG(_preliminaryViewportUpdatesSuspendCount > 0, "UserInterface::resumePreliminaryViewportUpdates()", "resumePreliminaryViewportUpdates() has been called more often than suspendPreliminaryViewportUpdates().");
+        _preliminaryViewportUpdatesSuspendCount--;
+    }
+
+    /// Returns whether viewports should be updated whenever preliminary pipeline results are available.
+    bool arePreliminaryViewportUpdatesSuspended() const { return _preliminaryViewportUpdatesSuspendCount != 0; }
+
+    /// \brief Suspends the animation auto-key mode temporarily.
+    ///
+    /// Automatic generation of animation keys is suspended by this method until a call to resumeAnim().
+    /// If suspendAnim() is called multiple times then resumeAnim() must be called the same number of
+    /// times until animation mode is enabled again.
+    ///
+    /// It is recommended to use the AnimationSuspender helper class to suspend animation mode because
+    /// this is more exception save than the suspendAnim()/resumeAnim() combination.
+    void suspendAnim() { _animSuspendCount++; }
+
+    /// \brief Resumes the automatic generation of animation keys.
+    ///
+    /// This re-enables animation mode after it had been suspended by a call to suspendAnim().
+    void resumeAnim() {
+        OVITO_ASSERT_MSG(_animSuspendCount > 0, "UserInterface::resumeAnim()", "resumeAnim() has been called more often than suspendAnim().");
+        _animSuspendCount--;
+    }
+
+    /// Flags all viewports for redrawing.
+    /// This function does not lead to an immediate repainting of the viewports; instead it schedules a
+    /// refresh request, which will be processed at some later time when execution returns to the Qt event loop.
+    void updateViewports();
+
+    /// Zooms all visible viewports to the extents of the scene when all scene pipelines have been fully evaluated and the extents are known.
+    void zoomToSceneExtentsWhenReady();
+
+    /// Checks (or even modifies) the contents of a DataSet after it has been loaded from a file.
+    /// Returns false if loading the DataSet was rejected by the application.
+    virtual bool checkLoadedDataset(DataSet* dataset) { return true; }
+
+    /// Executes a functor that performs some actions in an interactive context and catches any exceptions thrown during its execution.
+    /// If an exception is thrown by the functor, the error message is displayed to the user and this function returns false.
+    /// The 'Isolated' template parameter can be set to true to indicate that the operation should execute independently
+    /// from the currently active task, i.e., cancellation of one of the tasks should not affect the other.
+    template<bool Isolated = false, typename Function>
+    bool handleExceptions(Function&& func) noexcept;
+
+    /// Executes a functor provided by the caller that performs undoable actions in an interactive context.
+    /// If an exception is thrown by the functor, the error message is displayed
+    /// to the user, and this function returns false.
+    template<typename Function>
+    bool performActions(UndoableTransaction& transaction, Function&& func) noexcept;
+
+    /// Executes a functor provided by the caller that performs undoable actions in an interactive context.
+    /// If an exception is thrown by the functor, all data changes performed by the functor so far will be undone, the error message is displayed
+    /// to the user, and this function returns false. If no exception is thrown, all performed actions are committed and this function returns true.
+    template<typename Function>
+    bool performTransaction(const QString& undoOperationName, Function&& func) noexcept;
+
+    /// Returns a shared render thread for GPU-accelerated rendering, creating one on demand if needed.
+    /// The returned shared_ptr keeps the render thread alive; it will be destroyed when the last
+    /// shared_ptr is released (i.e., when all viewport windows and offscreen rendering clients are gone).
+    std::shared_ptr<RenderThread> renderThread();
+
+protected:
+
+    /// Assigns an ActionManager.
+    void setActionManager(ActionManager* manager) { _actionManager = manager; }
+
+    /// Assigns an UndoStack.
+    void setUndoStack(UndoStack* undoStack) { _undoStack = undoStack; }
+
+    /// Registers a new task progress record with this user interface.
+    /// This virtual method gets called when a new TaskProgress instance is created from a running task.
+    virtual std::mutex* taskProgressBegin(TaskProgress* progress) { return nullptr; }
+
+    /// Unregisters a task progress record from this user interface.
+    /// This virtual method gets called when a previously registered task finishes.
+    virtual void taskProgressEnd(TaskProgress* progress) {}
+
+    /// Informs the user interface that a task's progress state has changed.
+    virtual void taskProgressChanged(TaskProgress* progress) {}
+
+protected:
+
+    /// Hosts the dataset that is currently being edited in this user interface.
+    OORef<DataSetContainer> _datasetContainer;
+
+    /// Viewport input manager of the user interface.
+    ViewportInputManager* _viewportInputManager = nullptr;
+
+    /// Actions of the user interface.
+    ActionManager* _actionManager = nullptr;
+
+    /// The undo stack keeping track of changes made by the user to the current dataset.
+    UndoStack* _undoStack = nullptr;
+
+    /// The manager of ParameterUnit objects.
+    UnitsManager _unitsManager;
+
+    /// Weak reference to the shared render thread for GPU-accelerated rendering.
+    /// The render thread is owned by the viewport windows (or offscreen rendering clients) that hold shared_ptr references.
+    std::weak_ptr<RenderThread> _renderThread;
+
+    /// This shared_ptr optionally keeps the render thread alive as long as the UserInterface exists, even if no viewport window is open.
+    /// This is used as a performance optimization when running in headless Python mode, where we want to
+    /// avoid spinning up a new render thread each time Viewport.render_image() is called.
+    std::shared_ptr<RenderThread> _renderThreadKeepAlive;
+
+    /// Counts the number of times the auto-key animation mode has been suspended.
+    int _animSuspendCount = 0;
+
+    /// Counts the number of times preliminary viewport updates have been suspended.
+    int _preliminaryViewportUpdatesSuspendCount = 0;
+
+    /// Indicates that exitWithFatalError() has been called and the application is shutting down.
+    bool _exitingDueToFatalError = false;
+
+    friend class TaskProgress; // Needs access to the taskProgressBegin(), taskProgressEnd(), and taskProgressUpdate() methods.
+};
+
+/**
+ * @brief Template class for components associated with a user interface.
+ *
+ * Mix-in base class for UI components that interact with a specific type of UserInterface.
+ * It manages the association with the UserInterface instance and provides convenient access to
+ * various methods provided by the UserInterface object.
+ *
+ * @tparam UserInterfaceType The type of user interface this component is associated with. Must be derived from UserInterface, e.g. MainWindowUI.
+ */
+template<typename UserInterfaceType, bool UseStrongReference = true>
+    requires std::derived_from<UserInterfaceType, UserInterface>
+class UserInterfaceComponent
+{
+public:
+
+    /// Default constructor, which creates an unassociated component.
+    /// Must call setUserInterface() later to associate it with a UserInterface.
+    UserInterfaceComponent() = default;
+
+    /// Constructor, which associates this UI component with a UserInterface.
+    UserInterfaceComponent(UserInterfaceType& ui) : _ui{&ui} {}
+
+    /// Returns a reference to the abstract user interface.
+    UserInterfaceType& ui() const {
+        OVITO_ASSERT_MSG(hasUserInterface(), "UserInterfaceComponent::ui()", "UserInterfaceComponent was not properly initialized. It is not associated with any UserInterface.");
+        return *_ui;
+    }
+
+    /// Sets the user interface this component is associated with.
+    /// This must be called before any other method when the default constructor was used.
+    void setUserInterface(UserInterfaceType& ui) { OVITO_ASSERT(!hasUserInterface() || _ui == &ui); _ui = &ui; }
+
+    /// Returns true if this component is associated with a UserInterface.
+    bool hasUserInterface() const { return _ui != nullptr; }
+
+    /// Returns the container managing the current dataset.
+    DataSetContainer& datasetContainer() const { return ui().datasetContainer(); }
+
+    /// Returns the viewport input manager of the user interface.
+    ViewportInputManager* viewportInputManager() const { return ui().viewportInputManager(); }
+
+    /// Returns the manager of ParameterUnit objects.
+    UnitsManager& unitsManager() const { return ui().unitsManager(); }
+
+    /// Returns the manager of the user interface actions.
+    ActionManager* actionManager() const { return ui().actionManager(); }
+
+    /// Returns the undo stack, which keeps track of changes made by the user to the current dataset.
+    /// It may be none if not running as a desktop application.
+    UndoStack* undoStack() const { return ui().undoStack(); }
+
+    /// Returns the viewport that is currently selected.
+    Viewport* activeViewport() const;
+
+    /// Returns the animation settings that are currently selected.
+    AnimationSettings* activeAnimationSettings() const;
+
+    /// Returns the current time of the active animation settings object.
+    AnimationTime currentAnimationTime() const;
+
+    /// Returns the dataset that is currently active.
+    DataSet* dataset() const;
+
+    /// Executes a functor that performs some actions in an interactive context and catches any exceptions thrown during its execution.
+    /// If an exception is thrown by the functor, the error message is displayed to the user and this function returns false.
+    /// The 'Isolated' template parameter can be set to true to indicate that the operation should execute independently
+    /// from the currently active task, i.e., cancellation of one of the tasks should not affect the other.
+    template<bool Isolated = false, typename Function>
+    bool handleExceptions(Function&& func) const noexcept {
+        return ui().template handleExceptions<Isolated>(std::forward<Function>(func));
+    }
+
+    /// Executes a functor provided by the caller that performs undoable actions in an interactive context.
+    /// If an exception is thrown by the functor, the error message is displayed
+    /// to the user, and this function returns false.
+    template<typename Function>
+    bool performActions(UndoableTransaction& transaction, Function&& func) const noexcept {
+        return ui().performActions(transaction, std::forward<Function>(func));
+    }
+
+    /// Executes a functor provided by the caller that performs undoable actions in an interactive context.
+    /// If an exception is thrown by the functor, all data changes performed by the functor so far will be undone, the error message is displayed
+    /// to the user, and this function returns false. If no exception is thrown, all performed actions are committed and this function returns true.
+    template<typename Function>
+    bool performTransaction(const QString& undoOperationName, Function&& func) const noexcept {
+        return ui().performTransaction(undoOperationName, std::forward<Function>(func));
+    }
+
+private:
+
+    // The abstract UI this component is associated with.
+    std::conditional_t<UseStrongReference, OORef<UserInterfaceType>, UserInterfaceType*> _ui{};
+};
+
+/**
+ * \brief A RAII helper class that suspends the automatic generation of animation keys while it exists.
+ *
+ * You typically create an instance of this class on the stack to temporarily suspend the
+ * automatic generation of animation keys in an exception-safe way.
+ */
+class OVITO_CORE_EXPORT AnimationSuspender
+{
+public:
+
+    /// Suspends the automatic generation of animation keys by calling UserInterface::suspendAnim().
+    AnimationSuspender(UserInterface& ui) noexcept : _ui(ui) {
+        _ui.suspendAnim();
+    }
+
+    /// Resumes the automatic generation of animation keys by calling UserInterface::resumeAnim().
+    ~AnimationSuspender() {
+        _ui.resumeAnim();
+    }
+
+private:
+
+    UserInterface& _ui;
+};
+
+}   // End of namespace
+
+#include <ovito/core/app/undo/UndoableOperation.h>
+#include <ovito/core/app/undo/UndoableTransaction.h>
+#include <ovito/core/utilities/concurrent/MainThreadOperation.h>
+
+namespace Ovito {
+
+/// Executes a functor that performs some actions in an interactive context and catches any exceptions thrown during its execution.
+/// If an exception is thrown by the functor, the error message is displayed to the user and this function returns false.
+/// The 'Isolated' template parameter can be set to true to indicate that the operation should execute independently
+/// from the currently active task, i.e., cancellation of one of the tasks should not affect the other.
+template<bool Isolated, typename Function>
+bool UserInterface::handleExceptions(Function&& func) noexcept
+{
+    static_assert(std::is_invocable_v<Function>, "Function must be callable without arguments.");
+    static_assert(std::is_same_v<std::invoke_result_t<Function>, void>, "Function must return void.");
+    OVITO_ASSERT(!isBeingDeleted());
+
+    // Note: The MainThreadOperation creates a temporary OORef<UserInterface>, which keeps the UI alive until function exit.
+    MainThreadOperation operation(*this, Isolated ? MainThreadOperation::Kind::Isolated : MainThreadOperation::Kind::Bound);
+
+    try {
+        std::invoke(std::forward<Function>(func));
+        return !operation.isCanceled();
+    }
+    catch(OperationCanceled) {
+        OVITO_ASSERT(operation.isCanceled());
+        return false;
+    }
+    catch(const Exception& ex) {
+        reportError(ex);
+        return false;
+    }
+    catch(const std::exception& ex) {
+        reportError(Exception(QString::fromUtf8(ex.what())));
+        return false;
+    }
+}
+
+/// Executes a functor provided by the caller that performs undoable actions in an interactive context.
+/// If an exception is thrown by the functor, the error message is displayed
+/// to the user, and this function returns false.
+template<typename Function>
+bool UserInterface::performActions(UndoableTransaction& transaction, Function&& func) noexcept
+{
+    OVITO_ASSERT(transaction.operation());
+    OVITO_ASSERT(&transaction.userInterface() == this);
+    UndoSuspender activateUndo(transaction.operation());
+    return handleExceptions(std::forward<Function>(func));
+}
+
+/// Executes a functor provided by the caller that performs undoable actions in an interactive context.
+/// If an exception is thrown by the functor, all data changes performed by the functor so far will be undone, the error message is displayed
+/// to the user, and this function returns false. If no exception is thrown, all performed actions are committed and this function returns true.
+template<typename Function>
+bool UserInterface::performTransaction(const QString& undoOperationName, Function&& func) noexcept
+{
+    UndoableTransaction transaction(*this, undoOperationName);
+    if(performActions(transaction, std::forward<Function>(func))) {
+        transaction.commit();
+        return true;
+    }
+    return false;
+}
+
+}   // End of namespace
+
+#include <ovito/core/dataset/DataSetContainer.h>
+
+namespace Ovito {
+
+/// Returns the viewport that is currently selected.
+template<typename UserInterfaceType, bool UseStrongReference>
+    requires std::derived_from<UserInterfaceType, UserInterface>
+Viewport* UserInterfaceComponent<UserInterfaceType, UseStrongReference>::activeViewport() const
+{
+    return datasetContainer().activeViewport();
+}
+
+/// Returns the animation settings that are currently active.
+template<typename UserInterfaceType, bool UseStrongReference>
+    requires std::derived_from<UserInterfaceType, UserInterface>
+AnimationSettings* UserInterfaceComponent<UserInterfaceType, UseStrongReference>::activeAnimationSettings() const
+{
+    return datasetContainer().activeAnimationSettings();
+}
+
+/// Returns the current time of the active animation settings object.
+template<typename UserInterfaceType, bool UseStrongReference>
+    requires std::derived_from<UserInterfaceType, UserInterface>
+AnimationTime UserInterfaceComponent<UserInterfaceType, UseStrongReference>::currentAnimationTime() const
+{
+    return datasetContainer().currentAnimationTime();
+}
+
+/// Returns the dataset that is currently active.
+template<typename UserInterfaceType, bool UseStrongReference>
+    requires std::derived_from<UserInterfaceType, UserInterface>
+DataSet* UserInterfaceComponent<UserInterfaceType, UseStrongReference>::dataset() const
+{
+    return datasetContainer().currentSet();
+}
+
+// Instantiate class templates.
+#ifndef OVITO_BUILD_MONOLITHIC
+#if defined(Q_CC_MSVC)
+extern template class OVITO_CORE_EXPORT UserInterfaceComponent<UserInterface>;
+extern template class OVITO_CORE_EXPORT UserInterfaceComponent<UserInterface, false>;
+#endif
+#endif
+
+}   // End of namespace

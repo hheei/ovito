@@ -1,0 +1,470 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/stdmod/gui/StdModGui.h>
+#include <ovito/gui/desktop/properties/BooleanParameterUI.h>
+#include <ovito/gui/desktop/properties/BooleanRadioButtonParameterUI.h>
+#include <ovito/gui/desktop/properties/AffineTransformationParameterUI.h>
+#include <ovito/gui/desktop/properties/ModifierDelegateFixedListParameterUI.h>
+#include <ovito/gui/desktop/widgets/general/EnterLineEdit.h>
+#include <ovito/stdmod/modifiers/AffineTransformationModifier.h>
+#include <ovito/stdobj/simcell/SimulationCell.h>
+#include "AffineTransformationModifierEditor.h"
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(AffineTransformationModifierEditor);
+SET_OVITO_OBJECT_EDITOR(AffineTransformationModifier, AffineTransformationModifierEditor);
+
+/******************************************************************************
+* Sets up the UI widgets of the editor.
+******************************************************************************/
+void AffineTransformationModifierEditor::createUI(const RolloutInsertionParameters& rolloutParams)
+{
+    // Create the first rollout.
+    QWidget* rollout = rollout = createRollout(tr("Transformation"), rolloutParams, "manual:particles.modifiers.affine_transformation");
+
+    QGridLayout* layout = new QGridLayout(rollout);
+    layout->setContentsMargins(4,4,4,4);
+    layout->setSpacing(2);
+    layout->setColumnMinimumWidth(0, 30);
+    layout->setColumnStretch(1, 1);
+    layout->setColumnStretch(2, 1);
+    layout->setColumnStretch(3, 1);
+
+    _relativeModeUI = createParamUI<BooleanRadioButtonParameterUI>(PROPERTY_FIELD(AffineTransformationModifier::relativeMode));
+
+    int layoutRow = 0;
+    _relativeModeUI->buttonTrue()->setText(tr("Transformation matrix:"));
+    layout->addWidget(_relativeModeUI->buttonTrue(), layoutRow++, 0, 1, 4);
+    layout->setRowMinimumHeight(layoutRow++, 4);
+
+    QGridLayout* sublayout = new QGridLayout();
+    sublayout->setContentsMargins(0,0,0,0);
+    sublayout->setSpacing(0);
+    sublayout->setColumnStretch(0, 1);
+    sublayout->addWidget(new QLabel(tr("Rotate/Scale/Shear:")), 0, 0, Qt::Alignment(Qt::AlignBottom | Qt::AlignLeft));
+    QAction* enterRotationAction = new QAction(tr("Enter rotation..."), this);
+    QToolButton* enterRotationButton = new QToolButton();
+    enterRotationButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    enterRotationButton->setDefaultAction(enterRotationAction);
+    sublayout->addWidget(enterRotationButton, 0, 1, Qt::Alignment(Qt::AlignBottom | Qt::AlignRight));
+    enterRotationAction->setEnabled(false);
+    connect(_relativeModeUI->buttonTrue(), &QRadioButton::toggled, enterRotationAction, &QAction::setEnabled);
+    connect(enterRotationAction, &QAction::triggered, this, &AffineTransformationModifierEditor::onEnterRotation);
+    layout->addLayout(sublayout, layoutRow++, 1, 1, 3);
+
+    // Override automatic increment step sizes for the cell parameters.
+    _relativeMatrixUnits.emplace(unitsManager().floatIdentityUnit());
+    _relativeTranslationUnits[0].emplace(unitsManager().floatIdentityUnit());
+    _relativeTranslationUnits[1].emplace(unitsManager().floatIdentityUnit());
+    _relativeTranslationUnits[2].emplace(unitsManager().floatIdentityUnit());
+
+    for(int row = 0; row < 4; row++) {
+        if(row == 3) {
+            QHBoxLayout* hboxsublayout = new QHBoxLayout();
+            hboxsublayout->setContentsMargins(0,4,0,0);
+            hboxsublayout->setSpacing(4);
+            hboxsublayout->addWidget(new QLabel(tr("Translation:")));
+            BooleanParameterUI* translationReducedCoordinatesUI = createParamUI<BooleanParameterUI>(PROPERTY_FIELD(AffineTransformationModifier::translationReducedCoordinates));
+            connect(_relativeModeUI->buttonTrue(), &QRadioButton::toggled, translationReducedCoordinatesUI, &BooleanParameterUI::setEnabled);
+            translationReducedCoordinatesUI->checkBox()->setText(tr("In reduced cell coordinates"));
+            hboxsublayout->addWidget(translationReducedCoordinatesUI->checkBox(), 1, Qt::AlignRight | Qt::AlignVCenter);
+            connect(translationReducedCoordinatesUI, &BooleanParameterUI::valueEntered, this, &AffineTransformationModifierEditor::onReducedCoordinatesOptionChanged);
+            layout->addLayout(hboxsublayout, layoutRow++, 1, 1, 3);
+        }
+        for(int col = 0; col < 3; col++) {
+            QHBoxLayout* sublayout = new QHBoxLayout();
+            sublayout->setContentsMargins(0,0,0,0);
+            sublayout->setSpacing(0);
+            QLineEdit* lineEdit = new EnterLineEdit(rollout);
+            SpinnerWidget* spinner = new SpinnerWidget(rollout);
+            lineEdit->setEnabled(false);
+            spinner->setEnabled(false);
+            if(row < 3) {
+                _relativeCellSpinners[row][col] = spinner;
+                spinner->setProperty("column", col);
+                spinner->setProperty("row", row);
+                spinner->setUnit(&_relativeMatrixUnits.value());
+            }
+            else {
+                _relativeCellSpinners[col][row] = spinner;
+                spinner->setProperty("column", row);
+                spinner->setProperty("row", col);
+                spinner->setUnit(&_relativeTranslationUnits[col].value());
+            }
+            spinner->setTextBox(lineEdit);
+
+            sublayout->addWidget(lineEdit, 1);
+            sublayout->addWidget(spinner);
+            layout->addLayout(sublayout, layoutRow, col+1);
+
+            spinner->enableAutomaticUndo(ui(), tr("Change parameter"));
+            connect(spinner, &SpinnerWidget::valueChanged, this, &AffineTransformationModifierEditor::onSpinnerValueChanged);
+            connect(_relativeModeUI->buttonTrue(), &QRadioButton::toggled, spinner, &SpinnerWidget::setEnabled);
+            connect(_relativeModeUI->buttonTrue(), &QRadioButton::toggled, lineEdit, &QLineEdit::setEnabled);
+        }
+        layoutRow++;
+    }
+
+    layout->setRowMinimumHeight(layoutRow++, 6);
+    _relativeModeUI->buttonFalse()->setText(tr("Target cell:"));
+    layout->addWidget(_relativeModeUI->buttonFalse(), layoutRow++, 0, 1, 4);
+    layout->setRowMinimumHeight(layoutRow++, 6);
+
+    AffineTransformationParameterUI* destinationCellUI;
+    layout->addWidget(new QLabel(tr("New cell vectors:")), layoutRow++, 1, 1, 3);
+    layout->addWidget(new QLabel(tr("<b>a</b>:")), layoutRow+0, 0, 1, 1, Qt::AlignRight);
+    layout->addWidget(new QLabel(tr("<b>b</b>:")), layoutRow+1, 0, 1, 1, Qt::AlignRight);
+    layout->addWidget(new QLabel(tr("<b>c</b>:")), layoutRow+2, 0, 1, 1, Qt::AlignRight);
+    for(size_t v = 0; v < 3; v++) {
+        for(size_t r = 0; r < 3; r++) {
+            destinationCellUI = createParamUI<AffineTransformationParameterUI>(PROPERTY_FIELD(AffineTransformationModifier::targetCell), r, v);
+            destinationCellUI->setEnabled(false);
+            layout->addLayout(destinationCellUI->createFieldLayout(), layoutRow, r+1);
+            connect(_relativeModeUI->buttonFalse(), &QRadioButton::toggled, destinationCellUI, &AffineTransformationParameterUI::setEnabled);
+            _absoluteCellUnits[r][v].emplace(unitsManager().getUnit(destinationCellUI->parameterUnitType()));
+            destinationCellUI->spinner()->setUnit(&_absoluteCellUnits[r][v].value());
+            destinationCellUI->textBox()->setPlaceholderText(_absoluteCellUnits[r][v]->formatValue(0));
+            destinationCellUI->spinner()->setStandardValue(0);
+        }
+        layoutRow++;
+    }
+
+    layout->addWidget(new QLabel(tr("New cell origin:")), layoutRow++, 1, 1, 3);
+    layout->addWidget(new QLabel(tr("<b>o</b>:")), layoutRow, 0, 1, 1, Qt::AlignRight);
+    for(size_t r = 0; r < 3; r++) {
+        destinationCellUI = createParamUI<AffineTransformationParameterUI>(PROPERTY_FIELD(AffineTransformationModifier::targetCell), r, 3);
+        destinationCellUI->setEnabled(false);
+        layout->addLayout(destinationCellUI->createFieldLayout(), layoutRow, r+1);
+        connect(_relativeModeUI->buttonFalse(), &QRadioButton::toggled, destinationCellUI, &AffineTransformationParameterUI::setEnabled);
+        _absoluteOriginUnits[r].emplace(unitsManager().getUnit(destinationCellUI->parameterUnitType()));
+        destinationCellUI->spinner()->setUnit(&_absoluteOriginUnits[r].value());
+        destinationCellUI->textBox()->setPlaceholderText(_absoluteOriginUnits[r]->formatValue(0));
+        destinationCellUI->spinner()->setStandardValue(0);
+    }
+
+    // Update spinner values when a new object has been loaded into the editor.
+    connect(this, &PropertiesEditor::contentsChanged, this, &AffineTransformationModifierEditor::updateUI);
+
+    // Create a second rollout.
+    rollout = createRollout(tr("Operate on"), rolloutParams.after(rollout), "manual:particles.modifiers.slice");
+
+    // Create the rollout contents.
+    QVBoxLayout* topLayout = new QVBoxLayout(rollout);
+    topLayout->setContentsMargins(4,4,4,4);
+    //topLayout->setSpacing(12);
+
+    QGroupBox* selectionGroupBox = new QGroupBox(tr("Restrict to"), rollout);
+    QVBoxLayout* selectionGroupBoxLayout = new QVBoxLayout(selectionGroupBox);
+    selectionGroupBoxLayout->setContentsMargins(4,4,4,4);
+    topLayout->addWidget(selectionGroupBox);
+
+    BooleanParameterUI* selectionUI = createParamUI<BooleanParameterUI>(PROPERTY_FIELD(AffineTransformationModifier::selectionOnly));
+    selectionGroupBoxLayout->addWidget(selectionUI->checkBox());
+
+    QGroupBox* objectTypesGroupBox = new QGroupBox(tr("Affected object types"), rollout);
+    QVBoxLayout* objectTypesGroupBoxLayout = new QVBoxLayout(objectTypesGroupBox);
+    objectTypesGroupBoxLayout->setContentsMargins(4,4,4,4);
+    topLayout->addWidget(objectTypesGroupBox);
+
+    ModifierDelegateFixedListParameterUI* delegatesPUI = createParamUI<ModifierDelegateFixedListParameterUI>();
+    objectTypesGroupBoxLayout->addWidget(delegatesPUI->containerWidget());
+
+    // Whenever the pipeline input of the modifier changes, update the increment step sizes of the cell parameters.
+    connect(this, &PropertiesEditor::pipelineInputChanged, this, &AffineTransformationModifierEditor::updateParameterUnitScales);
+}
+
+/******************************************************************************
+* This method updates the displayed matrix values.
+******************************************************************************/
+void AffineTransformationModifierEditor::updateUI()
+{
+    AffineTransformationModifier* mod = dynamic_object_cast<AffineTransformationModifier>(editObject());
+    if(!mod) return;
+
+    const AffineTransformation& tm = mod->transformationTM();
+
+    for(int row = 0; row < 3; row++) {
+        for(int column = 0; column < 4; column++) {
+            if(!_relativeCellSpinners[row][column]->isDragging())
+                _relativeCellSpinners[row][column]->setFloatValue(tm(row, column));
+        }
+    }
+}
+
+/******************************************************************************
+* Auto-adjusts the increment steps of the numeric parameter spinner widgets.
+******************************************************************************/
+void AffineTransformationModifierEditor::updateParameterUnitScales()
+{
+    OVITO_ASSERT(_relativeMatrixUnits.has_value());
+
+    _relativeMatrixUnits->setScaleReference(0.1);
+    _relativeTranslationUnits[0]->setScaleReference(0.3);
+    _relativeTranslationUnits[1]->setScaleReference(0.3);
+    _relativeTranslationUnits[2]->setScaleReference(0.3);
+    _absoluteOriginUnits[0]->setScaleReference(0);
+    _absoluteOriginUnits[1]->setScaleReference(0);
+    _absoluteOriginUnits[2]->setScaleReference(0);
+
+    if(DataOORef<const SimulationCell> cell = getPipelineInput().getObject<SimulationCell>()) {
+        bool usingReducedCoords = editObject() ? static_object_cast<AffineTransformationModifier>(editObject())->translationReducedCoordinates() : false;
+
+        // If a simulation cell is available, set the translation increments proportional to the cell's dimensions - unless translation is given in reduced coordinates.
+        if(!usingReducedCoords) {
+            _relativeTranslationUnits[0]->setScaleReference(cell->cellMatrix().column(0).length());
+            _relativeTranslationUnits[1]->setScaleReference(cell->cellMatrix().column(1).length());
+            _relativeTranslationUnits[2]->setScaleReference(cell->cellMatrix().column(2).length());
+        }
+
+        // Let origin translation increments depend on the cell vector lengths.
+        _absoluteOriginUnits[0]->setScaleReference(cell->cellMatrix().column(0).length());
+        _absoluteOriginUnits[1]->setScaleReference(cell->cellMatrix().column(1).length());
+        _absoluteOriginUnits[2]->setScaleReference(cell->cellMatrix().column(2).length());
+
+        // Also let shear increments (off-diagonal cell matrix elements) depend on the cell vector lengths.
+        _absoluteCellUnits[1][0]->setScaleReference(0.3 * cell->cellMatrix().column(0).length());
+        _absoluteCellUnits[2][0]->setScaleReference(0.3 * cell->cellMatrix().column(0).length());
+        _absoluteCellUnits[0][1]->setScaleReference(0.3 * cell->cellMatrix().column(1).length());
+        _absoluteCellUnits[2][1]->setScaleReference(0.3 * cell->cellMatrix().column(1).length());
+        _absoluteCellUnits[0][2]->setScaleReference(0.3 * cell->cellMatrix().column(2).length());
+        _absoluteCellUnits[1][2]->setScaleReference(0.3 * cell->cellMatrix().column(2).length());
+
+        _relativeModeUI->buttonFalse()->setEnabled(true);
+    }
+    else {
+        _relativeModeUI->buttonFalse()->setEnabled(false);
+    }
+}
+
+/******************************************************************************
+* Is called when the spinner value has changed.
+******************************************************************************/
+void AffineTransformationModifierEditor::onSpinnerValueChanged()
+{
+    // Take the value entered by the user and store it in transformation controller.
+
+    AffineTransformationModifier* mod = dynamic_object_cast<AffineTransformationModifier>(editObject());
+    if(!mod) return;
+
+    // Get the spinner whose value has changed.
+    SpinnerWidget* spinner = qobject_cast<SpinnerWidget*>(sender());
+    OVITO_CHECK_POINTER(spinner);
+
+    AffineTransformation tm = mod->transformationTM();
+
+    int column = spinner->property("column").toInt();
+    int row = spinner->property("row").toInt();
+
+    tm(row, column) = spinner->floatValue();
+    mod->setTransformationTM(tm);
+}
+
+/******************************************************************************
+* Is called when the user switches between Cartesian and reduced cell coordinates for the translation vector.
+******************************************************************************/
+void AffineTransformationModifierEditor::onReducedCoordinatesOptionChanged()
+{
+    AffineTransformationModifier* mod = static_object_cast<AffineTransformationModifier>(editObject());
+    if(!mod)
+        return;
+
+    updateParameterUnitScales();
+
+    const PipelineFlowState& input = getPipelineInput();
+    const SimulationCell* cell = input.getObject<SimulationCell>();
+    if(!cell)
+        return;
+
+    // Automatically convert translation vector to/from reduced cell coordinates.
+    AffineTransformation tm = mod->transformationTM();
+    if(mod->translationReducedCoordinates()) {
+        AffineTransformation inv;
+        if((tm * cell->matrix()).inverse(inv))
+            tm.translation() = inv * tm.translation();
+    }
+    else {
+        tm.translation() = tm * (cell->matrix() * tm.translation());
+    }
+    for(size_t dim = 0; dim < 3; dim++)
+        if(std::abs(tm.translation()[dim]) < Ovito::epsilon) tm.translation()[dim] = 0;
+
+    mod->setTransformationTM(tm);
+}
+
+/******************************************************************************
+* Is called when the user presses the 'Enter rotation' button.
+* Displays a dialog box, which lets the user enter a rotation axis and angle.
+* Computes the rotation matrix from these parameters.
+******************************************************************************/
+void AffineTransformationModifierEditor::onEnterRotation()
+{
+    AffineTransformationModifier* mod = static_object_cast<AffineTransformationModifier>(editObject());
+    if(!mod) return;
+
+    UndoableTransaction transaction;
+    transaction.begin(ui(), tr("Set transformation matrix"));
+
+    handleExceptions([&] {
+        QDialog dlg(container()->window());
+        dlg.setWindowTitle(tr("Enter rotation axis and angle"));
+        QVBoxLayout* mainLayout = new QVBoxLayout(&dlg);
+
+        QGridLayout* layout = new QGridLayout();
+        layout->setContentsMargins(0,0,0,0);
+        layout->addWidget(new QLabel(tr("3D rotation axis (xyz):")), 0, 0, 1, 8);
+        layout->setColumnStretch(0, 1);
+        layout->setColumnStretch(3, 1);
+        layout->setColumnStretch(6, 1);
+        layout->setColumnMinimumWidth(2, 4);
+        layout->setColumnMinimumWidth(5, 4);
+        layout->setVerticalSpacing(2);
+        layout->setHorizontalSpacing(0);
+        QLineEdit* axisEditX = new EnterLineEdit();
+        QLineEdit* axisEditY = new EnterLineEdit();
+        QLineEdit* axisEditZ = new EnterLineEdit();
+        SpinnerWidget* axisSpinnerX = new SpinnerWidget();
+        SpinnerWidget* axisSpinnerY = new SpinnerWidget();
+        SpinnerWidget* axisSpinnerZ = new SpinnerWidget();
+        axisSpinnerX->setTextBox(axisEditX);
+        axisSpinnerY->setTextBox(axisEditY);
+        axisSpinnerZ->setTextBox(axisEditZ);
+        axisSpinnerX->setUnit(unitsManager().worldUnit());
+        axisSpinnerY->setUnit(unitsManager().worldUnit());
+        axisSpinnerZ->setUnit(unitsManager().worldUnit());
+        layout->addWidget(axisEditX, 1, 0);
+        layout->addWidget(axisSpinnerX, 1, 1);
+        layout->addWidget(axisEditY, 1, 3);
+        layout->addWidget(axisSpinnerY, 1, 4);
+        layout->addWidget(axisEditZ, 1, 6);
+        layout->addWidget(axisSpinnerZ, 1, 7);
+        layout->addWidget(new QLabel(tr("Angle (degrees):")), 2, 0, 1, 8);
+        QLineEdit* angleEdit = new EnterLineEdit();
+        SpinnerWidget* angleSpinner = new SpinnerWidget();
+        angleSpinner->setTextBox(angleEdit);
+        angleSpinner->setUnit(unitsManager().angleUnit());
+        layout->addWidget(angleEdit, 3, 0);
+        layout->addWidget(angleSpinner, 3, 1);
+        layout->addWidget(new QLabel(tr("Center of rotation (xyz):")), 4, 0, 1, 8);
+        QLineEdit* centerEditX = new EnterLineEdit();
+        QLineEdit* centerEditY = new EnterLineEdit();
+        QLineEdit* centerEditZ = new EnterLineEdit();
+        SpinnerWidget* centerSpinnerX = new SpinnerWidget();
+        SpinnerWidget* centerSpinnerY = new SpinnerWidget();
+        SpinnerWidget* centerSpinnerZ = new SpinnerWidget();
+        centerSpinnerX->setTextBox(centerEditX);
+        centerSpinnerY->setTextBox(centerEditY);
+        centerSpinnerZ->setTextBox(centerEditZ);
+        centerSpinnerX->setUnit(unitsManager().worldUnit());
+        centerSpinnerY->setUnit(unitsManager().worldUnit());
+        centerSpinnerZ->setUnit(unitsManager().worldUnit());
+        layout->addWidget(centerEditX, 5, 0);
+        layout->addWidget(centerSpinnerX, 5, 1);
+        layout->addWidget(centerEditY, 5, 3);
+        layout->addWidget(centerSpinnerY, 5, 4);
+        layout->addWidget(centerEditZ, 5, 6);
+        layout->addWidget(centerSpinnerZ, 5, 7);
+        mainLayout->addLayout(layout);
+
+        // Decompose current transformation matrix into axis-angle form.
+        const AffineTransformation tm = mod->effectiveAffineTransformation(getPipelineInput());
+        Rotation rot(tm);
+        angleSpinner->setFloatValue(rot.angle());
+        axisSpinnerX->setFloatValue(rot.axis().x());
+        axisSpinnerY->setFloatValue(rot.axis().y());
+        axisSpinnerZ->setFloatValue(rot.axis().z());
+        Matrix3 r = tm.linear();
+        r(0,0) -= 1;
+        r(1,1) -= 1;
+        r(2,2) -= 1;
+        Plane3 p1, p2;
+        size_t i = 0;
+        for(i = 0; i < 3; i++)
+            if(!r.row(i).isZero()) {
+                p1 = Plane3(r.row(i), -tm(i, 3));
+                i++;
+                break;
+            }
+        for(; i < 3; i++)
+            if(!r.row(i).isZero()) {
+                p2 = Plane3(r.row(i), -tm(i, 3));
+                break;
+            }
+        if(i != 3) {
+            p1.normalizePlane();
+            p2.normalizePlane();
+            FloatType d = p1.normal.dot(p2.normal);
+            FloatType denom = (FloatType(1) - d*d);
+            if(std::abs(denom) > Ovito::epsilon) {
+                FloatType c1 = (p1.dist  - p2.dist * d) / denom;
+                FloatType c2 = (p2.dist  - p1.dist * d) / denom;
+                Vector3 center = c1 * p1.normal + c2 * p2.normal;
+                centerSpinnerX->setFloatValue(center.x());
+                centerSpinnerY->setFloatValue(center.y());
+                centerSpinnerZ->setFloatValue(center.z());
+            }
+        }
+        else {
+            Point3 center = Point3::Origin();
+            if(Viewport* vp = activeViewport())
+                center = vp->orbitCenter();
+            centerSpinnerX->setFloatValue(center.x());
+            centerSpinnerY->setFloatValue(center.y());
+            centerSpinnerZ->setFloatValue(center.z());
+        }
+
+        auto updateMatrix = [&]() {
+            Vector3 axis(axisSpinnerX->floatValue(), axisSpinnerY->floatValue(), axisSpinnerZ->floatValue());
+            if(axis == Vector3::Zero()) axis = Vector3(0,0,1);
+            Vector3 center(centerSpinnerX->floatValue(), centerSpinnerY->floatValue(), centerSpinnerZ->floatValue());
+            Rotation rot(axis, angleSpinner->floatValue());
+            AffineTransformation tm = AffineTransformation::translation(center) * AffineTransformation::rotation(rot) * AffineTransformation::translation(-center);
+            transaction.revert();
+            performActions(transaction, [&] {
+                mod->setTranslationReducedCoordinates(false);
+                mod->setTransformationTM(tm);
+            });
+        };
+
+        connect(angleSpinner, &SpinnerWidget::valueChanged, updateMatrix);
+        connect(axisSpinnerX, &SpinnerWidget::valueChanged, updateMatrix);
+        connect(axisSpinnerY, &SpinnerWidget::valueChanged, updateMatrix);
+        connect(axisSpinnerZ, &SpinnerWidget::valueChanged, updateMatrix);
+        connect(centerSpinnerX, &SpinnerWidget::valueChanged, updateMatrix);
+        connect(centerSpinnerY, &SpinnerWidget::valueChanged, updateMatrix);
+        connect(centerSpinnerZ, &SpinnerWidget::valueChanged, updateMatrix);
+
+        QDialogButtonBox* buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        connect(buttonBox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+        connect(buttonBox, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        mainLayout->addWidget(buttonBox);
+        if(dlg.exec() == QDialog::Accepted) {
+            transaction.commit();
+        }
+        else {
+            transaction.cancel();
+        }
+    });
+}
+
+}   // End of namespace

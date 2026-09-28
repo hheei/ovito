@@ -1,0 +1,172 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 25,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "default",
+            "displayName": "Default Development (RelWithDebInfo)",
+            "description": "Standard development build with C++ unit tests enabled",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "OVITO_BUILD_CPP_TESTS": "ON",
+                "OVITO_BUILD_APP": "ON"
+            }
+        },
+        {
+            "name": "debug",
+            "displayName": "Debug",
+            "description": "Debug build with C++ unit tests enabled",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build-debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "OVITO_BUILD_CPP_TESTS": "ON",
+                "OVITO_BUILD_APP": "ON"
+            }
+        },
+        {
+            "name": "release",
+            "displayName": "Release",
+            "description": "Optimized release build",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build-release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "OVITO_BUILD_CPP_TESTS": "ON",
+                "OVITO_BUILD_APP": "ON"
+            }
+        },
+        {
+            "name": "native",
+            "displayName": "Native Host (.qt, Clang + mold + ccache)",
+            "description": "Ultra-fast native build using Clang 18, mold linker, ccache and local Qt in .qt",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build-native",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_C_COMPILER_LAUNCHER": "ccache",
+                "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
+                "CMAKE_EXE_LINKER_FLAGS_INIT": "-fuse-ld=mold",
+                "CMAKE_SHARED_LINKER_FLAGS_INIT": "-fuse-ld=mold",
+                "CMAKE_MODULE_LINKER_FLAGS_INIT": "-fuse-ld=mold",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/.qt/6.10.2/gcc_64",
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_INSTALL_RPATH_USE_LINK_PATH": "ON",
+                "CMAKE_BUILD_WITH_INSTALL_RPATH": "ON",
+                "OVITO_BUILD_CPP_TESTS": "ON",
+                "OVITO_BUILD_APP": "ON"
+            }
+        },
+        {
+            "name": "native-gcc",
+            "displayName": "Native Host (.qt, GCC + mold + ccache)",
+            "description": "Native build using GCC, mold linker, ccache and local Qt in .qt",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build-native-gcc",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++",
+                "CMAKE_C_COMPILER_LAUNCHER": "ccache",
+                "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
+                "CMAKE_EXE_LINKER_FLAGS_INIT": "-fuse-ld=mold",
+                "CMAKE_SHARED_LINKER_FLAGS_INIT": "-fuse-ld=mold",
+                "CMAKE_MODULE_LINKER_FLAGS_INIT": "-fuse-ld=mold",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/.qt/6.10.2/gcc_64",
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_INSTALL_RPATH_USE_LINK_PATH": "ON",
+                "CMAKE_BUILD_WITH_INSTALL_RPATH": "ON",
+                "OVITO_BUILD_CPP_TESTS": "ON",
+                "OVITO_BUILD_APP": "ON"
+            }
+        },
+        {
+            "name": "ci-linux",
+            "displayName": "CI Linux",
+            "description": "Preset tailored for Linux CI runners",
+            "inherits": "default",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "default",
+            "configurePreset": "default"
+        },
+        {
+            "name": "native",
+            "configurePreset": "native"
+        },
+        {
+            "name": "native-gcc",
+            "configurePreset": "native-gcc"
+        },
+        {
+            "name": "debug",
+            "configurePreset": "debug"
+        },
+        {
+            "name": "release",
+            "configurePreset": "release"
+        },
+        {
+            "name": "ci-linux",
+            "configurePreset": "ci-linux"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "default",
+            "configurePreset": "default",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "noTestsAction": "error"
+            }
+        },
+        {
+            "name": "native",
+            "configurePreset": "native",
+            "output": {
+                "outputOnFailure": true
+            },
+            "environment": {
+                "QT_QPA_PLATFORM": "offscreen",
+                "LD_LIBRARY_PATH": "${sourceDir}/.qt/6.10.2/gcc_64/lib:${sourceDir}/build-native/lib/ovito/plugins:${sourceDir}/build-native/lib/ovito:$ENV{LD_LIBRARY_PATH}"
+            }
+        },
+        {
+            "name": "native-gcc",
+            "configurePreset": "native-gcc",
+            "output": {
+                "outputOnFailure": true
+            },
+            "environment": {
+                "QT_QPA_PLATFORM": "offscreen",
+                "LD_LIBRARY_PATH": "${sourceDir}/.qt/6.10.2/gcc_64/lib:${sourceDir}/build-native-gcc/lib/ovito/plugins:${sourceDir}/build-native-gcc/lib/ovito:$ENV{LD_LIBRARY_PATH}"
+            }
+        },
+        {
+            "name": "cpp",
+            "displayName": "Run C++ unit tests",
+            "configurePreset": "default",
+            "filter": {
+                "include": {
+                    "label": "cpp"
+                }
+            },
+            "output": {
+                "outputOnFailure": true
+            }
+        }
+    ]
+}

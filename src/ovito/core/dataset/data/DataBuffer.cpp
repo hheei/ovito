@@ -1,0 +1,1478 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/core/Core.h>
+#include <ovito/core/dataset/DataSet.h>
+#include "DataBuffer.h"
+#include "BufferAccess.h"
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(DataBuffer);
+OVITO_CLASSINFO(DataBuffer, "DisplayName", "Data buffer");
+
+#ifdef OVITO_USE_SYCL
+
+/// Helper function allocating a new SYCL buffer object of the given size.
+static sycl::buffer<DataBuffer::Byte> allocateBufferStorage(size_t nelements, size_t stride)
+{
+    return detail::allocateSyclBuffer<DataBuffer::Byte>(sycl::range<1>{nelements * stride});
+}
+
+/// Helper function that copies a range of bytes from one device buffer to another.
+static void copySyclBufferContents(sycl::buffer<DataBuffer::Byte>& src, sycl::buffer<DataBuffer::Byte>& dst, size_t nbytes, size_t srcOffset = 0, size_t dstOffset = 0, bool no_init = true)
+{
+    OVITO_ASSERT(nbytes != 0);
+    OVITO_ASSERT(&src != &dst);
+
+    this_task::ui()->taskManager().syclQueue().submit([&](sycl::handler& cgh) {
+        if(srcOffset == 0 && dstOffset == 0 && no_init) {
+            cgh.copy(
+                src.get_access(cgh, sycl::range(nbytes), sycl::read_only),
+                dst.get_access(cgh, sycl::write_only, sycl::no_init)
+            );
+        }
+        else {
+            cgh.copy(
+                src.get_access(cgh, sycl::range(nbytes), sycl::id(srcOffset), sycl::read_only),
+                dst.get_access(cgh, sycl::range(nbytes), sycl::id(dstOffset), sycl::write_only, no_init ? sycl::property_list{sycl::no_init} : sycl::property_list{})
+            );
+        }
+    });
+}
+
+/// Helper function that fills a range of bytes in a device buffer with zero.
+static void fillSyclBufferZero(sycl::buffer<DataBuffer::Byte>& dst, size_t nbytes, size_t dstOffset = 0, bool no_init = true)
+{
+    this_task::ui()->taskManager().syclQueue().submit([&](sycl::handler& cgh) {
+        cgh.fill(dst.get_access(cgh,
+            sycl::range(nbytes),
+            sycl::id(dstOffset),
+            sycl::write_only,
+            no_init ? sycl::property_list{sycl::no_init} : sycl::property_list{}), DataBuffer::Byte{0});
+    });
+}
+
+#endif
+
+/******************************************************************************
+* Constructor allocating a buffer array with given size and data layout.
+******************************************************************************/
+void DataBuffer::initializeObject(ObjectInitializationFlags flags, BufferInitialization init, size_t elementCount, int dataType, size_t componentCount, QStringList componentNames)
+{
+    DataObject::initializeObject(flags);
+
+    _dataType = dataType;
+    _dataTypeSize = QMetaType(dataType).sizeOf();
+    _componentCount = componentCount;
+    _componentNames = std::move(componentNames);
+
+    _stride = _dataTypeSize * _componentCount;
+    OVITO_ASSERT(dataType == Int8 || dataType == Int32 || dataType == Int64 || dataType == Float32 || dataType == Float64 || dataType == String);
+    OVITO_ASSERT(_dataTypeSize > 0);
+    OVITO_ASSERT(_componentCount > 0);
+    OVITO_ASSERT(_componentNames.empty() || _componentCount == _componentNames.size());
+    OVITO_ASSERT(_stride >= _dataTypeSize * _componentCount);
+    OVITO_ASSERT((_stride % _dataTypeSize) == 0);
+    if(componentCount > 1) {
+        for(size_t i = _componentNames.size(); i < componentCount; i++)
+            _componentNames << QString::number(i + 1);
+    }
+    resize(elementCount, init == Initialized);
+}
+
+/******************************************************************************
+* Destructor.
+******************************************************************************/
+DataBuffer::~DataBuffer()
+{
+    if(dataType() == DataTypes::String)
+        destroyStrings();
+}
+
+/******************************************************************************
+* Destroys all string elements stored in the buffer if the data type is String.
+******************************************************************************/
+void DataBuffer::destroyStrings()
+{
+    OVITO_ASSERT(dataType() == DataTypes::String);
+    OVITO_ASSERT(_stride == sizeof(QString) * _componentCount);
+    OVITO_ASSERT(_data || _capacity == 0);
+
+    // We need to explicitly call the destructor of each QString object in the buffer to properly release their internal data.
+    QString* iter = reinterpret_cast<QString*>(_data.get());
+    for(QString* end = iter + _capacity * _componentCount; iter != end; ++iter) {
+        iter->~QString();
+    }
+}
+
+/******************************************************************************
+* Creates a copy of a buffer object.
+******************************************************************************/
+OORef<RefTarget> DataBuffer::clone(bool deepCopy, CloneHelper& cloneHelper) const
+{
+    // Let the base class create an instance of this class.
+    OORef<DataBuffer> clone = static_object_cast<DataBuffer>(DataObject::clone(deepCopy, cloneHelper));
+
+    // Copy internal data.
+    ReadAccess readAccess(*this);
+    clone->_dataType = _dataType;
+    clone->_dataTypeSize = _dataTypeSize;
+    clone->_numElements = _numElements;
+    clone->_stride = _stride;
+    clone->_componentCount = _componentCount;
+    clone->_componentNames = _componentNames;
+    if(!isBeingAccessedExternally()) {
+        clone->_nonzeroCount.store(_nonzeroCount.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        for(size_t i = 0; i < _checksum.size(); i++)
+            clone->_checksum[i].store(_checksum[i].load(std::memory_order_relaxed), std::memory_order_relaxed);
+    }
+#ifdef OVITO_DEBUG
+    clone->_isDataInitialized = _isDataInitialized;
+#endif
+#ifdef OVITO_USE_SYCL
+    if(clone->_numElements != 0) {
+        // Allocate new buffer.
+        clone->_data = allocateBufferStorage(_numElements, _stride);
+        // Copy data on the SYCL device.
+        _hasScheduledSyclReadOperations = true;
+        copySyclBufferContents(*_data, *clone->_data, _numElements * _stride);
+    }
+#else
+    clone->_capacity = _numElements;
+#if __cpp_lib_smart_ptr_for_overwrite || _LIBCPP_STD_VER >= 20
+    clone->_data = std::make_unique_for_overwrite<DataBuffer::Byte[]>(_numElements * _stride);
+#else
+    clone->_data = std::unique_ptr<DataBuffer::Byte[]>(new DataBuffer::Byte[_numElements * _stride]); // Note: for backward compatibility with GCC 10
+#endif
+    if(dataType() != DataTypes::String) {
+        std::memcpy(clone->_data.get(), _data.get(), _numElements * _stride);
+    }
+    else {
+        OVITO_ASSERT(_stride == sizeof(QString) * _componentCount);
+        // Construct an array of QString object in the allocated memory and copy the string values from the original buffer.
+        const QString* __restrict src = reinterpret_cast<const QString*>(_data.get());
+        for(QString* __restrict iter = reinterpret_cast<QString*>(clone->_data.get()), *iter_end = iter + _numElements * _componentCount; iter != iter_end; ) {
+            new (iter++) QString(*src++);
+        }
+    }
+#endif
+
+    return clone;
+}
+
+/******************************************************************************
+* Resizes the storage.
+******************************************************************************/
+void DataBuffer::resize(size_t newSize, bool preserveData)
+{
+    OVITO_ASSERT(_isDataInitialized || !preserveData || newSize == 0 || size() == 0);
+#ifdef OVITO_DEBUG
+    WriteAccess writeAccess(*this);
+    _isDataInitialized = preserveData;
+#endif
+
+    // Note: We do not reallocate the storage for performance reasons when the number of elements becomes smaller.
+#ifdef OVITO_USE_SYCL
+    if(newSize != 0 && (!_data || newSize * _stride > _data->get_range()[0])) {
+        sycl::buffer<DataBuffer::Byte> newBuffer = allocateBufferStorage(newSize, _stride);
+        if(preserveData && _numElements != 0) {
+            _hasScheduledSyclReadOperations = true;
+            copySyclBufferContents(*_data, newBuffer, _numElements * _stride);
+        }
+        _data = std::move(newBuffer);
+    }
+    // Initialize newly appended data elements to zero.
+    if(newSize > _numElements && preserveData) {
+        OVITO_ASSERT(_data);
+        fillSyclBufferZero(*this->_data, (newSize - _numElements) * _stride, _numElements * _stride, _numElements == 0);
+    }
+#else
+    if(newSize > _capacity) {
+#if __cpp_lib_smart_ptr_for_overwrite || _LIBCPP_STD_VER >= 20
+        auto newBuffer = std::make_unique_for_overwrite<DataBuffer::Byte[]>(newSize * _stride);
+#else
+        auto newBuffer = std::unique_ptr<DataBuffer::Byte[]>(new DataBuffer::Byte[newSize * _stride]); // Note: for backward compatibility with GCC 10
+#endif
+        if(dataType() != DataTypes::String) {
+            if(preserveData) {
+                std::memcpy(newBuffer.get(), _data.get(), _stride * std::min(_numElements, newSize));
+            }
+        }
+        else {
+            OVITO_ASSERT(_stride == sizeof(QString) * _componentCount);
+            // Construct an array of QString object in the allocated memory and copy the string values from the original buffer if requested.
+            QString* __restrict dst = reinterpret_cast<QString*>(newBuffer.get());
+            if(preserveData) {
+                const QString* __restrict src = reinterpret_cast<const QString*>(_data.get());
+                for(QString* dst_end = dst + std::min(_numElements, newSize) * _componentCount; dst != dst_end; ) {
+                    new (dst++) QString(*src++);
+                }
+            }
+            // Construct default-initialized QString objects for the remaining new elements if the buffer is being enlarged.
+            for(QString* dst_end = reinterpret_cast<QString*>(newBuffer.get()) + newSize * _componentCount; dst != dst_end; ) {
+                new (dst++) QString();
+            }
+            // Destroy old QString objects array in the original buffer if the buffer is being reallocated.
+            destroyStrings();
+        }
+        _data.swap(newBuffer);
+        _capacity = newSize;
+    }
+    // Initialize newly appended data elements to zero.
+    if(newSize > _numElements && preserveData && dataType() != DataTypes::String) {
+        OVITO_ASSERT(_data);
+        std::memset(_data.get() + _numElements * _stride, 0, (newSize - _numElements) * _stride);
+    }
+#endif
+    _numElements = newSize;
+    invalidateCachedInfo();
+}
+
+/******************************************************************************
+* Resizes the buffer and copies the data element from an existing buffer.
+******************************************************************************/
+void DataBuffer::resizeCopyFrom(size_t newSize, const DataBuffer& original)
+{
+    OVITO_ASSERT(original._isDataInitialized || newSize == 0 || original.size() == 0);
+    OVITO_ASSERT(original.dataType() == this->dataType() && original.stride() == this->stride());
+    OVITO_ASSERT(newSize != this->size() || newSize == 0);
+#ifdef OVITO_DEBUG
+    WriteAccess writeAccess(*this);
+    _isDataInitialized = true;
+#endif
+
+#ifdef OVITO_USE_SYCL
+    if(newSize != 0 && (this != &original || !this->_data || newSize * _stride > this->_data->get_range()[0])) {
+        sycl::buffer<DataBuffer::Byte> newBuffer = allocateBufferStorage(newSize, _stride);
+        if(original._numElements != 0) {
+            original._hasScheduledSyclReadOperations = true;
+            size_t nbytes = std::min(newSize, original._numElements) * original._stride;
+            copySyclBufferContents(*original._data, newBuffer, nbytes);
+        }
+        _data = std::move(newBuffer);
+    }
+    _numElements = std::min(newSize, original._numElements);
+    // Initialize newly appended data elements to zero.
+    if(newSize > original._numElements) {
+        OVITO_ASSERT(_data);
+        fillSyclBufferZero(*_data, (newSize - _numElements) * _stride, _numElements * _stride, _numElements == 0);
+    }
+#else
+    if(newSize > _capacity) {
+#if __cpp_lib_smart_ptr_for_overwrite || _LIBCPP_STD_VER >= 20
+        auto newBuffer = std::make_unique_for_overwrite<DataBuffer::Byte[]>(newSize * _stride);
+#else
+        auto newBuffer = std::unique_ptr<DataBuffer::Byte[]>(new DataBuffer::Byte[newSize * _stride]); // Note: for backward compatibility with GCC 10
+#endif
+        if(dataType() != DataTypes::String) {
+            // Copy the data from the original buffer to the new buffer.
+            // Note: We only copy the data of the existing elements if the buffer is being enlarged.
+            // If the buffer is being shrunk, we do not copy the data of the truncated elements.
+            std::memcpy(newBuffer.get(), original._data.get(), _stride * std::min(original._numElements, newSize));
+        }
+        else {
+            // Construct an array of QString object in the allocated memory and copy the string values from the original buffer.
+            QString* __restrict dst = reinterpret_cast<QString*>(newBuffer.get());
+            const QString* __restrict src = reinterpret_cast<const QString*>(original._data.get());
+            for(QString* dst_end = dst + std::min(original._numElements, newSize) * _componentCount; dst != dst_end; ) {
+                new (dst++) QString(*src++);
+            }
+            // Construct default-initialized QString objects for the remaining new elements if the buffer is being enlarged.
+            for(QString* dst_end = reinterpret_cast<QString*>(newBuffer.get()) + newSize * _componentCount; dst != dst_end; ) {
+                new (dst++) QString();
+            }
+            // Destroy old QString objects array in the original buffer if the buffer is being reallocated.
+            destroyStrings();
+        }
+        _data.swap(newBuffer);
+        _capacity = newSize;
+    }
+    // Initialize newly appended data elements to zero.
+    if(newSize > original._numElements && dataType() != DataTypes::String) {
+        OVITO_ASSERT(_data);
+        std::memset(_data.get() + original._numElements * _stride, 0, (newSize - original._numElements) * _stride);
+    }
+#endif
+    _numElements = newSize;
+    invalidateCachedInfo();
+}
+
+/******************************************************************************
+* Grows the number of data elements while preserving the exiting data.
+* True if the memory buffer was reallocated, because the current capacity was insufficient
+* to accommodate the new elements.
+******************************************************************************/
+bool DataBuffer::grow(size_t numAdditionalElements, bool callerAlreadyHasWriteAccess)
+{
+    OVITO_ASSERT(size() == 0 || _isDataInitialized);
+    if(numAdditionalElements == 0)
+        return false;
+#ifdef OVITO_DEBUG
+    std::optional<WriteAccess> writeAccess;
+    if(!callerAlreadyHasWriteAccess)
+        writeAccess.emplace(*this);
+#endif
+
+    size_t newSize = _numElements + numAdditionalElements;
+    OVITO_ASSERT(newSize >= _numElements);
+#ifdef OVITO_USE_SYCL
+    bool needToGrow = (!_data || newSize * _stride > _data->get_range()[0]);
+#else
+    bool needToGrow = (newSize > _capacity);
+#endif
+    if(needToGrow) {
+        // Grow the storage capacity of the data buffer.
+        size_t newCapacity = (newSize < 1024)
+            ? std::max(newSize * 2, (size_t)256)
+            : (newSize * 3 / 2);
+#ifdef OVITO_USE_SYCL
+        if(newCapacity != 0) {
+            sycl::buffer<DataBuffer::Byte> newBuffer = allocateBufferStorage(newCapacity, _stride);
+            if(_numElements != 0) {
+                sycl::host_accessor writeAccessor(newBuffer, sycl::write_only, sycl::no_init);
+                sycl::host_accessor readAccessor(*_data, sycl::read_only);
+                std::memcpy(writeAccessor.get_pointer(), readAccessor.get_pointer(), _stride * _numElements);
+            }
+            _data = std::move(newBuffer);
+        }
+        else _data = {};
+#else
+#if __cpp_lib_smart_ptr_for_overwrite || _LIBCPP_STD_VER >= 20
+        auto newBuffer = std::make_unique_for_overwrite<DataBuffer::Byte[]>(newCapacity * _stride);
+#else
+        auto newBuffer = std::unique_ptr<DataBuffer::Byte[]>(new DataBuffer::Byte[newCapacity * _stride]); // Note: for backward compatibility with GCC 10
+#endif
+        if(dataType() != DataTypes::String) {
+            std::memcpy(newBuffer.get(), _data.get(), _stride * _numElements);
+        }
+        else {
+            // Construct an array of QString object in the allocated memory and copy the string values from the original buffer.
+            QString* __restrict dst = reinterpret_cast<QString*>(newBuffer.get());
+            const QString* __restrict src = reinterpret_cast<const QString*>(_data.get());
+            for(QString* dst_end = dst + _numElements * _componentCount; dst != dst_end; ) {
+                new (dst++) QString(*src++);
+            }
+            // Construct default-initialized QString objects for the remaining new elements.
+            for(QString* dst_end = reinterpret_cast<QString*>(newBuffer.get()) + newCapacity * _componentCount; dst != dst_end; ) {
+                new (dst++) QString();
+            }
+            // Destroy old QString objects array in the original buffer if the buffer is being reallocated.
+            destroyStrings();
+        }
+        _data.swap(newBuffer);
+        _capacity = newCapacity;
+#endif
+    }
+    _numElements = newSize;
+    invalidateCachedInfo();
+    return needToGrow;
+}
+
+/******************************************************************************
+* Reduces the number of data elements while preserving the exiting data.
+* Note: This method never reallocates the memory buffer. Thus, the capacity of the array remains unchanged and the
+* memory of the truncated elements is not released by the method.
+******************************************************************************/
+void DataBuffer::truncate(size_t numElementsToRemove, bool callerAlreadyHasWriteAccess)
+{
+    OVITO_ASSERT(numElementsToRemove <= _numElements);
+
+#ifdef OVITO_DEBUG
+    std::optional<WriteAccess> writeAccess;
+    if(!callerAlreadyHasWriteAccess)
+        writeAccess.emplace(*this);
+#endif
+    _numElements -= numElementsToRemove;
+    invalidateCachedInfo();
+}
+
+/******************************************************************************
+* Saves the class' contents to the given stream.
+******************************************************************************/
+void DataBuffer::saveToStream(ObjectSaveStream& stream, bool excludeRecomputableData) const
+{
+    DataObject::saveToStream(stream, excludeRecomputableData);
+
+    ReadAccess readAccess(*this);
+    stream.beginChunk(0x04);
+    stream << QByteArray(QMetaType(_dataType).name());
+    stream.writeSizeT(_dataTypeSize);
+    stream.writeSizeT(_stride);
+    stream.writeSizeT(_componentCount);
+    stream << _componentNames;
+    if(excludeRecomputableData) {
+        stream.writeSizeT(0);
+    }
+    else {
+        stream.writeSizeT(_numElements);
+        if(_numElements != 0) {
+            OVITO_ASSERT(_isDataInitialized);
+            if(dataType() != DataTypes::String) {
+#ifdef OVITO_USE_SYCL
+                sycl::host_accessor readAccessor(*_data, sycl::read_only);
+                stream.write(readAccessor.get_pointer(), _stride * _numElements);
+#else
+                stream.write(_data.get(), _stride * _numElements);
+#endif
+            }
+            else {
+                // Write the string values of the buffer to the stream.
+                for(const QString* src = reinterpret_cast<const QString*>(_data.get()), *end = src + _numElements * _componentCount; src != end; ) {
+                    stream << (*src++);
+                }
+            }
+        }
+    }
+    stream.endChunk();
+}
+
+/******************************************************************************
+* Loads the class' contents from the given stream.
+******************************************************************************/
+void DataBuffer::loadFromStream(ObjectLoadStream& stream)
+{
+    // Current file format:
+    if(stream.formatVersion() >= 30007) {
+        DataObject::loadFromStream(stream);
+        stream.expectChunkRange(0x03, 1); // 0x04 was introduced in OVITO 3.16.0 to support String data type.
+    }
+
+    QByteArray dataTypeName;
+    stream >> dataTypeName;
+    _dataType = QMetaType::fromName(dataTypeName).id();
+    OVITO_ASSERT_MSG(_dataType != 0, "DataBuffer::loadFromStream()", qPrintable(QString("The metadata type '%1' seems to be no longer defined.").arg(QString::fromLatin1(dataTypeName))));
+    OVITO_ASSERT(dataTypeName == this->dataTypeName());
+    stream.readSizeT(_dataTypeSize);
+    stream.readSizeT(_stride);
+    stream.readSizeT(_componentCount);
+    stream >> _componentNames;
+    stream.readSizeT(_numElements);
+#ifdef OVITO_DEBUG
+    if(_numElements != 0)
+        _isDataInitialized = true;
+#endif
+#ifdef OVITO_USE_SYCL
+    if(_numElements != 0) {
+        _data = allocateBufferStorage(_numElements, _stride);
+        sycl::host_accessor writeAccessor(*_data, sycl::write_only, sycl::no_init);
+        stream.read(writeAccessor.get_pointer(), _stride * _numElements);
+    }
+#else
+    _capacity = _numElements;
+    if(_numElements != 0) {
+#if __cpp_lib_smart_ptr_for_overwrite || _LIBCPP_STD_VER >= 20
+        _data = std::make_unique_for_overwrite<DataBuffer::Byte[]>(_numElements * _stride);
+#else
+        _data = std::unique_ptr<DataBuffer::Byte[]>(new DataBuffer::Byte[_numElements * _stride]); // Note: for backward compatibility with GCC 10
+#endif
+        if(dataType() != DataTypes::String) {
+            stream.read(_data.get(), _stride * _numElements);
+        }
+        else {
+            QString* dst = reinterpret_cast<QString*>(_data.get());
+            // Construct an array of QString objects in the allocated memory.
+            for(QString* iter = dst, *dst_end = dst + _numElements * _componentCount; iter != dst_end; ) {
+                new (iter++) QString();
+            }
+            // Read the string values of the buffer from the stream and construct an array of QString objects in the allocated memory.
+            for(QString* iter = dst, *dst_end = dst + _numElements * _componentCount; iter != dst_end; ) {
+                stream >> (*iter++);
+            }
+        }
+    }
+#endif
+    stream.closeChunk();
+}
+
+/******************************************************************************
+* Replicates existing data N times.
+******************************************************************************/
+void DataBuffer::replicateFrom(size_t n, const DataBuffer& original)
+{
+    OVITO_ASSERT(original._isDataInitialized || original.size() == 0);
+    OVITO_ASSERT(n >= 1);
+    OVITO_ASSERT(_numElements == n * original._numElements);
+    OVITO_ASSERT(this != &original);
+    OVITO_ASSERT(this->stride() == original.stride() && this->dataType() == original.dataType());
+    if(size() == 0)
+        return;
+#ifdef OVITO_DEBUG
+    _isDataInitialized = true;
+#endif
+
+    WriteAccess writeAccess(*this);
+    ReadAccess readAccess(original);
+
+#ifdef OVITO_USE_SYCL
+    const size_t nbytes = original.size() * original.stride();
+    // Replicate data values N times.
+    original._hasScheduledSyclReadOperations = true;
+    if(this_task::ui()->taskManager().syclQueue().get_device().is_cpu()) {
+        // When using a CPU device, perform the data copying on the host.
+        auto readAccessor = original._data->get_host_access(sycl::read_only);
+        auto writeAccessor = _data->get_host_access(sycl::write_only, sycl::no_init);
+        const Byte* src = readAccessor.get_pointer();
+        Byte* dst = writeAccessor.get_pointer();
+        // Replicate data values N times.
+        size_t nbytes = original.size() * stride();
+        for(size_t i = 0; i < n; i++, dst += nbytes) {
+            std::memcpy(dst, src, nbytes);
+        }
+    }
+    else {
+        // When using a GPU device, perform the data copying on the device.
+        for(size_t i = 0; i < n; i++) {
+            copySyclBufferContents(*original._data, *_data, nbytes, 0, nbytes * i, i == 0);
+        }
+    }
+#else
+    // Replicate data values N times.
+    if(dataType() != DataTypes::String) {
+        DataBuffer::Byte* __restrict dest = _data.get();
+        const DataBuffer::Byte* __restrict src = original._data.get();
+        for(size_t i = 0; i < n; i++, dest += original.size() * stride()) {
+            std::memcpy(dest, src, original.size() * stride());
+        }
+    }
+    else {
+        QString* __restrict dest = reinterpret_cast<QString*>(_data.get());
+        const QString* __restrict src = reinterpret_cast<const QString*>(original._data.get());
+        const size_t c = original.size() * _componentCount;
+        for(size_t i = 0; i < n; i++, dest += c) {
+            for(size_t j = 0; j < c; j++)
+                dest[j] = src[j];
+        }
+    }
+#endif
+}
+
+/******************************************************************************
+* Reduces the size of the storage array, deleting elements for are marked in the boolean selection array.
+******************************************************************************/
+void DataBuffer::filterResizeCopyFrom(size_t newSize, const DataBuffer& selection, const DataBuffer& original)
+{
+    OVITO_ASSERT(original._isDataInitialized || original.size() == 0);
+    OVITO_ASSERT(original.size() == selection.size());
+    OVITO_ASSERT(selection.dataType() == DataBuffer::IntSelection);
+    OVITO_ASSERT(selection.componentCount() == 1);
+    OVITO_ASSERT(this != &selection);
+    OVITO_ASSERT(original.dataType() == this->dataType() && original.stride() == this->stride());
+
+    if(newSize == 0) {
+#ifdef OVITO_DEBUG
+        WriteAccess writeAccess(*this);
+        _isDataInitialized = false;
+#endif
+        if(dataType() == DataTypes::String)
+            destroyStrings();
+#ifdef OVITO_USE_SYCL
+        _data.reset();
+#else
+        _capacity = 0;
+        _data.reset();
+#endif
+        _numElements = 0;
+        invalidateCachedInfo();
+        return;
+    }
+    OVITO_ASSERT(original.size() != 0);
+#ifdef OVITO_DEBUG
+    _isDataInitialized = true;
+#endif
+
+    // Allocate new storage.
+#ifdef OVITO_USE_SYCL
+    auto newBuffer = allocateBufferStorage(newSize, _stride);
+#else
+#if __cpp_lib_smart_ptr_for_overwrite || _LIBCPP_STD_VER >= 20
+    auto newBuffer = std::make_unique_for_overwrite<DataBuffer::Byte[]>(newSize * _stride);
+#else
+    auto newBuffer = std::unique_ptr<DataBuffer::Byte[]>(new DataBuffer::Byte[newSize * _stride]); // Note: for backward compatibility with GCC 10
+#endif
+#endif
+
+    const size_t s = selection.size();
+    BufferReadAccess<SelectionIntType> selectionAccess(&selection);
+
+    auto specializedFilter = [&](auto _) {
+        using T = decltype(_);
+        OVITO_ASSERT(this->stride() == sizeof(T));
+        WriteAccess writeAccess(*this);
+#ifdef OVITO_USE_SYCL
+        auto oldBufferTyped = original._data->reinterpret<T, 1>();
+        sycl::host_accessor readAccessor(oldBufferTyped, sycl::range(original.size()), sycl::read_only);
+        auto newBufferTyped = newBuffer.reinterpret<T, 1>();
+        sycl::host_accessor writeAccessor(newBufferTyped, sycl::write_only, sycl::no_init);
+        const T* __restrict src = readAccessor.get_pointer();
+        T* __restrict dst = writeAccessor.get_pointer();
+        for(size_t i = 0; i < s; ++i, ++src) {
+            if(!selectionAccess[i])
+                *dst++ = *src;
+        }
+        OVITO_ASSERT(dst == writeAccessor.get_pointer() + newSize);
+        _data = std::move(newBuffer);
+#else
+        const T* __restrict src = reinterpret_cast<const T*>(original.cdata());
+        T* __restrict dst = reinterpret_cast<T*>(newBuffer.get());
+        for(size_t i = 0; i < s; ++i, ++src) {
+            if(!selectionAccess[i])
+                *dst++ = *src;
+        }
+        OVITO_ASSERT(dst == reinterpret_cast<T*>(newBuffer.get()) + newSize);
+        _data.swap(newBuffer);
+        _capacity = newSize;
+#endif
+        _numElements = newSize;
+        invalidateCachedInfo();
+    };
+
+    // Optimize filter operation for the most common data types.
+    if(dataType() == DataBuffer::Float32) {
+        if(componentCount() == 1 && stride() == sizeof(float)) {
+            specializedFilter(float{});
+            return;
+        }
+        else if(componentCount() == 3 && stride() == sizeof(Point3F)) {
+            specializedFilter(Point3F{});
+            return;
+        }
+    }
+    else if(dataType() == DataBuffer::Float64) {
+        if(componentCount() == 1 && stride() == sizeof(double)) {
+            specializedFilter(double{});
+            return;
+        }
+        else if(componentCount() == 3 && stride() == sizeof(Point3D)) {
+            specializedFilter(Point3D{});
+            return;
+        }
+    }
+    else if(dataType() == DataBuffer::Int32) {
+        if(componentCount() == 1 && stride() == sizeof(int32_t)) {
+            specializedFilter(int32_t{});
+            return;
+        }
+        else if(componentCount() == 3 && stride() == sizeof(Vector_3<int32_t>)) {
+            specializedFilter(Vector_3<int32_t>{});
+            return;
+        }
+    }
+    else if(dataType() == DataBuffer::Int64 && stride() == sizeof(int64_t)) {
+        specializedFilter(int64_t{});
+        return;
+    }
+    else if(dataType() == DataBuffer::Int8 && stride() == sizeof(int8_t)) {
+        specializedFilter(int8_t{});
+        return;
+    }
+
+    // Generic case:
+    WriteAccess writeAccess(*this);
+#ifdef OVITO_USE_SYCL
+    sycl::host_accessor readAccessor(*original._data, sycl::range(original.size() * original.stride()), sycl::read_only);
+    sycl::host_accessor writeAccessor(newBuffer, sycl::write_only, sycl::no_init);
+    const DataBuffer::Byte* __restrict src = readAccessor.get_pointer();
+    DataBuffer::Byte* __restrict dst = writeAccessor.get_pointer();
+    const auto stride = this->stride();
+    for(size_t i = 0; i < s; i++, src += stride) {
+        if(!selectionAccess[i]) {
+            std::memcpy(dst, src, stride);
+            dst += stride;
+        }
+    }
+    OVITO_ASSERT(dst == writeAccessor.get_pointer() + newSize * stride);
+    _data = std::move(newBuffer);
+#else
+    if(dataType() != DataTypes::String) {
+        const DataBuffer::Byte* __restrict src = original.cdata();
+        DataBuffer::Byte* __restrict dst = newBuffer.get();
+        const auto stride = this->stride();
+        for(size_t i = 0; i < s; i++, src += stride) {
+            if(!selectionAccess[i]) {
+                std::memcpy(dst, src, stride);
+                dst += stride;
+            }
+        }
+        OVITO_ASSERT(dst == newBuffer.get() + newSize * _stride);
+    }
+    else {
+        const QString* __restrict src = reinterpret_cast<const QString*>(original.cdata());
+        QString* __restrict dst = reinterpret_cast<QString*>(newBuffer.get());
+        const auto c = this->componentCount();
+        for(size_t i = 0; i < s; i++, src += c) {
+            if(!selectionAccess[i]) {
+                for(size_t j = 0; j < c; j++)
+                    new (dst++) QString(src[j]);
+            }
+        }
+        OVITO_ASSERT(dst == reinterpret_cast<QString*>(newBuffer.get()) + newSize * c);
+        // Destroy old QString objects array in the original buffer if the buffer is being reallocated.
+        destroyStrings();
+    }
+    _data.swap(newBuffer);
+    _capacity = newSize;
+#endif
+    _numElements = newSize;
+    invalidateCachedInfo();
+}
+
+/******************************************************************************
+* Copies the contents from the given source buffer into this buffer using an index mapping.
+******************************************************************************/
+template<std::integral MappingT>
+void DataBuffer::mappedCopyFrom(const DataBuffer& source, std::span<const MappingT> mapping, bool discardOldContents)
+{
+    OVITO_ASSERT(source.size() == mapping.size());
+    OVITO_ASSERT(this->dataType() == source.dataType());
+    OVITO_ASSERT(this->stride() == source.stride());
+    OVITO_ASSERT(&source != this); // Do not allow aliasing.
+
+    if(this->size() == 0 || source.size() == 0)
+        return;
+
+#ifdef OVITO_DEBUG
+    OVITO_ASSERT(source._isDataInitialized);
+    OVITO_ASSERT(_isDataInitialized || discardOldContents);
+    _isDataInitialized = true;
+#endif
+
+    WriteAccess writeAccess(*this);
+    ReadAccess readAccess(source);
+
+    auto specializedCopy = [&](auto _) {
+        using T = decltype(_);
+#ifdef OVITO_USE_SYCL
+        auto typedSource = source._data->reinterpret<T, 1>();
+        auto typedDest = _data->reinterpret<T, 1>();
+        sycl::host_accessor readAccessor(typedSource, sycl::read_only);
+        sycl::host_accessor writeAccessor(typedDest, sycl::write_only, discardOldContents ? sycl::property_list{sycl::no_init} : sycl::property_list{});
+        const T* __restrict src = readAccessor.get_pointer();
+        T* __restrict dst = writeAccessor.get_pointer();
+#else
+        const T* __restrict src = reinterpret_cast<const T*>(source.cdata());
+        T* __restrict dst = reinterpret_cast<T*>(data());
+#endif
+        for(auto idx : mapping) {
+            OVITO_ASSERT(idx >= 0 && idx < this->size());
+            dst[idx] = *src++;
+        }
+    };
+
+    // Optimize operation for the most common data types.
+    if(dataType() == DataBuffer::Float32) {
+        if(componentCount() == 1 && stride() == sizeof(float)) {
+            specializedCopy(float{});
+            return;
+        }
+        else if(componentCount() == 3 && stride() == sizeof(Vector3F)) {
+            specializedCopy(Vector3F{});
+            return;
+        }
+    }
+    else if(dataType() == DataBuffer::Float64) {
+        if(componentCount() == 1 && stride() == sizeof(double)) {
+            specializedCopy(double{});
+            return;
+        }
+        else if(componentCount() == 3 && stride() == sizeof(Vector3D)) {
+            specializedCopy(Vector3D{});
+            return;
+        }
+    }
+    else if(dataType() == DataBuffer::Int32 && componentCount() == 1 && stride() == sizeof(int32_t)) {
+        specializedCopy(int32_t{});
+        return;
+    }
+    else if(dataType() == DataBuffer::Int64 && componentCount() == 1 && stride() == sizeof(int64_t)) {
+        specializedCopy(int64_t{});
+        return;
+    }
+    else if(dataType() == DataBuffer::Int8 && componentCount() == 1 && stride() == sizeof(int8_t)) {
+        specializedCopy(int8_t{});
+        return;
+    }
+
+    // General case:
+    if(dataType() != DataTypes::String) {
+#ifdef OVITO_USE_SYCL
+        sycl::host_accessor readAccessor(*source._data, sycl::read_only);
+        sycl::host_accessor writeAccessor(*_data, sycl::write_only, discardOldContents ? sycl::property_list{sycl::no_init} : sycl::property_list{});
+        const DataBuffer::Byte* __restrict src = readAccessor.get_pointer();
+        DataBuffer::Byte* __restrict dst = writeAccessor.get_pointer();
+#else
+        const DataBuffer::Byte* __restrict src = source.cdata();
+        DataBuffer::Byte* __restrict dst = data();
+#endif
+        const auto stride = this->stride();
+        for(size_t i = 0; i < source.size(); i++, src += stride) {
+            OVITO_ASSERT(mapping[i] >= 0 && mapping[i] < this->size());
+            std::memcpy(dst + stride * mapping[i], src, stride);
+        }
+    }
+    else {
+        const QString* __restrict src = reinterpret_cast<const QString*>(source.cdata());
+        QString* __restrict dst = reinterpret_cast<QString*>(data());
+        const auto c = this->componentCount();
+        for(size_t i = 0; i < source.size(); i++, src += c) {
+            OVITO_ASSERT(mapping[i] >= 0 && mapping[i] < this->size());
+            for(size_t j = 0; j < c; j++)
+                dst[c * mapping[i] + j] = src[j];
+        }
+    }
+}
+
+// Instantiate function template for different integral types.
+template OVITO_CORE_EXPORT void DataBuffer::mappedCopyFrom(const DataBuffer& source, std::span<const size_t> mapping, bool discardOldContents);
+template OVITO_CORE_EXPORT void DataBuffer::mappedCopyFrom(const DataBuffer& source, std::span<const int> mapping, bool discardOldContents);
+
+/******************************************************************************
+* Copies the elements from this buffer into the given destination buffer using an index mapping.
+******************************************************************************/
+template<std::integral MappingT>
+void DataBuffer::mappedCopyTo(DataBuffer& destination, std::span<const MappingT> mapping, bool allowOutOfBoundsIndices) const
+{
+    OVITO_ASSERT(destination.size() == mapping.size());
+    OVITO_ASSERT(this->stride() == destination.stride());
+    OVITO_ASSERT(&destination != this); // Do not allow aliasing.
+
+    if(this->size() == 0 || destination.size() == 0)
+        return;
+
+#ifdef OVITO_DEBUG
+    OVITO_ASSERT(_isDataInitialized);
+    OVITO_ASSERT(!allowOutOfBoundsIndices || destination._isDataInitialized);
+    destination._isDataInitialized = true;
+#endif
+
+    ReadAccess readAccess(*this);
+    WriteAccess writeAccess(destination);
+
+    auto specializedCopy = [&](auto _) {
+        using T = decltype(_);
+#ifdef OVITO_USE_SYCL
+        auto typedSource = _data->reinterpret<T, 1>();
+        auto typedDest = destination._data->reinterpret<T, 1>();
+        sycl::host_accessor readAccessor(typedSource, sycl::read_only);
+        sycl::host_accessor writeAccessor(typedDest, sycl::write_only, !allowOutOfBoundsIndices ? sycl::property_list{sycl::no_init} : sycl::property_list{});
+        const T* __restrict src = readAccessor.get_pointer();
+        T* __restrict dst = writeAccessor.get_pointer();
+#else
+        const T* __restrict src = reinterpret_cast<const T*>(cdata());
+        T* __restrict dst = reinterpret_cast<T*>(destination.data());
+#endif
+        if(!allowOutOfBoundsIndices) {
+            for(auto idx : mapping) {
+                OVITO_ASSERT(idx >= 0 && idx < size());
+                *dst++ = src[idx];
+            }
+        }
+        else {
+            for(auto idx : mapping) {
+                if(idx >= 0 && idx < size())
+                    *dst = src[idx];
+                ++dst;
+            }
+        }
+    };
+
+    // Optimize copying operation for the most common property types.
+    if(dataType() == DataBuffer::Float32) {
+        if(componentCount() == 1 && stride() == sizeof(float)) {
+            specializedCopy(float{});
+            return;
+        }
+        else if(componentCount() == 3 && stride() == sizeof(Vector3F)) {
+            specializedCopy(Vector3F{});
+            return;
+        }
+    }
+    else if(dataType() == DataBuffer::Float64) {
+        if(componentCount() == 1 && stride() == sizeof(double)) {
+            specializedCopy(double{});
+            return;
+        }
+        else if(componentCount() == 3 && stride() == sizeof(Vector3D)) {
+            specializedCopy(Vector3D{});
+            return;
+        }
+    }
+    else if(dataType() == DataBuffer::Int32 && componentCount() == 1 && stride() == sizeof(int32_t)) {
+        specializedCopy(int32_t{});
+        return;
+    }
+    else if(dataType() == DataBuffer::Int64 && componentCount() == 1 && stride() == sizeof(int64_t)) {
+        specializedCopy(int64_t{});
+        return;
+    }
+    else if(dataType() == DataBuffer::Int8 && componentCount() == 1 && stride() == sizeof(int8_t)) {
+        specializedCopy(int8_t{});
+        return;
+    }
+
+    // General case:
+    if(dataType() != DataTypes::String) {
+#ifndef OVITO_USE_SYCL
+        const DataBuffer::Byte* __restrict src = cdata();
+        DataBuffer::Byte* __restrict dst = destination.data();
+#else
+        sycl::host_accessor readAccessor(*_data, sycl::read_only);
+        sycl::host_accessor writeAccessor(*destination._data, sycl::write_only, !allowOutOfBoundsIndices ? sycl::property_list{sycl::no_init} : sycl::property_list{});
+        const DataBuffer::Byte* __restrict src = readAccessor.get_pointer();
+        DataBuffer::Byte* __restrict dst = writeAccessor.get_pointer();
+#endif
+        size_t stride = this->stride();
+        if(!allowOutOfBoundsIndices) {
+            for(auto idx : mapping) {
+                OVITO_ASSERT(idx >= 0 && idx < size());
+                std::memcpy(dst, src + stride * idx, stride);
+                dst += stride;
+            }
+        }
+        else {
+            for(auto idx : mapping) {
+                if(idx >= 0 && idx < size())
+                    std::memcpy(dst, src + stride * idx, stride);
+                dst += stride;
+            }
+        }
+    }
+    else {
+        const QString* __restrict src = reinterpret_cast<const QString*>(cdata());
+        QString* __restrict dst = reinterpret_cast<QString*>(destination.data());
+        const auto c = this->componentCount();
+        if(!allowOutOfBoundsIndices) {
+            for(auto idx : mapping) {
+                OVITO_ASSERT(idx >= 0 && idx < size());
+                for(size_t j = 0; j < c; j++)
+                    *dst++ = src[c * idx + j];
+            }
+        }
+        else {
+            for(auto idx : mapping) {
+                if(idx >= 0 && idx < size()) {
+                    for(size_t j = 0; j < c; j++)
+                        *dst++ = src[c * idx + j];
+                }
+                else {
+                    dst += c;
+                }
+            }
+        }
+    }
+}
+
+// Instantiate function template for different integral types.
+template OVITO_CORE_EXPORT void DataBuffer::mappedCopyTo(DataBuffer& destination, std::span<const size_t> mapping, bool allowOutOfBoundsIndices) const;
+template OVITO_CORE_EXPORT void DataBuffer::mappedCopyTo(DataBuffer& destination, std::span<const int> mapping, bool allowOutOfBoundsIndices) const;
+
+/******************************************************************************
+* Reorders the existing elements in this storage array according to an index map.
+******************************************************************************/
+void DataBuffer::reorderElements(const std::vector<size_t>& mapping)
+{
+    OVITO_ASSERT(this->size() == mapping.size());
+
+    if(this->size() == 0)
+        return;
+
+#ifdef OVITO_DEBUG
+    OVITO_ASSERT(_isDataInitialized);
+#endif
+
+    WriteAccess writeAccess(*this);
+    invalidateCachedInfo();
+
+    // Allocate new storage.
+#ifdef OVITO_USE_SYCL
+    auto newBuffer = allocateBufferStorage(size(), stride());
+#else
+#if __cpp_lib_smart_ptr_for_overwrite || _LIBCPP_STD_VER >= 20
+    auto newBuffer = std::make_unique_for_overwrite<DataBuffer::Byte[]>(size() * stride());
+#else
+    auto newBuffer = std::unique_ptr<DataBuffer::Byte[]>(new DataBuffer::Byte[size() * stride()]); // Note: for backward compatibility with GCC 10
+#endif
+#endif
+
+    if(dataType() != DataTypes::String) {
+#ifndef OVITO_USE_SYCL
+        const DataBuffer::Byte* __restrict src = cdata();
+        DataBuffer::Byte* __restrict dst = newBuffer.get();
+#else
+        sycl::host_accessor readAccessor(*_data, sycl::read_only);
+        sycl::host_accessor writeAccessor(newBuffer, sycl::write_only, sycl::no_init);
+        const DataBuffer::Byte* __restrict src = readAccessor.get_pointer();
+        DataBuffer::Byte* __restrict dst = writeAccessor.get_pointer();
+#endif
+        size_t stride = this->stride();
+        for(size_t idx : mapping) {
+            OVITO_ASSERT(idx < size());
+            std::memcpy(dst, src + stride * idx, stride);
+            dst += stride;
+        }
+    }
+    else {
+        const QString* __restrict src = reinterpret_cast<const QString*>(cdata());
+        QString* __restrict dst = reinterpret_cast<QString*>(newBuffer.get());
+        const auto c = this->componentCount();
+        for(size_t idx : mapping) {
+            OVITO_ASSERT(idx < size());
+            for(size_t j = 0; j < c; j++)
+                new (dst++) QString(src[c * idx + j]);
+        }
+        // Destroy old QString objects array in the original buffer if the buffer is being reallocated.
+        destroyStrings();
+    }
+
+    _data = std::move(newBuffer);
+}
+
+/******************************************************************************
+* Copies the data elements from the given source buffer into this buffer.
+* Size, component count, and data type of source and destination buffers must match exactly.
+******************************************************************************/
+void DataBuffer::copyFrom(const DataBuffer& source)
+{
+    OVITO_ASSERT(&source != this); // Do not allow aliasing.
+    OVITO_ASSERT(this->dataType() == source.dataType());
+    OVITO_ASSERT(this->stride() == source.stride());
+    OVITO_ASSERT(this->size() == source.size());
+    if(&source != this && this->size() != 0) {
+        OVITO_ASSERT(source._isDataInitialized);
+#ifdef OVITO_DEBUG
+        _isDataInitialized = true;
+#endif
+        WriteAccess writeAccess(*this);
+        ReadAccess readAccess(source);
+        if(dataType() != DataTypes::String) {
+#ifdef OVITO_USE_SYCL
+            source._hasScheduledSyclReadOperations = true;
+            copySyclBufferContents(*source._data, *_data, source.size() * source.stride());
+#else
+            std::memcpy(data(), source.cdata(), this->stride() * this->size());
+#endif
+        }
+        else {
+            // Copy the string values of the buffer.
+            const QString* __restrict src = reinterpret_cast<const QString*>(source.cdata());
+            QString* __restrict dst = reinterpret_cast<QString*>(data());
+            for(QString* dst_end = dst + _numElements * _componentCount; dst != dst_end; )
+                *dst++ = *src++;
+        }
+    }
+}
+
+/******************************************************************************
+* Copies a range of data elements from the given source array into this array.
+* Component count and data type of source and destination must be compatible.
+******************************************************************************/
+void DataBuffer::copyRangeFrom(const DataBuffer& source, size_t sourceIndex, size_t destIndex, size_t count)
+{
+    OVITO_ASSERT(&source != this); // Do not allow aliasing.
+    OVITO_ASSERT(this->dataType() == source.dataType());
+    OVITO_ASSERT(this->stride() == source.stride());
+    OVITO_ASSERT(sourceIndex + count <= source.size());
+    OVITO_ASSERT(destIndex + count <= this->size());
+    if(this->size() == 0 || source.size() == 0 || count == 0)
+        return;
+#ifdef OVITO_DEBUG
+    OVITO_ASSERT(source._isDataInitialized);
+    _isDataInitialized = true;
+#endif
+    WriteAccess writeAccess(*this);
+    ReadAccess readAccess(source);
+    if(dataType() != DataTypes::String) {
+#ifdef OVITO_USE_SYCL
+        source._hasScheduledSyclReadOperations = true;
+        copySyclBufferContents(*source._data, *_data, count * source.stride(), sourceIndex * source.stride(), destIndex * this->stride(), (destIndex == 0 && count == this->size()));
+#else
+        std::memcpy(
+            data() + destIndex * this->stride(),
+            source.cdata() + sourceIndex * source.stride(),
+            this->stride() * count);
+#endif
+    }
+    else {
+        // Copy the string values of the buffer.
+        const QString* __restrict src = reinterpret_cast<const QString*>(source.cdata()) + sourceIndex * _componentCount;
+        QString* __restrict dst = reinterpret_cast<QString*>(data()) + destIndex * _componentCount;
+        for(QString* dst_end = dst + count * _componentCount; dst != dst_end; )
+            *dst++ = *src++;
+    }
+}
+
+/******************************************************************************
+* Checks if this buffer storage and its contents exactly match those of
+* another buffer.
+******************************************************************************/
+bool DataBuffer::equals(const DataBuffer& other) const
+{
+    OVITO_ASSERT(_isDataInitialized);
+    OVITO_ASSERT(other._isDataInitialized);
+
+    if(&other == this)
+        return true;
+
+    ReadAccess readAccess1(*this);
+    ReadAccess readAccess2(other);
+
+    if(this->dataType() != other.dataType()) return false;
+    if(this->size() != other.size()) return false;
+    if(this->componentCount() != other.componentCount()) return false;
+    OVITO_ASSERT(this->stride() == other.stride());
+    if(this->size() == 0) return true;
+    if(dataType() != DataTypes::String) {
+#ifdef OVITO_USE_SYCL
+        sycl::host_accessor readAccessor1(*other._data, sycl::read_only);
+        sycl::host_accessor readAccessor2(*this->_data, sycl::read_only);
+        return std::equal(readAccessor1.get_pointer(), readAccessor1.get_pointer() + this->size() * this->stride(), readAccessor2.get_pointer());
+#else
+        return std::equal(this->cdata(), this->cdata() + this->size() * this->stride(), other.cdata());
+#endif
+    }
+    else {
+        // Compare the string values of the buffer.
+        return std::equal(
+            reinterpret_cast<const QString*>(this->cdata()),
+            reinterpret_cast<const QString*>(this->cdata()) + this->size() * this->componentCount(),
+            reinterpret_cast<const QString*>(other.cdata()));
+
+    }
+}
+
+/******************************************************************************
+* Copies the data elements from the given source buffer into this buffer while performing a numeric data type conversion.
+* Array size and component count of source and destination must match but data type can be different.
+******************************************************************************/
+void DataBuffer::copyFromAndConvert(const DataBuffer& source)
+{
+    // Is an actual data type conversion required?
+    if(dataType() == source.dataType()) {
+        copyFrom(source);
+        return;
+    }
+
+    OVITO_ASSERT(&source != this); // Do not allow aliasing.
+    OVITO_ASSERT(this->size() == source.size());
+    OVITO_ASSERT(this->componentCount() == source.componentCount());
+    OVITO_ASSERT(this->stride() == this->componentCount() * this->dataTypeSize());
+#ifdef OVITO_DEBUG
+    _isDataInitialized = true;
+#endif
+
+    // Copy values and perform data type conversion.
+    if(size() != 0) {
+        WriteAccess writeAccess(*this);
+        forAnyType([&](auto _) {
+            using T = decltype(_);
+            OVITO_ASSERT(sizeof(T) == dataTypeSize());
+#ifdef OVITO_USE_SYCL
+            auto typedDest = _data->reinterpret<T, 1>();
+            sycl::host_accessor writeAccessor(typedDest, sycl::write_only, sycl::no_init);
+            source.copyTo(writeAccessor.get_pointer());
+#else
+            source.copyTo(reinterpret_cast<T* __restrict>(data()));
+#endif
+        });
+    }
+}
+
+/******************************************************************************
+* Set all stored values to zeros.
+******************************************************************************/
+void DataBuffer::fillZero()
+{
+    if(size() == 0)
+        return;
+#ifdef OVITO_DEBUG
+    _isDataInitialized = true;
+#endif
+    if(dataType() != DataTypes::String) {
+#ifdef OVITO_USE_SYCL
+        fillSyclBufferZero(*this->_data, _numElements * _stride);
+#else
+        RawBufferAccess<access_mode::discard_write> writeAccess(this);
+        std::memset(writeAccess.data(), 0, this->size() * this->stride());
+    }
+    else {
+        WriteAccess writeAccess(*this);
+        for(QString* dst = reinterpret_cast<QString*>(data()), *dst_end = dst + _numElements * _componentCount; dst != dst_end; ++dst)
+            dst->clear();
+    }
+#endif
+    setNonzeroCount(0);
+}
+
+/******************************************************************************
+* Determines the value range (minimum & maximum value) of a particular vector component in the buffer.
+* The results are returned as a pair of floating-point values - even if the buffer stores a different data type.
+* Optionally, a selection flags array can be specified, which restricts the considered data elements to a subset.
+******************************************************************************/
+std::pair<FloatType, FloatType> DataBuffer::minMax(size_t component, const DataBuffer* selection) const
+{
+    OVITO_ASSERT(component >= 0 && component < componentCount());
+    if(dataType() == DataTypes::String)
+        return {0, 0}; // Not meaningful for string data.
+
+    FloatType minValue = std::numeric_limits<FloatType>::max();
+    FloatType maxValue = std::numeric_limits<FloatType>::lowest();
+
+#ifdef OVITO_USE_SYCL
+    forAnyNumericType([&](auto _) {
+        using T = decltype(_);
+        auto [minBuf, maxBuf] = SyclBufferAccess<const T*, access_mode::read>(this).minMax(component, selection);
+        auto minT = sycl::host_accessor(minBuf, sycl::read_only)[0];
+        auto maxT = sycl::host_accessor(maxBuf, sycl::read_only)[0];
+        if(minT != std::numeric_limits<T>::max())
+            minValue = static_cast<FloatType>(minT);
+        if(maxT != std::numeric_limits<T>::lowest())
+            maxValue = static_cast<FloatType>(maxT);
+    });
+#else
+    if(!selection) {
+        forEach(component, [&](size_t i, auto v) {
+            using T = decltype(v);
+            if constexpr(std::is_arithmetic_v<T>) {
+                if constexpr(std::numeric_limits<T>::has_infinity) {
+                    if(!std::isfinite(v)) return;
+                }
+                if(v > maxValue) maxValue = v;
+                if(v < minValue) minValue = v;
+            }
+        });
+    }
+    else {
+        BufferReadAccess<SelectionIntType> selectionAcc = selection;
+        forEach(component, [&](size_t i, auto v) {
+            if(selectionAcc[i]) {
+                using T = decltype(v);
+                if constexpr(std::is_arithmetic_v<T>) {
+                    if constexpr(std::numeric_limits<T>::has_infinity) {
+                        if(!std::isfinite(v)) return;
+                    }
+                    if(v > maxValue) maxValue = v;
+                    if(v < minValue) minValue = v;
+                }
+            }
+        });
+    }
+#endif
+
+    return std::make_pair(minValue, maxValue);
+}
+
+/******************************************************************************
+* Computes the axis-aligned bounding box of the 3d coordinates stored in the buffer.
+******************************************************************************/
+Box3 DataBuffer::boundingBox3() const
+{
+#ifdef OVITO_USE_SYCL
+    if(dataType() == Float32 && componentCount() == 3) {
+        return SyclBufferAccess<Point3F, access_mode::read>{this}.boundingBox().toDataType<FloatType>();
+    }
+    else if(dataType() == Float64 && componentCount() == 3) {
+        return SyclBufferAccess<Point3D, access_mode::read>{this}.boundingBox().toDataType<FloatType>();
+    }
+#else
+    if(dataType() == Float32 && componentCount() == 3) {
+        Box3F bb;
+        bb.addPoints(BufferReadAccess<Point3F>(this));
+        return bb.toDataType<FloatType>();
+    }
+    else if(dataType() == Float64 && componentCount() == 3) {
+        Box3D bb;
+        bb.addPoints(BufferReadAccess<Point3D>(this));
+        return bb.toDataType<FloatType>();
+    }
+#endif
+    OVITO_ASSERT(false); // Unsupported data type or component count
+    return {};
+}
+
+/******************************************************************************
+* Computes the axis-aligned bounding box of a sub-set of the 3d coordinates stored in the buffer.
+******************************************************************************/
+Box3 DataBuffer::boundingBox3Masked(const DataBuffer& mask) const
+{
+    OVITO_ASSERT(mask.size() == size());
+    OVITO_ASSERT(mask.dataType() == Int8 && mask.componentCount() == 1);
+#ifdef OVITO_USE_SYCL
+    OVITO_ASSERT(false); // TODO
+#else
+    if(mask.size() == this->size() && mask.dataType() == Int8 && mask.componentCount() == 1) {
+        if(dataType() == Float32 && componentCount() == 3) {
+            Box3F bb;
+            BufferReadAccess<int8_t> maskAcc(&mask);
+            auto s = maskAcc.cbegin();
+            for(const auto& p : BufferReadAccess<Point3F>(this)) {
+                if(*s++)
+                    bb.addPoint(p);
+            }
+            return bb.toDataType<FloatType>();
+        }
+        else if(dataType() == Float64 && componentCount() == 3) {
+            Box3D bb;
+            BufferReadAccess<int8_t> maskAcc(&mask);
+            auto s = maskAcc.cbegin();
+            for(const auto& p : BufferReadAccess<Point3D>(this)) {
+                if(*s++)
+                    bb.addPoint(p);
+            }
+            return bb.toDataType<FloatType>();
+        }
+    }
+#endif
+    OVITO_ASSERT(false); // Unsupported data type or component count
+    return {};
+}
+
+/******************************************************************************
+* Returns the number of non-zero entries in the array.
+******************************************************************************/
+size_t DataBuffer::nonzeroCount() const
+{
+    OVITO_ASSERT(this);
+    OVITO_ASSERT(componentCount() == 1);
+
+    auto count = _nonzeroCount.load(std::memory_order_relaxed);
+
+    if(count == std::numeric_limits<size_t>::max() || isBeingAccessedExternally()) {
+        forAnyType([&](auto _) {
+            using T = decltype(_);
+            if constexpr(!std::is_same_v<T, QString>) {
+                count = this->size() - this->count<T>(0);
+            }
+            else {
+                count = this->size() - this->count<QString>({});
+            }
+        });
+        const_cast<DataBuffer*>(this)->setNonzeroCount(count);
+    }
+    else {
+#ifdef OVITO_DEBUG
+        forAnyType([&](auto _) {
+            using T = decltype(_);
+            if constexpr(!std::is_same_v<T, QString>) {
+                OVITO_ASSERT(this->size() - this->count<T>(0) == count);
+            }
+            else {
+                OVITO_ASSERT(this->size() - this->count<QString>({}) == count);
+            }
+        });
+#endif
+    }
+
+    OVITO_ASSERT(count <= size());
+    return count;
+}
+
+/******************************************************************************
+* Returns the MD5 checksum of the buffer's data.
+******************************************************************************/
+DataBuffer::Checksum DataBuffer::checksum() const
+{
+    OVITO_ASSERT(this);
+
+    if(size() == 0)
+        return { 0, 0 };
+
+    auto a = _checksum[0].load(std::memory_order_relaxed);
+    auto b = _checksum[1].load(std::memory_order_relaxed);
+    if((a == 0 && b == 0) || isBeingAccessedExternally()) {
+        ReadAccess readAccess(*this);
+
+        // Compute MD5 hash of the buffer's data.
+        QCryptographicHash hash(QCryptographicHash::Md5);
+        if(dataType() != DataTypes::String) {
+#ifdef OVITO_USE_SYCL
+            sycl::host_accessor readAccessor(*this->_data, sycl::read_only);
+            hash.addData(QByteArrayView(readAccessor.get_pointer(), this->size() * this->stride()));
+#else
+            hash.addData(QByteArrayView(this->cdata(), this->size() * this->stride()));
+#endif
+        }
+        else {
+            for(const QString* src = reinterpret_cast<const QString*>(cdata()), *src_end = src + _numElements * _componentCount; src != src_end; ++src) {
+                const QStringView sv(*src);
+                hash.addData(QByteArrayView(reinterpret_cast<const char*>(sv.data()), sv.size() * sizeof(QChar)));
+            }
+        }
+        OVITO_ASSERT(hash.result().size() == sizeof(Checksum));
+
+        // Cache checksum in the DataBuffer object for future use.
+        // The cached checksum will be invalidated by the invalidateCachedInfo() method when the buffer's data is modified.
+        auto c = reinterpret_cast<const Checksum::value_type*>(hash.resultView().constData());
+        a = c[0];
+        b = c[1];
+        OVITO_ASSERT(a != 0 || b != 0); // Most likely!
+
+        const_cast<DataBuffer*>(this)->_checksum[0].store(a, std::memory_order_relaxed);
+        const_cast<DataBuffer*>(this)->_checksum[1].store(b, std::memory_order_relaxed);
+    }
+
+    return { a, b };
+}
+
+#ifdef OVITO_USE_SYCL
+/******************************************************************************
+* Blocks until all SYCL kernels in the queue that read from this buffer have finished running.
+* Only then it is safe again to write into the buffer on the host. This function is used by the
+* Python binding layer, which requires permanent write access to the buffer's underlying memory on the host.
+******************************************************************************/
+void DataBuffer::blockUntilSyclKernelsFinished()
+{
+    if(_hasScheduledSyclReadOperations) {
+        RawBufferAccess<access_mode::write> accessor{this};
+        _hasScheduledSyclReadOperations = false;
+    }
+}
+#endif
+
+/******************************************************************************
+* Based on a selection flag array as input, computes the mapping of original indices to a packed array.
+******************************************************************************/
+ConstDataBufferPtr DataBuffer::computePackedMapping() const
+{
+    OVITO_ASSERT(dataType() == IntSelection);
+    OVITO_ASSERT(componentCount() == 1);
+
+    DataBufferPtr mapping = DataBufferPtr::create(DataBuffer::Uninitialized, size(), DataBuffer::Int64);
+    size_t packedSize = 0;
+
+    BufferReadAccess<SelectionIntType> selectionAcc{this};
+    auto sel = selectionAcc.cbegin();
+    for(auto& idx : BufferWriteAccess<int64_t, access_mode::discard_write>{mapping}) {
+        if(*sel++) {
+            idx = packedSize++;
+        }
+        else {
+            idx = -1;
+        }
+    }
+
+    // Store number of non-zero selection flags for future use.
+    const_cast<DataBuffer*>(this)->setNonzeroCount(packedSize);
+
+    return mapping;
+}
+
+}   // End of namespace

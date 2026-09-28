@@ -1,0 +1,153 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#version 450
+// Imports the composited scene-depth attachment into the depth SSBO as linearised
+// view-space distances, and derives the per-pixel exclusion flag from a second,
+// excluded-only depth attachment. The instance SSBO is filled with 0 (valid outline
+// pixel) for every pixel; the cleanup pass is not run in the OVITO integration.
+//
+// Inputs:
+//   sceneDepthTex    — D32F depth of the full composited scene (all backends).
+//                      Used for edge detection and pen-width scaling.
+//   excludedDepthTex — D32F depth of ExcludeFromOutline geometry ONLY (simulation
+//                      cell, gizmos, slicing plane), cleared to 1.0 elsewhere.
+//
+// A pixel is "excluded" when an excluded surface is the frontmost surface there,
+// i.e. an excluded surface exists (excludedRaw < 1) and lies at (within epsilon of)
+// the composited scene surface. Because the excluded surface is the SAME geometry in
+// both buffers (rendered by the same backend), the raw-depth values match exactly at
+// those pixels, so a tiny epsilon suffices — unlike the previous eligible-vs-scene
+// comparison, eligible surfaces never enter this test, so there is no rasteriser-vs-
+// raytracer inconsistency.
+//
+// The flag becomes the persistent occlusion flag consumed downstream: the resolve
+// stage suppresses the outline ring where it is set, and the seed/setup stages skip
+// edges touching excluded pixels so excluded objects neither receive an outline nor
+// create spurious edges against the eligible geometry behind them.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(std140, binding = 0) uniform Params {
+    ivec2 size;
+    vec2  depthRange;
+    vec2  widthRange;
+    int   despike;      // 1 = despike isolated raytracer depth outliers; 0 = skip (rasterizer)
+    int   _pad;
+    vec4  color;
+    float nearPlane;
+    float farPlane;
+    int   isPerspective;
+    int   _padDepthRange;
+} P;
+
+layout(binding = 1) uniform sampler2D sceneDepthTex;    // D32F hardware depth (full composited scene)
+layout(binding = 4) uniform sampler2D excludedDepthTex; // D32F hardware depth (ExcludeFromOutline geometry only)
+
+layout(std430, binding = 2) writeonly buffer DepthOut   { float depthOut[];   };
+layout(std430, binding = 3) writeonly buffer InstOut    { uint  instOut[];    };
+// Persistent per-pixel linearised depth of the frontmost ExcludeFromOutline surface
+// (not ping-ponged), or NO_EXCLUDED where there is none. The downstream stages compare
+// it against the eligible surface depth so an excluded object only affects the outline
+// where it is actually IN FRONT of the eligible geometry the outline belongs to — not
+// merely wherever it is the frontmost surface (e.g. against the background behind the
+// outlined object).
+layout(std430, binding = 5) writeonly buffer ExclDepthOut { float exclDepthOut[]; };
+
+const float NO_EXCLUDED = 1.0e30;
+
+// Converts a depth value sampled from the scene's D32F depth attachment into a linear
+// view-space distance. The sampled value is WINDOW-space depth, which lies in [0,1] on every
+// QRhi backend: OVITO bakes rhi()->clipSpaceCorrMatrix() into the projection matrix, so
+// clip-space z already follows each backend's convention, and OpenGL maps its [-1,1] NDC z to
+// [0,1] via the default glDepthRange (Qt's GL backend does not use glClipControl). There is
+// therefore no per-backend remapping to do here. Do NOT reintroduce one keyed off
+// QRhi::isYUpInNDC(): that flag is also true for Metal and D3D, which do use [0,1] depth, and
+// halving every depth difference on those backends silently drops outlines whose depth step
+// falls below minDepthDiff (see the depth-range note in StandardRendererImplementation).
+float linearizeDepth(float d)
+{
+    if(P.isPerspective != 0)
+        return P.nearPlane * P.farPlane / (P.farPlane - d * (P.farPlane - P.nearPlane));
+    else
+        return P.nearPlane + d * (P.farPlane - P.nearPlane);
+}
+
+// Linearised scene depth at pixel q, clamped to the image so out-of-range neighbours
+// resolve to the edge pixel (they then agree with the centre and cannot trigger a despike).
+float linSceneAt(ivec2 q)
+{
+    q = clamp(q, ivec2(0), P.size - 1);
+    return linearizeDepth(texelFetch(sceneDepthTex, q, 0).r);
+}
+
+// Median of four values = average of the two middle order statistics.
+float median4(float a, float b, float c, float d)
+{
+    float mn = min(min(a, b), min(c, d));
+    float mx = max(max(a, b), max(c, d));
+    return (a + b + c + d - mn - mx) * 0.5;
+}
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if(p.x >= P.size.x || p.y >= P.size.y)
+        return;
+    int idx = p.y * P.size.x + p.x;
+
+    float sceneRaw    = texelFetch(sceneDepthTex, p, 0).r;
+    float excludedRaw = texelFetch(excludedDepthTex, p, 0).r;
+
+    float sceneDepth = linearizeDepth(sceneRaw);
+
+    // Despike isolated depth outliers. A raytracer casting a single crisp (unjittered) primary
+    // ray for the depth channel can miss an analytic primitive right at an internal seam (e.g. a
+    // capped cylinder's cap/side edge), leaving that lone pixel at the far plane while all its
+    // neighbours sit on the surface — which the seed stage would read as a silhouette and draw a
+    // spurious interior outline dot. A genuine silhouette pixel has a seed-worthy depth step to at
+    // most two of its four neighbours (one edge, two at a corner); a lone spike steps to three or
+    // four. So when a pixel disagrees with >=3 neighbours by more than the outline's minimum depth
+    // difference, replace it with the neighbours' median so it neither seeds nor makes them seed.
+    // Clean rasterised depth never trips this (real geometry is spatially coherent), so the whole
+    // block is gated off (P.despike == 0) in pure rasterizer mode to avoid the neighbour fetches.
+    if(P.despike != 0) {
+        float dl = linSceneAt(p + ivec2(-1,  0));
+        float dr = linSceneAt(p + ivec2( 1,  0));
+        float du = linSceneAt(p + ivec2( 0, -1));
+        float dd = linSceneAt(p + ivec2( 0,  1));
+        float thr = P.depthRange.x;
+        int disagree = int(abs(sceneDepth - dl) > thr)
+                     + int(abs(sceneDepth - dr) > thr)
+                     + int(abs(sceneDepth - du) > thr)
+                     + int(abs(sceneDepth - dd) > thr);
+        if(disagree >= 3)
+            sceneDepth = median4(dl, dr, du, dd);
+    }
+
+    depthOut[idx] = sceneDepth;
+    instOut[idx]  = 0u; // All pixels are valid outline pixels.
+
+    // Linearised depth of the excluded surface at this pixel (NO_EXCLUDED where none exists,
+    // i.e. the excluded-depth texture is at its 1.0 clear value).
+    exclDepthOut[idx] = (excludedRaw < 1.0) ? linearizeDepth(excludedRaw) : NO_EXCLUDED;
+}

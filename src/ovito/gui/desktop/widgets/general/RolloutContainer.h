@@ -1,0 +1,268 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/gui/desktop/GUI.h>
+
+namespace Ovito {
+
+class RolloutContainer;     // defined below
+
+/**
+ * This data structure specifies how and where a new rollout is inserted into a RolloutContainer.
+ */
+class RolloutInsertionParameters
+{
+public:
+
+    RolloutInsertionParameters after(QWidget* afterThisRollout) const {
+        OVITO_ASSERT(afterThisRollout);
+        RolloutInsertionParameters p(*this);
+        p._afterThisRollout = afterThisRollout;
+        p._beforeThisRollout = nullptr;
+        return p;
+    }
+
+    RolloutInsertionParameters before(QWidget* beforeThisRollout) const {
+        OVITO_ASSERT(beforeThisRollout);
+        RolloutInsertionParameters p(*this);
+        p._beforeThisRollout = beforeThisRollout;
+        p._afterThisRollout = nullptr;
+        return p;
+    }
+
+    RolloutInsertionParameters collapse() const {
+        RolloutInsertionParameters p(*this);
+        p._collapsed = true;
+        return p;
+    }
+
+    RolloutInsertionParameters useAvailableSpace() const {
+        RolloutInsertionParameters p(*this);
+        p._useAvailableSpace = true;
+        return p;
+    }
+
+    RolloutInsertionParameters hideTitleBar() const {
+        RolloutInsertionParameters p(*this);
+        p._hideTitleBar = true;
+        return p;
+    }
+
+    RolloutInsertionParameters insertInto(QWidget* intoThisContainer) const {
+        OVITO_ASSERT(intoThisContainer);
+        RolloutInsertionParameters p;
+        p._intoThisContainer = intoThisContainer;
+        return p;
+    }
+
+    RolloutInsertionParameters setTitle(const QString& title) const {
+        RolloutInsertionParameters p(*this);
+        p._title = title;
+        return p;
+    }
+
+    RolloutInsertionParameters setHelpUrl(const QString& helpUrl) const {
+        RolloutInsertionParameters p(*this);
+        p._helpUrl = helpUrl;
+        return p;
+    }
+
+    RolloutInsertionParameters setEditorHint(const QString& key, QVariant&& value = QVariant()) const {
+        RolloutInsertionParameters p(*this);
+        p._editorHints[key] = std::move(value);
+        return p;
+    }
+
+    QWidget* container() const { return _intoThisContainer; }
+    const QString& title() const { return _title; }
+    const QString& helpUrl() const { return _helpUrl; }
+    const QVariantMap& editorHints() const { return _editorHints; }
+
+private:
+
+    bool _collapsed = false;
+    bool _useAvailableSpace = false;
+    bool _hideTitleBar = false;
+    QPointer<QWidget> _afterThisRollout;
+    QPointer<QWidget> _beforeThisRollout;
+    QPointer<QWidget> _intoThisContainer;
+    QString _title;
+    QString _helpUrl;
+    QVariantMap _editorHints;
+
+    friend class Rollout;
+    friend class RolloutContainer;
+};
+
+/******************************************************************************
+* A rollout widget in a RolloutContainer.
+* This is part of the implementation of the RolloutContainer and
+* should not be used outside of a RolloutContainer.
+******************************************************************************/
+class OVITO_GUI_EXPORT Rollout : public QWidget
+{
+    Q_OBJECT
+
+public:
+
+    /// Constructor.
+    Rollout(QWidget* parent, QWidget* content, const QString& title, const RolloutInsertionParameters& params, const QString& helpPageUrl = {});
+
+    /// Returns true if this rollout is currently in the collapsed state.
+    bool isCollapsed() const { return visiblePercentage() != 100; }
+
+    /// Returns the child widget that is contained in the rollout.
+    QWidget* content() const { return _content; }
+
+    /// Returns the rollout container widget this rollout belongs to.
+    RolloutContainer* container() const;
+
+    /// Returns how much of rollout contents is visible.
+    int visiblePercentage() const { return _visiblePercentage; }
+
+    /// Sets how much of rollout contents is visible.
+    void setVisiblePercentage(int p) {
+        _visiblePercentage = p;
+        updateGeometry();
+    }
+
+    /// Computes the recommended size for the widget.
+    virtual QSize sizeHint() const override;
+
+    /// Returns true if the widget's preferred height depends on its width; otherwise returns false.
+    virtual bool hasHeightForWidth() const override { return _noticeWidget != nullptr; }
+
+    /// Returns the preferred height for this widget, given a width.
+    virtual int heightForWidth(int w) const override;
+
+    Q_PROPERTY(int visiblePercentage READ visiblePercentage WRITE setVisiblePercentage)
+
+public Q_SLOTS:
+
+    /// Opens the rollout if it is collapsed; or collapses it if it is open.
+    void toggleCollapsed() { setCollapsed(!isCollapsed()); }
+
+    /// Collapses or opens the rollout.
+    void setCollapsed(bool collapsed);
+
+    /// Changes the title of the rollout.
+    void setTitle(const QString& title) {
+        if(_titleButton)
+            _titleButton->setText(title);
+    }
+
+    /// Displays a notice text at the top of the rollout window.
+    void setNotice(const QString& noticeText);
+
+    /// Is called when the user presses the help button.
+    void onHelpButton();
+
+    /// Makes sure that the rollout is visible in the rollout container.
+    void ensureVisible();
+
+protected:
+
+    /// Handles the resize events of the rollout widget.
+    virtual void resizeEvent(QResizeEvent* event) override;
+
+private:
+
+    /// The button that allows to collapse the rollout.
+    QPushButton* _titleButton = nullptr;
+
+    /// The button that opens the help page.
+    QPushButton* _helpButton = nullptr;
+
+    /// The widget that is inside the rollout.
+    QPointer<QWidget> _content;
+
+    /// The label widget displaying the user notice.
+    QLabel* _noticeWidget = nullptr;
+
+    /// Internal property that controls how much of rollout contents is visible.
+    int _visiblePercentage;
+
+    /// The object that animates the collapse/opening of the rollout.
+    QPropertyAnimation _collapseAnimation;
+
+    /// Indicates that this rollout should automatically expand to use all available space in the container.
+    bool _useAvailableSpace;
+
+    /// The help page in the user manual for this rollout.
+    QString _helpPageUrl;
+};
+
+/******************************************************************************
+* This container manages multiple rollouts.
+******************************************************************************/
+class OVITO_GUI_EXPORT RolloutContainer : public QScrollArea, public UserInterfaceComponent<MainWindowUI>
+{
+    Q_OBJECT
+
+public:
+
+    /// Constructs the rollout container.
+    RolloutContainer(MainWindowUI& ui, QWidget* parent = nullptr);
+
+    /// Adds a new rollout to the container.
+    Rollout* addRollout(QWidget* content, const QString& title, const RolloutInsertionParameters& param = RolloutInsertionParameters(), const QString& helpPageUrl = {});
+
+    /// Returns the Rollout that hosts the given widget.
+    Rollout* findRolloutFromWidget(QWidget* content) const;
+
+    virtual QSize minimumSizeHint() const override;
+    virtual QSize sizeHint() const override;
+
+protected:
+
+    /// Handles the resize events of the rollout container widget.
+    virtual void resizeEvent(QResizeEvent* event) override {
+        QScrollArea::resizeEvent(event);
+        updateRollouts();
+    }
+
+    /// Handles the timer events for the container widget.
+    virtual void timerEvent(QTimerEvent* event) override {
+        if(event->timerId() == _updateGeometryTimer.timerId()) {
+            _updateGeometryTimer.stop();
+            updateRollouts();
+        }
+        QScrollArea::timerEvent(event);
+    }
+
+public Q_SLOTS:
+
+    /// Updates the size of all rollouts.
+    void updateRollouts();
+
+    /// Updates the size of all rollouts soon.
+    void updateRolloutsLater();
+
+private:
+
+    QBasicTimer _updateGeometryTimer;
+};
+
+}   // End of namespace

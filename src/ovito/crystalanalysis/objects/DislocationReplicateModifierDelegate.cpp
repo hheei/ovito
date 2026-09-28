@@ -1,0 +1,120 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/crystalanalysis/CrystalAnalysis.h>
+#include <ovito/crystalanalysis/objects/DislocationNetwork.h>
+#include <ovito/stdobj/simcell/SimulationCell.h>
+#include <ovito/core/dataset/DataSet.h>
+#include <ovito/core/dataset/pipeline/ModificationNode.h>
+#include "DislocationReplicateModifierDelegate.h"
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(DislocationReplicateModifierDelegate);
+OVITO_CLASSINFO(DislocationReplicateModifierDelegate, "DisplayName", "Dislocations");
+
+/******************************************************************************
+* Indicates which data objects in the given input data collection the modifier
+* delegate is able to operate on.
+******************************************************************************/
+QVector<DataObjectReference> DislocationReplicateModifierDelegate::OOMetaClass::getApplicableObjects(const DataCollection& input) const
+{
+    if(input.containsObject<DislocationNetwork>())
+        return { DataObjectReference(&DislocationNetwork::OOClass()) };
+    return {};
+}
+
+/******************************************************************************
+ * Applies the modifier operation to the data in a pipeline flow state.
+ ******************************************************************************/
+Future<PipelineFlowState> DislocationReplicateModifierDelegate::apply(const ModifierEvaluationRequest& request, PipelineFlowState&& state, const PipelineFlowState& originalState, const std::vector<PipelineFlowState>& additionalInputs)
+{
+    ReplicateModifier* modifier = static_object_cast<ReplicateModifier>(request.modifier());
+
+    const Box3I& newImages = modifier->replicaRange();
+
+    // The actual work can be performed in a separate thread.
+    return asyncLaunch([state = std::move(state), newImages]() mutable {
+
+        int nPBC[3] = { newImages.sizeX() + 1, newImages.sizeY() + 1, newImages.sizeZ() + 1};
+        size_t numCopies = (size_t)nPBC[0] * (size_t)nPBC[1] * (size_t)nPBC[2];
+
+        state.data()->visitObjectsOfType<DislocationNetwork>([&](const DislocationNetwork* existingDislocations) {
+            // For periodic replication, a domain is needed.
+            if(!existingDislocations->domain())
+                return;
+
+            AffineTransformation simCell = existingDislocations->domain()->cellMatrix();
+            AffineTransformation inverseSimCell;
+            if(!simCell.inverse(inverseSimCell))
+                return;
+
+            // Create the output copy of the input dislocation object.
+            DislocationNetwork* newDislocations = state.makeMutable(existingDislocations);
+
+            // Shift existing vertices so that they form the first image at grid position (0,0,0).
+            const Vector3 imageDelta = simCell * Vector3(newImages.minc.x(), newImages.minc.y(), newImages.minc.z());
+            if(!imageDelta.isZero()) {
+                for(DislocationLine* line : newDislocations->lines()) {
+                    for(Point3& p : line->vertices)
+                        p += imageDelta;
+                }
+            }
+
+            // Replicate lines.
+            size_t oldLineCount = newDislocations->lines().size();
+            for(int imageX = 0; imageX < nPBC[0]; imageX++) {
+                for(int imageY = 0; imageY < nPBC[1]; imageY++) {
+                    for(int imageZ = 0; imageZ < nPBC[2]; imageZ++) {
+                        if(imageX == 0 && imageY == 0 && imageZ == 0)
+                            continue;
+                        // Shift vertex positions by the periodicity vector.
+                        const Vector3 imageDelta = simCell * Vector3(imageX, imageY, imageZ);
+                        for(size_t i = 0; i < oldLineCount; i++) {
+                            DislocationLine* oldLine = newDislocations->lines()[i];
+                            DislocationLine* newLine = newDislocations->createLine(oldLine->burgersVector);
+                            newLine->vertices = oldLine->vertices;
+                            newLine->coreSize = oldLine->coreSize;
+                            for(Point3& p : newLine->vertices)
+                                p += imageDelta;
+                        }
+                        // TODO: Replicate nodal connectivity.
+                    }
+                }
+            }
+            OVITO_ASSERT(newDislocations->lines().size() == oldLineCount * numCopies);
+
+            // Extend the periodic domain the dislocation network is embedded in.
+            simCell.translation() += (FloatType)newImages.minc.x() * simCell.column(0);
+            simCell.translation() += (FloatType)newImages.minc.y() * simCell.column(1);
+            simCell.translation() += (FloatType)newImages.minc.z() * simCell.column(2);
+            simCell.column(0) *= (newImages.sizeX() + 1);
+            simCell.column(1) *= (newImages.sizeY() + 1);
+            simCell.column(2) *= (newImages.sizeZ() + 1);
+            newDislocations->mutableDomain()->setCellMatrix(simCell);
+        });
+
+        return std::move(state);
+    });
+}
+
+}   // End of namespace

@@ -1,0 +1,152 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/particles/Particles.h>
+#include <ovito/particles/modifier/analysis/ReferenceConfigurationModifier.h>
+#include <ovito/particles/objects/Particles.h>
+#include <ovito/stdobj/simcell/SimulationCell.h>
+
+namespace Ovito {
+
+/**
+ * \brief Calculates the per-particle strain tensors based on a reference configuration.
+ */
+class OVITO_PARTICLES_EXPORT AtomicStrainModifier : public ReferenceConfigurationModifier
+{
+    OVITO_CLASS(AtomicStrainModifier)
+
+protected:
+
+    /// Creates a computation engine that will compute the modifier's results.
+    virtual std::unique_ptr<Engine> createEngine(const ModifierEvaluationRequest& request, const PipelineFlowState& input, const PipelineFlowState& referenceState) override;
+
+    /// Adopts existing computation results for an interactive pipeline evaluation.
+    virtual Future<PipelineFlowState> reuseCachedState(const ModifierEvaluationRequest& request, Particles* particles, PipelineFlowState&& output, const PipelineFlowState& cachedState) override;
+
+private:
+
+    /// Computes the modifier's results.
+    class AtomicStrainEngine : public Engine
+    {
+    public:
+
+        /// Constructor.
+        AtomicStrainEngine(size_t particleCount, ConstPropertyPtr positions, const SimulationCell* simCell,
+                ConstPropertyPtr refPositions, const SimulationCell* simCellRef,
+                ConstPropertyPtr identifiers, ConstPropertyPtr refIdentifiers,
+                FloatType cutoff, AffineMappingType affineMapping, bool useMinimumImageConvention,
+                bool calculateDeformationGradients, bool calculateStrainTensors,
+                bool calculateNonaffineSquaredDisplacements, bool calculateRotations, bool calculateStretchTensors,
+                bool selectInvalidParticles,
+                OOWeakRef<const PipelineNode> createdByNode) :
+            Engine(positions, simCell, refPositions, simCellRef,
+                std::move(identifiers), std::move(refIdentifiers), affineMapping, useMinimumImageConvention),
+            _cutoff(cutoff),
+            _displacements(Particles::OOClass().createStandardProperty(DataBuffer::Uninitialized, refPositions->size(), Particles::DisplacementProperty)),
+            _shearStrains(Particles::OOClass().createUserProperty(DataBuffer::Uninitialized, particleCount, Property::FloatDefault, 1, QStringLiteral("Shear Strain"))),
+            _volumetricStrains(Particles::OOClass().createUserProperty(DataBuffer::Uninitialized, particleCount, Property::FloatDefault, 1, QStringLiteral("Volumetric Strain"))),
+            _strainTensors(calculateStrainTensors ? Particles::OOClass().createStandardProperty(DataBuffer::Uninitialized, particleCount, Particles::StrainTensorProperty) : nullptr),
+            _deformationGradients(calculateDeformationGradients ? Particles::OOClass().createStandardProperty(DataBuffer::Uninitialized, particleCount, Particles::DeformationGradientProperty) : nullptr),
+            _nonaffineSquaredDisplacements(calculateNonaffineSquaredDisplacements ? Particles::OOClass().createUserProperty(DataBuffer::Uninitialized, particleCount, Property::FloatDefault, 1, QStringLiteral("Nonaffine Squared Displacement")) : nullptr),
+            _invalidParticles(selectInvalidParticles ? Particles::OOClass().createStandardProperty(DataBuffer::Uninitialized, particleCount, Particles::SelectionProperty) : nullptr),
+            _rotations(calculateRotations ? Particles::OOClass().createStandardProperty(DataBuffer::Uninitialized, particleCount, Particles::RotationProperty) : nullptr),
+            _stretchTensors(calculateStretchTensors ? Particles::OOClass().createStandardProperty(DataBuffer::Uninitialized, particleCount, Particles::StretchTensorProperty) : nullptr),
+            _createdByNode(std::move(createdByNode)) {}
+
+        /// Performs the actual computation of the modifier's results.
+        virtual void perform(PipelineFlowState& state) override;
+
+        /// Returns the property storage that contains the computed per-particle shear strain values.
+        const PropertyPtr& shearStrains() const { return _shearStrains; }
+
+        /// Returns the property storage that contains the computed per-particle volumetric strain values.
+        const PropertyPtr& volumetricStrains() const { return _volumetricStrains; }
+
+        /// Returns the property storage that contains the computed per-particle strain tensors.
+        const PropertyPtr& strainTensors() const { return _strainTensors; }
+
+        /// Returns the property storage that contains the computed per-particle deformation gradient tensors.
+        const PropertyPtr& deformationGradients() const { return _deformationGradients; }
+
+        /// Returns the property storage that contains the computed per-particle deformation gradient tensors.
+        const PropertyPtr& nonaffineSquaredDisplacements() const { return _nonaffineSquaredDisplacements; }
+
+        /// Returns the property storage that contains the selection of invalid particles.
+        const PropertyPtr& invalidParticles() const { return _invalidParticles; }
+
+        /// Returns the property storage that contains the computed rotations.
+        const PropertyPtr& rotations() const { return _rotations; }
+
+        /// Returns the property storage that contains the computed stretch tensors.
+        const PropertyPtr& stretchTensors() const { return _stretchTensors; }
+
+        /// Returns the number of invalid particles for which the strain tensor could not be computed.
+        size_t numInvalidParticles() const { return _numInvalidParticles.loadAcquire(); }
+
+        /// Increments the invalid particle counter by one.
+        void addInvalidParticle() { _numInvalidParticles.fetchAndAddRelaxed(1); }
+
+        /// Returns the property storage that contains the computed displacement vectors.
+        const PropertyPtr& displacements() const { return _displacements; }
+
+    private:
+
+        const FloatType _cutoff;
+        PropertyPtr _displacements;
+        QAtomicInt _numInvalidParticles;
+        const PropertyPtr _shearStrains;
+        const PropertyPtr _volumetricStrains;
+        const PropertyPtr _strainTensors;
+        const PropertyPtr _deformationGradients;
+        const PropertyPtr _nonaffineSquaredDisplacements;
+        const PropertyPtr _invalidParticles;
+        const PropertyPtr _rotations;
+        const PropertyPtr _stretchTensors;
+        OOWeakRef<const PipelineNode> _createdByNode;
+    };
+
+    /// Controls the cutoff radius for the neighbor lists.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(FloatType{3.0}, cutoff, setCutoff, PROPERTY_FIELD_MEMORIZE);
+
+    /// Controls the whether atomic deformation gradient tensors should be computed and stored.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{false}, calculateDeformationGradients, setCalculateDeformationGradients);
+
+    /// Controls the whether atomic strain tensors should be computed and stored.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{false}, calculateStrainTensors, setCalculateStrainTensors);
+
+    /// Controls the whether non-affine displacements should be computed and stored.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{false}, calculateNonaffineSquaredDisplacements, setCalculateNonaffineSquaredDisplacements);
+
+    /// Controls the whether local rotations should be computed and stored.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{false}, calculateRotations, setCalculateRotations);
+
+    /// Controls the whether atomic stretch tensors should be computed and stored.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{false}, calculateStretchTensors, setCalculateStretchTensors);
+
+    /// Controls the whether particles, for which the strain tensor could not be computed, are selected.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{true}, selectInvalidParticles, setSelectInvalidParticles);
+};
+
+}   // End of namespace

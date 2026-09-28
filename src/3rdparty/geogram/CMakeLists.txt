@@ -1,0 +1,97 @@
+#######################################################################################
+#
+#  Copyright 2026 OVITO GmbH, Germany
+#
+#  This file is part of OVITO (Open Visualization Tool).
+#
+#  OVITO is free software; you can redistribute it and/or modify it either under the
+#  terms of the GNU General Public License version 3 as published by the Free Software
+#  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+#  If you do not alter this notice, a recipient may use your version of this
+#  file under either the GPL or the MIT License.
+#
+#  You should have received a copy of the GPL along with this program in a
+#  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+#  with this program in a file LICENSE.MIT.txt
+#
+#  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+#  either express or implied. See the GPL or the MIT License for the specific language
+#  governing rights and limitations.
+#
+#######################################################################################
+
+# Compile the Geogram library (Delaunay "Pluggable Software Module")
+ADD_LIBRARY(geogram Delaunay_psm.cpp)
+
+# Set floating-point math compiler options.
+IF((LINUX OR APPLE) AND NOT EMSCRIPTEN)
+    TARGET_COMPILE_OPTIONS(geogram PRIVATE "-frounding-math" "-ffp-contract=off")
+    IF(APPLE)
+        TARGET_COMPILE_OPTIONS(geogram PRIVATE "-Wno-ignored-optimization-argument")
+    ENDIF()
+ENDIF()
+
+# Enable Geogram's support for 64-bit indices.
+TARGET_COMPILE_DEFINITIONS(geogram PUBLIC "GARGANTUA=1")
+
+IF(NOT WIN32 AND NOT APPLE AND NOT EMSCRIPTEN)
+    # Disable atomics, because OVITO doesn't make use of Geogram's multi-threading support.
+    TARGET_COMPILE_DEFINITIONS(geogram PUBLIC "GEO_USE_DUMMY_ATOMICS=1")
+ENDIF()
+
+# Add standard compile and link options to the CMake target.
+OVITO_ADD_STANDARD_COMPILE_OPTIONS(geogram)
+
+# Locate the Boost library.
+OVITO_FIND_PACKAGE(Boost REQUIRED)
+# Use Boost in the Geogram library (cross-platform random number generation functions)
+TARGET_LINK_LIBRARIES(geogram PRIVATE Boost::boost)
+
+IF(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    # Do not warn about missing dll-interface of members of an exported class.
+    TARGET_COMPILE_OPTIONS(geogram PRIVATE "/wd4251")
+    # Do not warn about missing dll-interface of base class of an exported class.
+    TARGET_COMPILE_OPTIONS(geogram PRIVATE "/wd4275")
+    # Suppress warning on conversion from size_t to int, possible loss of data.
+    TARGET_COMPILE_OPTIONS(geogram PRIVATE "/wd4244" "/wd4334")
+    # Do not warn on use of deprecated std::allocator members.
+    TARGET_COMPILE_DEFINITIONS(geogram PUBLIC "_SILENCE_CXX17_OLD_ALLOCATOR_MEMBERS_DEPRECATION_WARNING=")
+ELSEIF(CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
+    # Silence Intel DPC++ compiler warning: "unused function"
+    TARGET_COMPILE_OPTIONS(geogram PRIVATE "-Wno-unused-function")
+    # Silence Intel DPC++ compiler warning: "function declared 'noreturn' should not return"
+    TARGET_COMPILE_OPTIONS(geogram PRIVATE "-Wno-invalid-noreturn")
+ENDIF()
+
+IF(BUILD_SHARED_LIBS)
+    # Build shared library version of Geogram lib.
+    TARGET_COMPILE_DEFINITIONS(geogram PRIVATE "geogram_EXPORTS")
+ELSE()
+    # Build static version of Geogram lib.
+    TARGET_COMPILE_DEFINITIONS(geogram PUBLIC "GEO_STATIC_LIBS=1")
+    SET_PROPERTY(TARGET geogram PROPERTY POSITION_INDEPENDENT_CODE ON)
+ENDIF()
+
+# Geogram requires pthread lib on Linux platform.
+SET(THREADS_PREFER_PTHREAD_FLAG ON)
+OVITO_FIND_PACKAGE(Threads REQUIRED)
+OVITO_FIND_PACKAGE(Boost REQUIRED)
+TARGET_LINK_LIBRARIES(geogram PUBLIC Threads::Threads Boost::boost)
+
+IF(EMSCRIPTEN)
+    # Adopt the Emscript compiler flags from Qt's platform target.
+    # That's because all libraries linked into the static WASM module need be built with the same flags.
+    TARGET_LINK_LIBRARIES(geogram PRIVATE Qt::Platform)
+ENDIF()
+
+# Give our library file a new name to not confuse it with any system versions of the library.
+SET_TARGET_PROPERTIES(geogram PROPERTIES OUTPUT_NAME "ovito_geogram")
+
+# Make header files of this library available to dependent targets.
+TARGET_INCLUDE_DIRECTORIES(geogram INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+
+# Export this target.
+INSTALL(TARGETS geogram EXPORT OVITO
+    RUNTIME DESTINATION "${OVITO_RELATIVE_LIBRARY_DIRECTORY}"
+    LIBRARY DESTINATION "${OVITO_RELATIVE_LIBRARY_DIRECTORY}"
+    ARCHIVE DESTINATION "${OVITO_RELATIVE_LIBRARY_DIRECTORY}" COMPONENT "development")

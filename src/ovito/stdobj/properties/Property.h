@@ -1,0 +1,275 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/stdobj/StdObj.h>
+#include <ovito/core/dataset/data/DataBuffer.h>
+#include <ovito/core/dataset/data/BufferAccess.h>
+#include <ovito/core/dataset/data/DataObjectReference.h>
+#include <ovito/stdobj/properties/ElementType.h>
+
+namespace Ovito {
+
+/**
+ * \brief Stores a property data array.
+ */
+class OVITO_STDOBJ_EXPORT Property : public DataBuffer
+{
+public:
+
+    /// Define a new data object metaclass.
+    class OVITO_STDOBJ_EXPORT OOMetaClass : public DataBuffer::OOMetaClass
+    {
+    public:
+        /// Inherit constructor from base class.
+        using DataBuffer::OOMetaClass::OOMetaClass;
+
+        /// Generates a human-readable string representation of the data object reference.
+        virtual QString formatDataObjectPath(const ConstDataObjectPath& path) const override;
+    };
+
+    OVITO_CLASS_META(Property, OOMetaClass);
+
+public:
+
+    /// The standard property type identifiers used by all property container classes.
+    enum GenericStandardType {
+        GenericUserProperty = 0,    //< This is reserved for user-defined properties.
+        GenericSelectionProperty = 1,
+        GenericColorProperty = 2,
+        GenericTypeProperty = 3,
+        GenericIdentifierProperty = 4,
+
+        // This is the value at which type identifiers of specific property container classes start:
+        FirstSpecificProperty = 1000
+    };
+
+public:
+
+    /// Creates an empty property array.
+    void initializeObject(ObjectInitializationFlags flags);
+
+    /// Constructor creating a new property array.
+    void initializeObject(ObjectInitializationFlags flags, BufferInitialization init, size_t elementCount, int dataType, size_t componentCount, const QStringView name, int typeId = 0, QStringList componentNames = QStringList());
+
+    /// Constructor creating a new property array.
+    void initializeObject(ObjectInitializationFlags flags, size_t elementCount, int dataType, size_t componentCount, const QStringView name, int typeId = 0, QStringList componentNames = QStringList()) {
+        initializeObject(flags, BufferInitialization::Uninitialized, elementCount, dataType, componentCount, name, typeId, std::move(componentNames));
+    }
+
+#ifdef OVITO_DEBUG
+    /// Destructor.
+    ~Property();
+#endif
+
+    /// Gets the property's name, which is also the property object's unique identifier.
+    const QString& name() const { return identifier(); }
+
+    /// Sets the property's name, which is also the property object's unique identifier.
+    void setName(const QString& name) { setIdentifier(name); }
+
+    /// Sets the property's name, which is also the property object's unique identifier.
+    void setName(const QStringView name) { setIdentifier(name.toString()); }
+
+    /// Indicates whether this property is a standard property (and not a user-defined property).
+    bool isStandardProperty() const { return typeId() != 0; }
+
+    /// Returns the display name of the property including the name of the given
+    /// vector component.
+    QString nameWithComponent(int vectorComponent) const;
+
+    /// Checks if this property storage and its contents exactly match those of another property storage.
+    bool equals(const Property& other) const;
+
+    /// Creates an empty copy of this property object - without copying the stored array data but cloning the metadata and list of element types.
+    PropertyPtr cloneWithoutData(size_t newSize = 0, int overrideDataType = 0) const;
+
+    //////////////////////////////// Element types //////////////////////////////
+
+    /// Returns true if this property has some element types attached and the data type is 'int'.
+    bool isTypedProperty() const { return !elementTypes().empty() && dataType() == DataBuffer::Int32 && componentCount() == 1; }
+
+    /// Appends an element type to the list of types.
+    const ElementType* addElementType(DataOORef<const ElementType> type) {
+        OVITO_CHECK_OBJECT_POINTER(this);
+        OVITO_CHECK_OBJECT_POINTER(type);
+        OVITO_ASSERT(elementTypes().contains(const_cast<ElementType*>(type.get())) == false);
+        const ElementType* ptr = type.get();
+        _elementTypes.push_back(this, PROPERTY_FIELD(elementTypes), std::move(type));
+        return ptr;
+    }
+
+    /// Inserts an element type into the list of types.
+    void insertElementType(qsizetype index, DataOORef<const ElementType> type) {
+        OVITO_CHECK_OBJECT_POINTER(this);
+        OVITO_CHECK_OBJECT_POINTER(type);
+        OVITO_ASSERT(elementTypes().contains(type) == false);
+        _elementTypes.insert(this, PROPERTY_FIELD(elementTypes), index, std::move(type));
+    }
+
+    /// Creates and returns a new numeric element type with the given numeric ID and, optionally, a human-readable name.
+    /// If an element type with the given numeric ID already exists in this property's element type list, it will be returned instead.
+    template<typename StringType>
+        requires (std::same_as<StringType, QString> || std::same_as<StringType, QStringView> || std::same_as<StringType, QLatin1String>)
+    const ElementType* addNumericType(const PropertyContainerClass& containerClass, int id, const StringType& name, ElementTypeClassPtr elementTypeClass = {});
+
+    /// Creates and returns a new element type with the given name and assigns a new unique ID to it.
+    /// If an element type with the given name already exists in this property's element type list, it will be returned instead.
+    template<typename StringType>
+        requires (std::same_as<StringType, QString> || std::same_as<StringType, QStringView> || std::same_as<StringType, QLatin1String>)
+    const ElementType* addNamedType(const PropertyContainerClass& containerClass, const StringType& name, ElementTypeClassPtr elementTypeClass = {}, int startNumericIdAt = 1) {
+        OVITO_CHECK_OBJECT_POINTER(this);
+        if(const ElementType* existingType = elementType(name))
+            return existingType;
+        return addNumericType(containerClass, generateUniqueElementTypeId(startNumericIdAt), name, elementTypeClass);
+    }
+
+    /// Returns the element type with the given ID, or NULL if no such type exists.
+    const ElementType* elementType(int id) const {
+        OVITO_CHECK_OBJECT_POINTER(this);
+        for(const ElementType* type : elementTypes())
+            if(type->numericId() == id)
+                return type;
+        return nullptr;
+    }
+
+    /// Returns the element type with the given human-readable name, or NULL if no such type exists.
+    template<typename StringType>
+        requires (std::same_as<StringType, QString> || std::same_as<StringType, QStringView> || std::same_as<StringType, QLatin1String>)
+    const ElementType* elementType(const StringType& name) const {
+        OVITO_CHECK_OBJECT_POINTER(this);
+        OVITO_ASSERT(name.size() != 0);
+        for(const ElementType* type : elementTypes())
+            if(type->name() == name)
+                return type;
+        return nullptr;
+    }
+
+    /// Removes a single element type from this object.
+    void removeElementType(qsizetype index) {
+        _elementTypes.remove(this, PROPERTY_FIELD(elementTypes), index);
+    }
+
+    /// Removes all elements types from this object.
+    void clearElementTypes() {
+        _elementTypes.clear(this, PROPERTY_FIELD(elementTypes));
+    }
+
+    /// Builds a mapping from numeric IDs to type colors.
+    boost::container::flat_map<int, ColorG> typeColorMap(bool onlyEnabledTypes = true) const {
+        boost::container::flat_map<int, ColorG> m;
+        for(const ElementType* type : elementTypes()) {
+            if(!onlyEnabledTypes || type->enabled())
+                m.emplace(type->numericId(), type->color().toDataType<GraphicsFloatType>());
+        }
+        return m;
+    }
+
+    /// Returns an numeric type ID that is not yet used by any of the existing element types.
+    int generateUniqueElementTypeId(int startAt = 1) const {
+        int maxId = startAt;
+        for(const ElementType* type : elementTypes())
+            maxId = std::max(maxId, type->numericId() + 1);
+        return maxId;
+    }
+
+    /// Sorts the element types with respect to the numeric identifier.
+    void sortElementTypesById();
+
+    /// Sorts the types w.r.t. their name.
+    /// This method is used by file parsers that create element types on the
+    /// go while the read the data. In such a case, the type ordering
+    /// depends on the storage order of data elements in the loaded file, which is not desirable.
+    void sortElementTypesByName();
+
+    /// Helper method that remaps the existing type IDs to a contiguous range starting at the given
+    /// base ID. This method is mainly used for file output, because some file formats
+    /// work with numeric particle types only, which must form a contiguous range.
+    /// The method returns the mapping of output type IDs to original type IDs
+    /// and a copy of the property array in which the original type ID values have
+    /// been remapped to the output IDs.
+    std::tuple<std::map<int,int>, ConstPropertyPtr> generateContiguousTypeIdMapping(int baseId = 1) const;
+
+    /// Returns the display title of this property object in the user interface.
+    virtual QString objectTitle() const override;
+
+    /// Throws an exception with an informative text if the given string is not a valid name for an OVITO property.
+    /// For example, to be valid, the name must not contains any dots.
+    static void throwIfInvalidPropertyName(const QStringView name);
+
+    /// Throws an exception with an informative text if the given string is not a valid name for an OVITO vector property component.
+    /// For example, to be valid, the name must not contains any dots or spaces.
+    static void throwIfInvalidPropertyComponentName(const QStringView name);
+
+    /// Performs name mangling if necessary to turn the given name into a valid property name.
+    static QString makePropertyNameValid(const QString& name);
+
+    /// Performs name mangling if necessary to turn the given name into a valid vector property component name.
+    static QString makeComponentNameValid(const QString& name);
+
+protected:
+
+    /// Loads the class' contents from the given stream.
+    virtual void loadFromStream(ObjectLoadStream& stream) override;
+
+    /// Creates a copy of this object.
+    virtual OORef<RefTarget> clone(bool deepCopy, CloneHelper& cloneHelper) const override;
+
+    /// Is called when the value of a property of this object has changed.
+    virtual void propertyChanged(const PropertyFieldDescriptor* field) override;
+
+private:
+
+    /// Contains the list of defined "types" if this is a typed property.
+    DECLARE_MODIFIABLE_VECTOR_REFERENCE_FIELD(DataOORef<const ElementType>, elementTypes, setElementTypes);
+
+    /// The optional title of this property, which is shown in the GUI.
+    /// If not set, the property's identifier is used as title.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(QString{}, title, setTitle);
+
+    /// The kind of this property (non-zero = predefined standard property; zero = a user-defined property).
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(int{0}, typeId, setTypeId);
+
+    /// Pointer to the access guard object while the Python side accesses this property's memory buffer.
+    /// The reference is weak, because the guard keeps this property alive and not the other way around: it is
+    /// owned by the NumPy array views handed out to Python and expires as soon as the last one is released.
+    /// While a guard exists, isBeingAccessedExternally() returns true and this property is never modified in
+    /// place - PropertyContainer substitutes a clone instead. See BufferPythonAccessGuard (StdObjPython plugin).
+    std::weak_ptr<BufferPythonAccessGuard> _pythonAccessGuard;
+
+    friend class BufferPythonAccessGuard;
+};
+
+/// Smart-pointer to a mutable Property.
+using PropertyPtr = DataOORef<Property>;
+
+/// Smart-pointer to a read-only Property.
+using ConstPropertyPtr = DataOORef<const Property>;
+
+/// A data object reference to a Property in a data collection.
+using PropertyDataObjectReference = TypedDataObjectReference<Property>;
+
+}   // End of namespace
+
+Q_DECLARE_METATYPE(Ovito::PropertyDataObjectReference);

@@ -1,0 +1,662 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/gui/desktop/GUI.h>
+#include <ovito/gui/desktop/properties/SubObjectParameterUI.h>
+#include <ovito/gui/desktop/properties/ColorParameterUI.h>
+#include <ovito/gui/desktop/properties/IntegerParameterUI.h>
+#include <ovito/gui/desktop/properties/StringParameterUI.h>
+#include <ovito/gui/desktop/properties/BooleanParameterUI.h>
+#include <ovito/gui/desktop/properties/BooleanGroupBoxParameterUI.h>
+#include <ovito/gui/desktop/properties/FloatParameterUI.h>
+#include <ovito/gui/desktop/properties/IntegerRadioButtonParameterUI.h>
+#include <ovito/gui/desktop/properties/BooleanRadioButtonParameterUI.h>
+#include <ovito/gui/desktop/dialogs/SaveImageFileDialog.h>
+#include <ovito/gui/desktop/mainwin/MainWindow.h>
+#include <ovito/gui/desktop/mainwin/ViewportsPanel.h>
+#include <ovito/gui/desktop/widgets/general/HtmlListWidget.h>
+#include <ovito/gui/base/actions/ActionManager.h>
+#include <ovito/core/rendering/RenderSettings.h>
+#include <ovito/core/rendering/SceneRenderer.h>
+#include <ovito/core/app/PluginManager.h>
+#include <ovito/core/utilities/io/video/VideoEncoder.h>
+#include <ovito/gui/desktop/dialogs/FFmpegSettingsPage.h>
+
+#include <algorithm>
+#include "RenderSettingsEditor.h"
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(RenderSettingsEditor);
+DEFINE_REFERENCE_FIELD(RenderSettingsEditor, activeViewport);
+SET_OVITO_OBJECT_EDITOR(RenderSettings, RenderSettingsEditor);
+
+// Predefined output image dimensions.
+static constexpr inline int imageSizePresets[][2] = {
+    {600, 600},
+    {800, 600},
+    {1024, 768},
+    {1280, 720},
+    {1000, 1000},
+    {1600, 1200},
+    {1920, 1080},
+};
+
+/******************************************************************************
+* Constructor that creates the UI controls for the editor.
+******************************************************************************/
+void RenderSettingsEditor::createUI(const RolloutInsertionParameters& rolloutParams)
+{
+    // Create the rollout.
+    QWidget* rollout = createRollout(tr("Render settings"), rolloutParams, "manual:core.render_settings");
+
+    QVBoxLayout* layout = new QVBoxLayout(rollout);
+    layout->setContentsMargins(4,4,4,4);
+
+    // Rendering range
+    {
+        QGroupBox* groupBox = new QGroupBox(tr("Rendering range"));
+        layout->addWidget(groupBox);
+
+        QVBoxLayout* layout2 = new QVBoxLayout(groupBox);
+        layout2->setContentsMargins(4,4,4,4);
+        layout2->setSpacing(2);
+        QGridLayout* layout2c = new QGridLayout();
+        layout2c->setContentsMargins(0,0,0,0);
+        layout2c->setSpacing(2);
+        layout2->addLayout(layout2c);
+
+        IntegerRadioButtonParameterUI* renderingRangeTypeUI =
+            createParamUI<IntegerRadioButtonParameterUI>(PROPERTY_FIELD(RenderSettings::renderingRangeType));
+
+        QRadioButton* currentFrameButton = renderingRangeTypeUI->addRadioButton(RenderSettings::CURRENT_FRAME, tr("Single frame"));
+        layout2c->addWidget(currentFrameButton, 0, 0);
+
+        QRadioButton* animationIntervalButton = renderingRangeTypeUI->addRadioButton(RenderSettings::ANIMATION_INTERVAL, tr("Complete animation"));
+        layout2c->addWidget(animationIntervalButton, 1, 0);
+
+        QRadioButton* customIntervalButton = renderingRangeTypeUI->addRadioButton(RenderSettings::CUSTOM_INTERVAL, tr("Range:"));
+        layout2c->addWidget(customIntervalButton, 2, 0);
+
+        _videoLengthLabel = new QLabel();
+        _videoLengthLabel->setVisible(false);
+        _videoLengthLabel->setAlignment(Qt::AlignRight | Qt::AlignTop);
+        QFont smallFont = _videoLengthLabel->font();
+        smallFont.setPointSizeF(smallFont.pointSizeF() * 3 / 4);
+        _videoLengthLabel->setFont(smallFont);
+        layout2c->addWidget(_videoLengthLabel, 0, 1, 3, 1, Qt::AlignRight | Qt::AlignTop);
+
+        QHBoxLayout* layout2b = new QHBoxLayout();
+        layout2b->setContentsMargins(0,0,0,0);
+        layout2b->setSpacing(2);
+        layout2b->addSpacing(30);
+
+        IntegerParameterUI* customRangeStartUI = createParamUI<IntegerParameterUI>(PROPERTY_FIELD(RenderSettings::customRangeStart));
+        customRangeStartUI->setEnabled(false);
+        layout2b->addLayout(customRangeStartUI->createFieldLayout());
+        layout2b->addWidget(new QLabel(tr("to")));
+        IntegerParameterUI* customRangeEndUI = createParamUI<IntegerParameterUI>(PROPERTY_FIELD(RenderSettings::customRangeEnd));
+        customRangeEndUI->setEnabled(false);
+        layout2b->addLayout(customRangeEndUI->createFieldLayout());
+        layout2->addLayout(layout2b);
+        connect(customIntervalButton, &QRadioButton::toggled, customRangeStartUI, &IntegerParameterUI::setEnabled);
+        connect(customIntervalButton, &QRadioButton::toggled, customRangeEndUI, &IntegerParameterUI::setEnabled);
+
+        QGridLayout* layout2a = new QGridLayout();
+        layout2a->setContentsMargins(0,6,0,0);
+        layout2a->setSpacing(2);
+        layout2->addLayout(layout2a);
+        IntegerParameterUI* everyNthFrameUI = createParamUI<IntegerParameterUI>(PROPERTY_FIELD(RenderSettings::everyNthFrame));
+        layout2a->addWidget(everyNthFrameUI->label(), 0, 0);
+        layout2a->addLayout(everyNthFrameUI->createFieldLayout(), 0, 1);
+        IntegerParameterUI* fileNumberBaseUI = createParamUI<IntegerParameterUI>(PROPERTY_FIELD(RenderSettings::fileNumberBase));
+        layout2a->addWidget(fileNumberBaseUI->label(), 1, 0);
+        layout2a->addLayout(fileNumberBaseUI->createFieldLayout(), 1, 1);
+        layout2a->setColumnStretch(2, 1);
+        connect(currentFrameButton, &QRadioButton::toggled, everyNthFrameUI, &IntegerParameterUI::setDisabled);
+        connect(currentFrameButton, &QRadioButton::toggled, fileNumberBaseUI, &IntegerParameterUI::setDisabled);
+
+        QPushButton* animSettingsBtn = new QPushButton(tr("Animation settings..."));
+        layout2->addWidget(animSettingsBtn);
+        connect(animSettingsBtn, &QPushButton::clicked, ui().actionManager()->getAction(ACTION_ANIMATION_SETTINGS), &QAction::trigger);
+    }
+
+    // Output size
+    BooleanParameterUI* renderAllViewportsUI;
+    {
+        QGroupBox* groupBox = new QGroupBox(tr("Output image size"));
+        layout->addWidget(groupBox);
+        QGridLayout* layout2 = new QGridLayout(groupBox);
+        layout2->setContentsMargins(4,4,4,4);
+        layout2->setSpacing(2);
+        layout2->setColumnStretch(1, 1);
+
+        // Image width parameter.
+        IntegerParameterUI* imageWidthUI = createParamUI<IntegerParameterUI>(PROPERTY_FIELD(RenderSettings::outputImageWidth));
+        layout2->addWidget(imageWidthUI->label(), 0, 0);
+        layout2->addLayout(imageWidthUI->createFieldLayout(), 0, 1);
+
+        // Image height parameter.
+        IntegerParameterUI* imageHeightUI = createParamUI<IntegerParameterUI>(PROPERTY_FIELD(RenderSettings::outputImageHeight));
+        layout2->addWidget(imageHeightUI->label(), 1, 0);
+        layout2->addLayout(imageHeightUI->createFieldLayout(), 1, 1);
+
+        _sizePresetsBox = new QComboBox(groupBox);
+        _sizePresetsBox->addItem(tr("Presets..."));
+        _sizePresetsBox->insertSeparator(1);
+        for(size_t i = 0; i < std::size(imageSizePresets); i++)
+            _sizePresetsBox->addItem(tr("%1 x %2").arg(imageSizePresets[i][0]).arg(imageSizePresets[i][1]));
+        connect(_sizePresetsBox, qOverload<int>(&QComboBox::activated), this, &RenderSettingsEditor::onSizePresetActivated);
+        layout2->addWidget(_sizePresetsBox, 0, 2);
+
+        QVBoxLayout* sublayout = new QVBoxLayout();
+        sublayout->setContentsMargins(0,2,0,0);
+        layout2->addLayout(sublayout, 2, 0, 1, 3);
+
+        _viewportPreviewModeBox = new QCheckBox(tr("Preview visible region"));
+        sublayout->addWidget(_viewportPreviewModeBox);
+        connect(&datasetContainer(), &DataSetContainer::activeViewportChanged, this, &RenderSettingsEditor::onActiveViewportChanged);
+        connect(_viewportPreviewModeBox, &QCheckBox::clicked, this, &RenderSettingsEditor::onViewportPreviewModeToggled);
+        onActiveViewportChanged(activeViewport());
+
+        renderAllViewportsUI = createParamUI<BooleanParameterUI>(PROPERTY_FIELD(RenderSettings::renderAllViewports));
+        sublayout->addWidget(renderAllViewportsUI->checkBox());
+#ifndef OVITO_BUILD_PROFESSIONAL
+        renderAllViewportsUI->setEnabled(false);
+        renderAllViewportsUI->checkBox()->setText(tr("%1 (OVITO Pro)").arg(renderAllViewportsUI->checkBox()->text()));
+#endif
+    }
+
+    // Render output
+    {
+        QGroupBox* groupBox = new QGroupBox(tr("Render output"));
+        layout->addWidget(groupBox);
+        QGridLayout* layout2 = new QGridLayout(groupBox);
+        layout2->setContentsMargins(4,4,4,4);
+        layout2->setSpacing(2);
+        layout2->setColumnStretch(0, 1);
+
+        BooleanParameterUI* saveFileUI = createParamUI<BooleanParameterUI>(PROPERTY_FIELD(RenderSettings::saveToFile));
+        layout2->addWidget(saveFileUI->checkBox(), 0, 0);
+
+        QPushButton* chooseFilenameBtn = new QPushButton(tr("Choose..."), rollout);
+        connect(chooseFilenameBtn, &QPushButton::clicked, this, &RenderSettingsEditor::onChooseImageFilename);
+        layout2->addWidget(chooseFilenameBtn, 0, 1);
+
+        // Output filename parameter.
+        StringParameterUI* imageFilenameUI = createParamUI<StringParameterUI>(PROPERTY_FIELD(RenderSettings::imageFilename));
+        imageFilenameUI->setEnabled(false);
+        layout2->addWidget(imageFilenameUI->textBox(), 1, 0, 1, 2);
+
+        // External / internal FFmpeg label.
+        _externalFFmpegLabel = new QLabel();
+        _externalFFmpegLabel->setWordWrap(true);
+        QFont smallFont = _externalFFmpegLabel->font();
+        smallFont.setPointSizeF(smallFont.pointSizeF() * 3 / 4);
+        _externalFFmpegLabel->setFont(smallFont);
+
+        // Configure hyperlink into application into settings menu
+        _externalFFmpegLabel->setTextInteractionFlags(Qt::LinksAccessibleByMouse);
+        connect(_externalFFmpegLabel, &QLabel::linkActivated, this, [this]() {
+            ApplicationSettingsDialog dlg(ui(), &FFmpegSettingsPage::OOClass());
+            dlg.exec();
+        });
+
+        // Keep space for the label
+        QSizePolicy sp = _externalFFmpegLabel->sizePolicy();
+        sp.setRetainSizeWhenHidden(true);
+        _externalFFmpegLabel->setSizePolicy(sp);
+
+        layout2->addWidget(_externalFFmpegLabel, 2, 0, 1, 2);
+
+        connect(this, &RenderSettingsEditor::contentsChanged, this, &RenderSettingsEditor::updateExternalFFmpegLabel);
+        connect(Application::instance(), &Application::settingsChanged, this, &RenderSettingsEditor::updateExternalFFmpegLabel);
+    }
+
+    // Background
+    {
+        QGroupBox* groupBox = new QGroupBox(tr("Background"));
+        layout->addWidget(groupBox);
+        QGridLayout* layout2 = new QGridLayout(groupBox);
+        layout2->setContentsMargins(4,4,4,4);
+        layout2->setSpacing(2);
+
+        // Background color parameter.
+        ColorParameterUI* backgroundColorPUI = createParamUI<ColorParameterUI>(PROPERTY_FIELD(RenderSettings::backgroundColorController));
+        layout2->addWidget(backgroundColorPUI->colorPicker(), 0, 1, 1, 2);
+
+        // Alpha channel.
+        BooleanRadioButtonParameterUI* generateAlphaUI = createParamUI<BooleanRadioButtonParameterUI>(PROPERTY_FIELD(RenderSettings::generateAlphaChannel));
+        layout2->addWidget(generateAlphaUI->buttonFalse(), 0, 0, 1, 1);
+        layout2->addWidget(generateAlphaUI->buttonTrue(), 1, 0, 1, 3);
+        generateAlphaUI->buttonFalse()->setText(tr("Color:"));
+        generateAlphaUI->buttonTrue()->setText(tr("Transparent"));
+    }
+
+#ifndef Q_OS_MACOS
+    QHBoxLayout* sublayout = new QHBoxLayout();
+    sublayout->setContentsMargins(4,4,4,4);
+    sublayout->setSpacing(4);
+#else
+    QHBoxLayout* sublayout = new QHBoxLayout();
+    sublayout->setContentsMargins(0,0,0,0);
+    sublayout->setSpacing(4);
+#endif
+    layout->addLayout(sublayout);
+
+    // Create render button.
+    QPushButton* renderButton = new QPushButton();
+    renderButton->setAutoDefault(true);
+    QAction* renderAction = ui().actionManager()->getAction(ACTION_RENDER_ACTIVE_VIEWPORT);
+    renderButton->setText(tr("Render active viewport"));
+    renderButton->setIcon(renderAction->icon());
+    connect(renderButton, &QPushButton::clicked, renderAction, &QAction::trigger);
+    connect(renderAllViewportsUI->checkBox(), &QAbstractButton::toggled, this, [=](bool checked) {
+        renderButton->setText(checked ? tr("Render all viewports") : tr("Render active viewport"));
+    });
+    sublayout->addWidget(renderButton, 3);
+
+    // Create 'Switch renderer' button.
+    QPushButton* switchRendererButton = new QPushButton(tr("Switch renderer..."));
+    connect(switchRendererButton, &QPushButton::clicked, this, &RenderSettingsEditor::onSwitchRenderer);
+#ifndef Q_OS_MACOS
+    sublayout->addWidget(switchRendererButton, 1);
+#else
+    switchRendererButton->setToolTip(switchRendererButton->text());
+    switchRendererButton->setText({});
+    switchRendererButton->setIcon(QIcon::fromTheme("application_preferences"));
+    sublayout->addWidget(switchRendererButton, 1);
+#endif
+
+    // Open a sub-editor for the renderer. Its rollouts are inserted directly behind the main rollout,
+    // also when the user switches to a different rendering backend later on.
+    createParamUI<SubObjectParameterUI>(PROPERTY_FIELD(RenderSettings::renderer), rolloutParams.after(rollout));
+
+    // Create the rollout for the post-processing effects. These parameters apply to every rendering
+    // backend alike, which is why they are part of the render settings and not of the renderer itself.
+    // The rollout is appended at the very end of the container (note the absence of an anchor), so that
+    // it keeps sitting below the renderer's own rollouts no matter how many of those there are.
+    QWidget* postProcessingRollout = createRollout(tr("Post-processing effects"), rolloutParams, "manual:rendering.render_settings");
+    QVBoxLayout* postProcessingLayout = new QVBoxLayout(postProcessingRollout);
+    postProcessingLayout->setContentsMargins(4, 4, 4, 4);
+
+    // Outlines
+    BooleanGroupBoxParameterUI* outlinesGroupBox =
+        createParamUI<BooleanGroupBoxParameterUI>(PROPERTY_FIELD(RenderSettings::outlinesEnabled));
+    postProcessingLayout->addWidget(outlinesGroupBox->groupBox());
+
+    QGridLayout* outlinesLayout = new QGridLayout(outlinesGroupBox->childContainer());
+    outlinesLayout->setContentsMargins(4, 4, 4, 4);
+    outlinesLayout->setSpacing(4);
+    outlinesLayout->setColumnStretch(1, 1);
+    outlinesLayout->setColumnStretch(2, 1);
+
+    int outlinesRow = 0;
+    QRadioButton* uniformOutlinesBtn = new QRadioButton(tr("Uniform width"));
+    QRadioButton* variableOutlinesBtn = new QRadioButton(tr("Variable width"));
+    outlinesLayout->addWidget(uniformOutlinesBtn, outlinesRow, 1);
+    outlinesLayout->addWidget(variableOutlinesBtn, outlinesRow++, 2);
+
+    QLabel* fromLabel = new QLabel(tr("From:"));
+    outlinesLayout->addWidget(fromLabel, outlinesRow, 1);
+    QLabel* toLabel = new QLabel(tr("To:"));
+    outlinesLayout->addWidget(toLabel, outlinesRow++, 2);
+
+    FloatParameterUI* minDepthDiffUI = createParamUI<FloatParameterUI>(PROPERTY_FIELD(RenderSettings::minDepthDiff));
+    FloatParameterUI* maxDepthDiffUI = createParamUI<FloatParameterUI>(PROPERTY_FIELD(RenderSettings::maxDepthDiff));
+    outlinesLayout->addWidget(new QLabel(tr("Difference in depth:")), outlinesRow, 0);
+    outlinesLayout->addLayout(minDepthDiffUI->createFieldLayout(), outlinesRow, 1);
+    outlinesLayout->addLayout(maxDepthDiffUI->createFieldLayout(), outlinesRow++, 2);
+
+    FloatParameterUI* minOutlineWidthUI = createParamUI<FloatParameterUI>(PROPERTY_FIELD(RenderSettings::minOutlineWidth));
+    FloatParameterUI* maxOutlineWidthUI = createParamUI<FloatParameterUI>(PROPERTY_FIELD(RenderSettings::maxOutlineWidth));
+    outlinesLayout->addWidget(new QLabel(tr("Outline width:")), outlinesRow, 0);
+    outlinesLayout->addLayout(minOutlineWidthUI->createFieldLayout(), outlinesRow, 1);
+    outlinesLayout->addLayout(maxOutlineWidthUI->createFieldLayout(), outlinesRow++, 2);
+
+    BooleanParameterUI* customOutlineColorUI = createParamUI<BooleanParameterUI>(PROPERTY_FIELD(RenderSettings::useCustomOutlineColor));
+    outlinesLayout->addWidget(customOutlineColorUI->checkBox(), outlinesRow, 0);
+
+    ColorParameterUI* outlineColorUI = createParamUI<ColorParameterUI>(PROPERTY_FIELD(RenderSettings::outlineColor));
+    outlinesLayout->addWidget(outlineColorUI->colorPicker(), outlinesRow++, 1, 1, 2);
+    outlineColorUI->setEnabled(false);
+
+    connect(customOutlineColorUI->checkBox(), &QAbstractButton::toggled, outlineColorUI, &ParameterUI::setEnabled);
+
+    connect(uniformOutlinesBtn, &QRadioButton::toggled, this, [=, this]() {
+        if(editObject() && uniformOutlinesBtn->isChecked()) {
+            performTransaction(tr("Change outline mode"), [&]() {
+                RenderSettings* settings = static_object_cast<RenderSettings>(editObject());
+                // use inf as special value to indicate uniform mode
+                settings->setMaxDepthDiff(std::numeric_limits<FloatType>::infinity());
+                // copy min outline width into max outline width
+                settings->setMaxOutlineWidth(settings->minOutlineWidth());
+            });
+        }
+    });
+    connect(variableOutlinesBtn, &QRadioButton::toggled, this, [=, this]() {
+        // populate values from uniform settings
+        if(editObject() && variableOutlinesBtn->isChecked()) {
+            performTransaction(tr("Change outline mode"), [&]() {
+                RenderSettings* settings = static_object_cast<RenderSettings>(editObject());
+                // reset max depth to reasonable value
+                settings->setMaxDepthDiff(10.0 * settings->minDepthDiff());
+                // copy min outline width into max outline width
+                settings->setMaxOutlineWidth(settings->minOutlineWidth());
+            });
+        }
+    });
+
+    connect(this, &PropertiesEditor::contentsChanged, this, [=, this]() {
+        if(!editObject()) return;
+        // Deactivate signals to avoid changing numerical values when adjusting the radio buttons
+        variableOutlinesBtn->blockSignals(true);
+        uniformOutlinesBtn->blockSignals(true);
+
+        RenderSettings* settings = static_object_cast<RenderSettings>(editObject());
+        if(std::isinf(settings->maxDepthDiff())) {
+            // uniform outline mode
+            // set the radio button state when a scene is loaded or during undo actions
+            uniformOutlinesBtn->setChecked(true);
+            variableOutlinesBtn->setChecked(false);
+
+            // set label text to empty -> keep vertical space in layout
+            fromLabel->setText({});
+            toLabel->setText({});
+
+            // hide spinners
+            maxDepthDiffUI->textBox()->hide();
+            maxDepthDiffUI->spinner()->hide();
+            maxDepthDiffUI->menuToolButton()->hide();
+
+            maxOutlineWidthUI->textBox()->hide();
+            maxOutlineWidthUI->spinner()->hide();
+            maxOutlineWidthUI->menuToolButton()->hide();
+        }
+        else {
+            // variable width outline mode
+            // set the radio button state when a scene is loaded or during undo actions
+            uniformOutlinesBtn->setChecked(false);
+            variableOutlinesBtn->setChecked(true);
+
+            // reset label text
+            fromLabel->setText(tr("From:"));
+            toLabel->setText(tr("To:"));
+
+            // show spinners
+            maxDepthDiffUI->textBox()->show();
+            maxDepthDiffUI->spinner()->show();
+            maxDepthDiffUI->menuToolButton()->show();
+
+            maxOutlineWidthUI->textBox()->show();
+            maxOutlineWidthUI->spinner()->show();
+            maxOutlineWidthUI->menuToolButton()->show();
+        }
+        // Reactivate signals
+        variableOutlinesBtn->blockSignals(false);
+        uniformOutlinesBtn->blockSignals(false);
+    });
+
+    // Update displayed video length when relevant parameters change.
+    connect(this, &PropertiesEditor::contentsChanged, this, &RenderSettingsEditor::updateVideoLengthDisplay);
+    connect(&ui().datasetContainer(), &DataSetContainer::animationIntervalChanged, this, &RenderSettingsEditor::updateVideoLengthDisplay);
+    connect(&ui().datasetContainer(), &DataSetContainer::framesPerSecondChanged, this, &RenderSettingsEditor::updateVideoLengthDisplay);
+}
+
+/******************************************************************************
+* Lets the user choose a filename for the output image.
+******************************************************************************/
+void RenderSettingsEditor::onChooseImageFilename()
+{
+    RenderSettings* settings = static_object_cast<RenderSettings>(editObject());
+    if(!settings) return;
+
+    SaveImageFileDialog fileDialog(ui(), container(), tr("Output image file"), true, settings->imageInfo());
+    if(fileDialog.exec()) {
+        performTransaction(tr("Change output file"), [settings, &fileDialog]() {
+            settings->setImageInfo(fileDialog.imageInfo());
+            settings->setSaveToFile(true);
+        });
+    }
+    // Update the ffmpeg label
+    updateExternalFFmpegLabel();
+}
+
+/******************************************************************************
+* Is called when the user selects an output size preset from the drop-down list.
+******************************************************************************/
+void RenderSettingsEditor::onSizePresetActivated(int index)
+{
+    RenderSettings* settings = static_object_cast<RenderSettings>(editObject());
+    if(settings && index >= 2 && index < 2 + std::size(imageSizePresets)) {
+        performTransaction(tr("Change output dimensions"), [settings, index]() {
+            settings->setOutputImageWidth(imageSizePresets[index-2][0]);
+            settings->setOutputImageHeight(imageSizePresets[index-2][1]);
+            PROPERTY_FIELD(RenderSettings::outputImageWidth)->memorizeDefaultValue(settings);
+            PROPERTY_FIELD(RenderSettings::outputImageHeight)->memorizeDefaultValue(settings);
+        });
+    }
+    _sizePresetsBox->setCurrentIndex(0);
+}
+
+/******************************************************************************
+* Lets the user choose a different plug-in rendering engine.
+******************************************************************************/
+void RenderSettingsEditor::onSwitchRenderer()
+{
+    RenderSettings* settings = static_object_cast<RenderSettings>(editObject());
+    if(!settings) return;
+
+    std::vector<OvitoClassPtr> rendererClasses = PluginManager::instance().listClasses(SceneRenderer::OOClass());
+
+    // Filter out internal renderer implementations, which should not be visible to the user.
+    // Internal renderer implementation have no UI description string.
+    std::erase_if(rendererClasses, [](OvitoClassPtr clazz) { return clazz->descriptionString().isEmpty(); });
+
+    // Preferred ordering of renderers:
+    const QStringList displayOrdering = {
+        "StandardRenderer",
+        "TachyonRenderer",
+        "OSPRayRenderer",
+        "OffscreenAnariRenderer"
+    };
+    std::ranges::sort(rendererClasses, [&displayOrdering](OvitoClassPtr a, OvitoClassPtr b) {
+        int ia = displayOrdering.indexOf(a->name());
+        int ib = displayOrdering.indexOf(b->name());
+        if(ia == -1 && ib == -1)
+            return a->displayName() < b->displayName();
+        else if(ia == -1)
+            return false;
+        else if(ib == -1)
+            return true;
+        else
+            return ia < ib;
+    });
+
+    QDialog dlg(container());
+    dlg.setWindowTitle(tr("Switch renderer"));
+    QGridLayout* layout = new QGridLayout(&dlg);
+
+    QLabel* label = new QLabel(tr("Select the rendering engine to be used for generating output images and movies."));
+    label->setWordWrap(true);
+    layout->addWidget(label, 0, 0, 1, 2);
+
+    QListWidget* rendererListWidget = new HtmlListWidget(&dlg);
+    for(OvitoClassPtr clazz : rendererClasses) {
+        QString text = QStringLiteral("<p style=\"font-weight: bold;\">") + clazz->displayName() + QStringLiteral("</p>");
+        QString description = clazz->descriptionString();
+        if(!description.isEmpty())
+            text += QStringLiteral("<p style=\"font-size: small;\">") + description + QStringLiteral("</p>");
+        QListWidgetItem* item = new QListWidgetItem(text, rendererListWidget);
+        if(settings->renderer() && &settings->renderer()->getOOClass() == clazz)
+            rendererListWidget->setCurrentItem(item);
+    }
+    layout->addWidget(rendererListWidget, 1, 0, 1, 2);
+    layout->setRowStretch(1, 1);
+    layout->setColumnStretch(1, 1);
+
+    QDialogButtonBox* buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Help);
+    connect(buttonBox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttonBox, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    connect(buttonBox, &QDialogButtonBox::helpRequested, this, [&]() {
+        ui().actionManager()->openHelpTopic("manual:usage.rendering");
+    });
+    connect(rendererListWidget, &QListWidget::itemDoubleClicked, &dlg, &QDialog::accept);
+    layout->addWidget(buttonBox, 2, 1, Qt::AlignRight);
+
+    if(dlg.exec() != QDialog::Accepted)
+        return;
+
+    QList<QListWidgetItem*> selItems = rendererListWidget->selectedItems();
+    if(selItems.empty()) return;
+
+    int newIndex = rendererListWidget->row(selItems.front());
+    if(!settings->renderer() || &settings->renderer()->getOOClass() != rendererClasses[newIndex]) {
+        performTransaction(tr("Switch renderer"), [settings, newIndex, &rendererClasses]() {
+            OORef<SceneRenderer> renderer = static_object_cast<SceneRenderer>(rendererClasses[newIndex]->createInstance());
+            settings->setRenderer(std::move(renderer));
+        });
+    }
+}
+
+/******************************************************************************
+* This is called when another viewport became active.
+******************************************************************************/
+void RenderSettingsEditor::onActiveViewportChanged(Viewport* activeViewport)
+{
+    _activeViewport.set(this, PROPERTY_FIELD(activeViewport), activeViewport);
+}
+
+/******************************************************************************
+* This method is called when a referenced object has changed.
+******************************************************************************/
+bool RenderSettingsEditor::referenceEvent(RefTarget* source, const ReferenceEvent& event)
+{
+    if(source == activeViewport() && event.type() == ReferenceEvent::TargetChanged) {
+        _viewportPreviewModeBox->setChecked(activeViewport()->renderPreviewMode());
+    }
+    return PropertiesEditor::referenceEvent(source, event);
+}
+
+/******************************************************************************
+* Gets called when the data provider of the pipeline has been replaced.
+******************************************************************************/
+void RenderSettingsEditor::referenceReplaced(const PropertyFieldDescriptor* field, RefTarget* oldTarget, RefTarget* newTarget, int listIndex)
+{
+    if(field == PROPERTY_FIELD(activeViewport) && !shouldIgnoreChanges()) {
+        _viewportPreviewModeBox->setEnabled(activeViewport() != nullptr);
+        _viewportPreviewModeBox->setChecked(activeViewport() && activeViewport()->renderPreviewMode());
+    }
+    PropertiesEditor::referenceReplaced(field, oldTarget, newTarget, listIndex);
+}
+
+/******************************************************************************
+* Is called when the user toggles the preview mode checkbox.
+******************************************************************************/
+void RenderSettingsEditor::onViewportPreviewModeToggled(bool checked)
+{
+    if(RenderSettings* rs = static_object_cast<RenderSettings>(editObject())) {
+        performTransaction(tr("Toggle preview mode"), [&]() {
+            if(!rs->renderAllViewports()) {
+                if(activeViewport())
+                    activeViewport()->setRenderPreviewMode(checked);
+            }
+            else {
+                if(ViewportConfiguration* viewportConfig = datasetContainer().activeViewportConfig()) {
+                    for(Viewport* vp : viewportConfig->viewports())
+                        vp->setRenderPreviewMode(checked);
+                }
+            }
+        });
+    }
+}
+
+/******************************************************************************
+* Updates the displayed video length based on the current render settings.
+* It takes into account the rendering range, the 'every Nth frame' setting
+* and the FPS parameter of the current AnimationSettings.
+******************************************************************************/
+void RenderSettingsEditor::updateVideoLengthDisplay()
+{
+    RenderSettings* settings = static_object_cast<RenderSettings>(editObject());
+    if(!settings || !activeAnimationSettings()) {
+        _videoLengthLabel->setVisible(false);
+        return;
+    }
+
+    // Determine the number of frames to be rendered.
+    int numberOfFrames;
+    if(settings->renderingRangeType() == RenderSettings::ANIMATION_INTERVAL) {
+        numberOfFrames = std::max(0, activeAnimationSettings()->numberOfFrames());
+    }
+    else if(settings->renderingRangeType() == RenderSettings::CUSTOM_INTERVAL) {
+        numberOfFrames = std::max(0, settings->customRangeEnd() - settings->customRangeStart() + 1);
+    }
+    else {
+        // When rendering a single frame, hide the video length display.
+        _videoLengthLabel->setVisible(false);
+        return;
+    }
+
+    // Take into account 'every Nth frame' setting.
+    // Note: Rounding behavior matches that of RenderSettings::render().
+    numberOfFrames = (numberOfFrames + settings->everyNthFrame() - 1) / settings->everyNthFrame();
+
+    // Determine FPS.
+    auto fps = activeAnimationSettings()->framesPerSecond();
+    if(fps <= 0)
+        return; // This should not happen.
+
+    // Compute video length.
+    int totalSeconds = static_cast<int>(std::round(numberOfFrames / fps));
+    int minutes = totalSeconds / 60;
+    int seconds = (totalSeconds % 60);
+
+    // Update display.
+    _videoLengthLabel->setVisible(true);
+    if(totalSeconds > 0)
+        _videoLengthLabel->setText(QStringLiteral(u"Video duration:\n%1:%2").arg(minutes, 2, 10, QChar('0')).arg(seconds, 2, 10, QChar('0')));
+    else
+        _videoLengthLabel->setText(tr("Video duration:\n< 1 sec"));
+}
+
+void RenderSettingsEditor::updateExternalFFmpegLabel()
+{
+    RenderSettings* renderSettings = static_object_cast<RenderSettings>(editObject());
+    if(!renderSettings) return;
+
+    if(renderSettings->saveToFile() && (renderSettings->renderingRangeType() == RenderSettings::ANIMATION_INTERVAL ||
+                                        renderSettings->renderingRangeType() == RenderSettings::CUSTOM_INTERVAL)) {
+        QSettings settings;
+        bool externalFFmpeg = settings.value(VideoEncoder::FFMPEG_USE_EXT_SETTING, false).toBool();
+        _externalFFmpegLabel->setVisible(true);
+        _externalFFmpegLabel->setText(externalFFmpeg ? tr("Using external video encoder (<a href=\"settings\">change...</a>)")
+                                                     : tr("Using built-in video encoder (<a href=\"settings\">change...</a>)"));
+    }
+    else {
+        // When rendering a single frame, hide the external ffmpeg display.
+        _externalFFmpegLabel->setVisible(false);
+        return;
+    }
+}
+
+}   // End of namespace

@@ -1,0 +1,91 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#version 450
+// Jump-flood outline path, stage 3/3: resolve.
+// Replaces outlines_resolve.comp when the JFA path is active.
+//
+// Converts the flooded seed field into the premultiplied RGBA8 outline layer:
+//
+//     alpha = clamp(penSize + 0.5 - distance(pixel, seed), 0, 1)
+//
+// Full coverage inside the pen radius, a ~1 px smooth falloff at the rim
+// (replacing the 1/8-step popcount coverage of the triangle scheme; the pen
+// footprint is circular instead of roughly octagonal). The per-pixel
+// occlusion suppression for ExcludeFromOutline geometry is applied unchanged.
+//
+// Binding layout is identical to outlines_resolve.comp, so the C++ side
+// reuses _resolveSrb for this dispatch.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(std140, binding = 0) uniform Params {
+    ivec2 size;
+    vec2  depthRange;
+    vec2  widthRange;
+    vec2  _pad;
+    vec4  color;       // outline rgb in .rgb
+    float nearPlane;
+    float farPlane;
+    int   isPerspective;
+    int   _padDepthRange; // unused (was depthZeroToOne)
+} P;
+
+layout(std430, binding = 1) readonly buffer Seeds { uvec2 seeds[]; };
+layout(rgba8, binding = 2) writeonly uniform image2D outlineLayer;
+// Per-pixel linearised depth of the frontmost ExcludeFromOutline surface (NO_EXCLUDED = none),
+// and the linearised eligible depth of every pixel (used to look up the seed edge's depth).
+layout(std430, binding = 3) readonly buffer ExclDepth { float exclDepth[]; };
+layout(std430, binding = 4) readonly buffer Depth     { float depthFixed[]; };
+
+const uint  INVALID_SEED = 0xFFFFFFFFu;
+const float NO_EXCLUDED  = 1.0e30;
+const float REACH_SCALE  = 256.0; // must match outlines_jfa_seed.comp
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if(p.x >= P.size.x || p.y >= P.size.y)
+        return;
+    int idx = p.y * P.size.x + p.x;
+
+    float a = 0.0;
+    uvec2 s = seeds[idx];
+    if(s.x != INVALID_SEED) {
+        ivec2 sp = ivec2(int(s.x & 0xFFFFu), int(s.x >> 16));
+        float d = distance(vec2(p), vec2(sp));
+        // Coverage of a band of half-width 'reach' centred on the silhouette edge. Since the seed
+        // pixel sits ~0.5 px inside the edge, the +0.5 rim and the -0.5 edge offset cancel, so the
+        // total visible thickness equals the requested width (width 1 -> two 50%-covered pixels).
+        float reach = float(s.y) / REACH_SCALE;
+        a = clamp(reach - d, 0.0, 1.0);
+
+        // Suppress this ring pixel only where an excluded surface is IN FRONT of the eligible
+        // silhouette edge that generated it (the seed). An excluded object behind that edge
+        // leaves the outline intact, so the ring correctly passes in front of it.
+        int sIdx = sp.y * P.size.x + sp.x;
+        if(exclDepth[idx] < depthFixed[sIdx])
+            a = 0.0;
+    }
+
+    imageStore(outlineLayer, p, vec4(P.color.rgb * a, a));
+}

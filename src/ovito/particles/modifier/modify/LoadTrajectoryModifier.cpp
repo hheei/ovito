@@ -1,0 +1,570 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/particles/Particles.h>
+#include <ovito/particles/objects/Particles.h>
+#include <ovito/particles/objects/Bonds.h>
+#include <ovito/stdobj/simcell/SimulationCell.h>
+#include <ovito/core/dataset/pipeline/ModificationNode.h>
+#include <ovito/core/dataset/io/FileSource.h>
+#include <ovito/core/dataset/animation/AnimationSettings.h>
+#include <ovito/core/dataset/data/AttributeDataObject.h>
+#include "LoadTrajectoryModifier.h"
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(LoadTrajectoryModifier);
+OVITO_CLASSINFO(LoadTrajectoryModifier, "DisplayName", "Load trajectory");
+OVITO_CLASSINFO(LoadTrajectoryModifier, "Description", "Load atomic trajectories or dynamic bonds from a trajectory file.");
+OVITO_CLASSINFO(LoadTrajectoryModifier, "ModifierCategory", "Modification");
+DEFINE_REFERENCE_FIELD(LoadTrajectoryModifier, trajectorySource);
+SET_PROPERTY_FIELD_LABEL(LoadTrajectoryModifier, trajectorySource, "Trajectory source");
+
+/******************************************************************************
+* Constructor.
+******************************************************************************/
+void LoadTrajectoryModifier::initializeObject(ObjectInitializationFlags flags)
+{
+    Modifier::initializeObject(flags);
+
+    if(!flags.testFlag(ObjectInitializationFlag::DontInitializeObject)) {
+        // Create the file source object, which will be responsible for loading
+        // and caching the trajectory data.
+        setTrajectorySource(OORef<FileSource>::create(flags));
+    }
+}
+
+/******************************************************************************
+* Asks the modifier whether it can be applied to the given input data.
+******************************************************************************/
+bool LoadTrajectoryModifier::OOMetaClass::isApplicableTo(const DataCollection& input) const
+{
+    return input.containsObject<Particles>();
+}
+
+/******************************************************************************
+* Replaces any references the modifier has to the given visual element with a new compatible object.
+******************************************************************************/
+void LoadTrajectoryModifier::replaceVisualElement(DataVis* visElement, const std::function<OORef<DataVis>(const QString&)>& getReplacement)
+{
+    if(trajectorySource())
+        trajectorySource()->replaceVisualElement(visElement, getReplacement);
+}
+
+/******************************************************************************
+ * Is called by the pipeline system before a new modifier evaluation begins.
+ ******************************************************************************/
+void LoadTrajectoryModifier::preevaluateModifier(const ModifierEvaluationRequest& request, PipelineEvaluationResult::EvaluationTypes& evaluationTypes, TimeInterval& validityInterval) const
+{
+    if(trajectorySource()) {
+        // Indicate that we will do different computations depending on whether the pipeline is evaluated in interactive mode or not.
+        if(request.interactiveMode())
+            evaluationTypes = PipelineEvaluationResult::EvaluationType::Interactive;
+        else
+            evaluationTypes = PipelineEvaluationResult::EvaluationType::Noninteractive;
+
+        trajectorySource()->preevaluate(request, evaluationTypes, validityInterval);
+    }
+}
+
+/******************************************************************************
+* Modifies the input data.
+******************************************************************************/
+Future<PipelineFlowState> LoadTrajectoryModifier::evaluateModifier(const ModifierEvaluationRequest& request, PipelineFlowState&& state)
+{
+    // Get the trajectory data source.
+    if(!trajectorySource())
+        throw Exception(tr("No trajectory data source has been set."));
+
+    if(request.interactiveMode()) {
+        // In interactive mode, reuse cached node output even though it might be outdated.
+        // This avoids rebuilding the particle positions too often.
+        if(PipelineFlowState cachedState = request.modificationNode()->getCachedPipelineNodeOutput(request.time(), true)) {
+            co_return std::move(cachedState);
+        }
+    }
+
+    // Copy parameters into the coroutine frame before the first suspension point.
+    const ModifierEvaluationRequest request_l = request;
+    PipelineFlowState state_l = std::move(state);
+
+    // Obtain the trajectory frame from the secondary pipeline.
+    PipelineEvaluationResult trajStateFuture = trajectorySource()->evaluate(request_l);
+
+    // Wait for the trajectory data to become available.
+    PipelineFlowState trajState = co_await FutureAwaiter(ObjectExecutor(request_l.modificationNode()), std::move(trajStateFuture).asFuture());
+
+    if(LoadTrajectoryModifier* trajModifier = dynamic_object_cast<LoadTrajectoryModifier>(request_l.modifier())) {
+        // Make sure the obtained configuration is valid and ready to use.
+        if(trajState.status().type() == PipelineStatus::Error) {
+            if(FileSource* fileSource = dynamic_object_cast<FileSource>(trajModifier->trajectorySource())) {
+                if(fileSource->sourceUrls().empty())
+                    throw Exception(tr("Please pick a trajectory file."));
+            }
+            state_l.setStatus(trajState.status());
+            co_return std::move(state_l);
+        }
+        else {
+            // Perform the heavy work in a worker thread.
+            co_await ExecutorAwaiter(ThreadPoolExecutor());
+            LoadTrajectoryModifier::applyTrajectoryState(state_l, trajState);
+        }
+    }
+
+    co_return std::move(state_l);
+}
+
+/******************************************************************************
+* Transfers the particle positions from the trajectory frame to the current
+* pipeline input state.
+******************************************************************************/
+void LoadTrajectoryModifier::applyTrajectoryState(PipelineFlowState& state, const PipelineFlowState& trajState)
+{
+    if(!trajState)
+        throw Exception(tr("Data source has not been specified yet or is empty. Please pick a trajectory file."));
+
+    // Merge validity intervals of topology and trajectory datasets.
+    state.intersectStateValidity(trajState.stateValidity());
+
+    // Get the current particle positions.
+    const Particles* trajectoryParticles = trajState.getObject<Particles>();
+    if(!trajectoryParticles)
+        throw Exception(tr("Trajectory dataset does not contain any particle dataset."));
+    trajectoryParticles->verifyIntegrity();
+
+    // Get the topology particle dataset.
+    Particles* particles = state.expectMutableObject<Particles>();
+    particles->verifyIntegrity();
+
+    // If the static topology dataset has PBC image flags but the trajectory does not,
+    // remove the image flags property to make the Unwrap Trajectories modifier work correctly.
+    // See https://matsci.org/t/load-trajectory-does-not-update-image-flags/
+    if(!trajectoryParticles->getProperty(Particles::PeriodicImageProperty)) {
+        if(const Property* pbcImageProperty = particles->getProperty(Particles::PeriodicImageProperty))
+            particles->removeProperty(pbcImageProperty);
+    }
+
+    if(trajectoryParticles->elementCount() != 0) {
+
+        // Build particle-to-particle index map.
+        std::vector<size_t> indexToIndexMap(particles->elementCount());
+        BufferReadAccess<IdentifierIntType> topoIdentifierProperty = particles->getProperty(Particles::IdentifierProperty);
+        BufferReadAccess<IdentifierIntType> trajIdentifierProperty = trajectoryParticles->getProperty(Particles::IdentifierProperty);
+        if(topoIdentifierProperty && trajIdentifierProperty) {
+
+            // Build map of particle identifiers in trajectory dataset.
+            std::unordered_map<IdentifierIntType, size_t> refMap;
+            refMap.reserve(trajIdentifierProperty.size());
+            size_t index = 0;
+            for(auto id : trajIdentifierProperty) {
+                if(refMap.insert(std::make_pair(id, index++)).second == false)
+                    throw Exception(tr("Particles with duplicate identifiers detected in trajectory dataset."));
+            }
+            trajIdentifierProperty.reset();
+
+            // Check for duplicate identifiers in topology dataset.
+            std::vector<IdentifierIntType> idSet(topoIdentifierProperty.cbegin(), topoIdentifierProperty.cend());
+            std::ranges::sort(idSet);
+            if(std::ranges::adjacent_find(idSet) != idSet.cend())
+                throw Exception(tr("Particles with duplicate identifiers detected in topology dataset."));
+
+            // Used to keep track of which topology particles are going to be deleted.
+            BufferFactory<SelectionIntType> deletionMask;
+
+            // Build mapping of particle indices from the topology dataset to the corresponding indices in the trajectory dataset.
+            auto mappedIndex = indexToIndexMap.begin();
+            size_t idx = 0;
+            for(auto id : topoIdentifierProperty) {
+                auto iter = refMap.find(id);
+                if(iter == refMap.end()) {
+                    // Existing particle from topology dataset was not found in the trajectory dataset --> Mark the particle for deletion.
+                    if(!deletionMask) {
+                        deletionMask = BufferFactory<SelectionIntType>(indexToIndexMap.size());
+                        std::ranges::fill(deletionMask, 0);
+                    }
+                    deletionMask[idx] = 1;
+                }
+                else {
+                    *mappedIndex++ = iter->second;
+                    refMap.erase(iter);
+                }
+                idx++;
+            }
+            topoIdentifierProperty.reset();
+
+            // Delete outdated particles, which have disappeared during the course of the simulation.
+            if(deletionMask) {
+                OVITO_ASSERT(mappedIndex < indexToIndexMap.end());
+                particles->deleteElements(deletionMask.take(), std::distance(mappedIndex, indexToIndexMap.end()));
+                indexToIndexMap.erase(mappedIndex, indexToIndexMap.end());
+            }
+            else {
+                OVITO_ASSERT(mappedIndex == indexToIndexMap.end());
+            }
+            OVITO_ASSERT(indexToIndexMap.size() == particles->elementCount());
+
+            // Check if the trajectory dataset contains excess particles that are not present in the topology dataset yet.
+            if(!refMap.empty()) {
+                // Insert the new particles after the existing particles in the topology dataset.
+                particles->setElementCount(particles->elementCount() + refMap.size());
+                indexToIndexMap.reserve(indexToIndexMap.size() + refMap.size());
+
+                // Extend index mapping and particle identifier property.
+                BufferWriteAccess<IdentifierIntType, access_mode::write> identifierProperty = particles->expectMutableProperty(Particles::IdentifierProperty);
+                auto id = identifierProperty.begin() + indexToIndexMap.size();
+                for(const auto& entry : refMap) {
+                    *id++ = entry.first;
+                    indexToIndexMap.push_back(entry.second);
+                }
+                OVITO_ASSERT(id == identifierProperty.end());
+                OVITO_ASSERT(indexToIndexMap.size() == particles->elementCount());
+            }
+        }
+        else {
+            // Topology dataset and trajectory data must contain the same number of particles.
+            // Also prevent a common mistake: User forgot to dump atom IDs to the trajectory file.
+            if(trajectoryParticles->elementCount() != particles->elementCount()) {
+                throw Exception(tr(
+                    "Cannot map trajectories to current particle dataset, because particles do not have "
+                    "identifiers and the numbers of particles in the trajectory file and in the topology file do not match."));
+            }
+            else if(topoIdentifierProperty) {
+                // We make an exception if topology identifiers are in sorted order forming a consecutive integer sequence.
+                // Gromacs GRO files, for example, contain atom numbers (IDs) and Gromacs XTC files do not.
+                // This exception has been introduced to support this particular combination of topology & trajectory files.
+                IdentifierIntType idx = 1;
+                for(const auto& id : topoIdentifierProperty) {
+                    if(id != idx++) {
+                        throw Exception(tr(
+                            "The particle identifiers in the topology dataset do not form a contiguous range of integers starting at 1, and the trajectory particles have no identifiers. "
+                            "The association of trajectories with their corresponding particles is ambiguous in this situation. "
+                            "Please ensure that either the trajectory file also contains identifiers, or that the particles in the topology dataset "
+                            "are sorted and have consecutive identifiers. The topology file reader may offer an option to sort particles by ID."));
+                    }
+                }
+            }
+            else if(trajIdentifierProperty) {
+                throw Exception(tr(
+                    "The particles in the trajectory file have identifiers but the particles in the topology file do not. "
+                    "The association of trajectories with corresponding particles is ambiguous in this situation. "
+                    "Please ensure that the topology file contains identifiers too, or synthesize identifiers from particle indices using the 'Compute Property' modifier first."));
+            }
+
+            // When particle identifiers are not available, use trivial 1-to-1 mapping.
+            boost::algorithm::iota(indexToIndexMap, size_t(0));
+        }
+
+        // Transfer particle properties from the trajectory file.
+        for(const Property* property : trajectoryParticles->properties()) {
+            if(property->typeId() == Particles::IdentifierProperty)
+                continue;
+
+            // Get or create the output particle property.
+            Property* outputProperty;
+            bool replacingProperty;
+            if(property->isStandardProperty()) {
+                replacingProperty = (particles->getPropertyLike(property) != nullptr);
+                outputProperty = particles->createProperty(DataBuffer::Initialized, property->typeId());
+                if(outputProperty->dataType() != property->dataType()
+                    || outputProperty->componentCount() != property->componentCount())
+                    continue; // Types of source property and output property are not compatible.
+            }
+            else {
+                replacingProperty = (particles->getProperty(property->name()) != nullptr);
+                outputProperty = particles->createProperty(DataBuffer::Initialized, property->name(),
+                    property->dataType(), property->componentCount());
+            }
+            OVITO_ASSERT(outputProperty->stride() == property->stride());
+
+            // Copy and reorder property data.
+            property->mappedCopyTo(*outputProperty, indexToIndexMap);
+
+            // Transfer the visual element(s) unless the property already existed in the topology dataset.
+            if(!replacingProperty) {
+                outputProperty->setVisElements(property->visElements());
+            }
+        }
+
+        // Transfer simulation cell geometry.
+        const SimulationCell* topologyCell = state.getObject<SimulationCell>();
+        const SimulationCell* trajectoryCell = trajState.getObject<SimulationCell>();
+        if(topologyCell && trajectoryCell) {
+            SimulationCell* outputCell = state.makeMutable(topologyCell);
+            outputCell->setCellMatrix(trajectoryCell->cellMatrix());
+            const AffineTransformation& simCell = trajectoryCell->cellMatrix();
+
+            // Trajectories of atoms may cross periodic boundaries and if atomic positions are
+            // stored in wrapped coordinates, then it becomes necessary to fix bonds using the minimum image convention.
+            const std::array<bool, 3> pbcFlags = topologyCell->pbcFlagsCorrected();
+            if((pbcFlags[0] || pbcFlags[1] || pbcFlags[2]) && particles->bonds() && !topologyCell->isDegenerate()) {
+                const AffineTransformation inverseCellMatrix = simCell.inverse();
+                const size_t numParticles = particles->elementCount();
+
+                Bonds* bonds = particles->makeBondsMutable();
+#ifdef OVITO_USE_SYCL
+                if(const Property* topologyProperty = bonds->getProperty(Bonds::TopologyProperty)) {
+                    Property* periodicImageProperty = bonds->createProperty(DataBuffer::Uninitialized, Bonds::PeriodicImageProperty);
+                    if(periodicImageProperty->size() != 0) {
+                        this_task::ui()->taskManager().syclQueue().submit([&](sycl::handler& cgh) {
+                            SyclBufferAccess<ParticleIndexPair, access_mode::read> topologyAcc{topologyProperty, cgh};
+                            SyclBufferAccess<Point3, access_mode::read> posInAcc{particles->expectProperty(Particles::PositionProperty), cgh};
+                            SyclBufferAccess<Vector3I, access_mode::discard_write> imageAcc{periodicImageProperty, cgh};
+                            OVITO_SYCL_PARALLEL_FOR(cgh, LoadTrajectoryModifier_bond_imageflags)(sycl::range(topologyAcc.size()), [=](size_t bondIndex) {
+                                const auto [particleIndex1, particleIndex2] = topologyAcc[bondIndex];
+                                if(particleIndex1 < numParticles && particleIndex2 < numParticles) {
+                                    const Vector3 rv = inverseCellMatrix * (posInAcc[particleIndex1] - posInAcc[particleIndex2]);
+                                    const Vector3I iflags(
+                                        pbcFlags[0] * static_cast<Vector3I::value_type>(sycl::round(rv.x())),
+                                        pbcFlags[1] * static_cast<Vector3I::value_type>(sycl::round(rv.y())),
+                                        pbcFlags[2] * static_cast<Vector3I::value_type>(sycl::round(rv.z()))
+                                    );
+                                    imageAcc[bondIndex] = iflags;
+                                }
+                                else {
+                                    imageAcc[bondIndex].setZero();
+                                }
+                            });
+                        });
+                    }
+                }
+#else
+                if(BufferReadAccess<ParticleIndexPair> topologyProperty = bonds->getProperty(Bonds::TopologyProperty)) {
+                    BufferWriteAccess<Vector3I, access_mode::discard_write> periodicImageProperty = bonds->createProperty(DataBuffer::Uninitialized, Bonds::PeriodicImageProperty);
+                    BufferReadAccess<Point3> positions = particles->expectProperty(Particles::PositionProperty);
+
+                    // Wrap bonds crossing a periodic boundary by resetting their PBC shift vectors.
+                    for(size_t bondIndex = 0; bondIndex < topologyProperty.size(); bondIndex++) {
+                        Vector3I& pbcShift = periodicImageProperty[bondIndex];
+                        size_t particleIndex1 = topologyProperty[bondIndex][0];
+                        size_t particleIndex2 = topologyProperty[bondIndex][1];
+                        if(particleIndex1 >= numParticles || particleIndex2 >= numParticles) {
+                            pbcShift.setZero();
+                            continue;
+                        }
+                        const Point3& p1 = positions[particleIndex1];
+                        const Point3& p2 = positions[particleIndex2];
+                        const Vector3 delta = p1 - p2;
+                        for(int dim = 0; dim < 3; dim++) {
+                            pbcShift[dim] = pbcFlags[dim] ? std::lround(inverseCellMatrix.prodrow(delta, dim)) : 0;
+                        }
+                    }
+                }
+#endif
+            }
+        }
+    }
+
+    // This generic function merges the 4 kinds of interactions (bonds, angles, dihedrals, impropers) from the trajectory dataset with the topology dataset.
+    auto mergeInteractionTopology = [&](const PropertyContainer* trajectoryInteractions, const PropertyContainer* topologyInteractions, int topologyPropertyId, int particleIdentifiersPropertyId, const QString& interactionName) {
+        if(!trajectoryInteractions)
+            return;
+
+        trajectoryInteractions->verifyIntegrity();
+
+        // Create a mutable copy of the particles object.
+        Particles* particles = state.expectMutableObject<Particles>();
+
+        // If the trajectory file contains a topology, completely replace all existing interactions
+        // from the topology dataset with the new set of interactions.
+        // The topology can be specified either in the form of the "Topology" property (two 0-based particle indices)
+        // or in the form of the "Particle Identifiers" property (tuples of atom IDs).
+        const Property* interactionTopology = trajectoryInteractions->getProperty(topologyPropertyId);
+        const Property* interactionParticleIdentifiers = trajectoryInteractions->getProperty(particleIdentifiersPropertyId);
+
+        if(interactionTopology || interactionParticleIdentifiers) {
+            if(topologyInteractions) {
+                // Replace the property arrays, but make sure that type elements
+                // as well as the visual elements from the topology dataset are preserved.
+                PropertyContainer* interactions = particles->makeMutable(topologyInteractions);
+                interactions->setContent(trajectoryInteractions->elementCount(), trajectoryInteractions->properties());
+                topologyInteractions = interactions;
+            }
+            else {
+                // We can simply adopt the property container from the trajectory dataset as a whole
+                // if the topology dataset didn't contain any interactions yet.
+                if(trajectoryInteractions == trajectoryParticles->bonds())
+                    particles->setBonds(static_object_cast<Bonds>(trajectoryInteractions));
+                else if(trajectoryInteractions == trajectoryParticles->angles())
+                    particles->setAngles(static_object_cast<Angles>(trajectoryInteractions));
+                else if(trajectoryInteractions == trajectoryParticles->dihedrals())
+                    particles->setDihedrals(static_object_cast<Dihedrals>(trajectoryInteractions));
+                else if(trajectoryInteractions == trajectoryParticles->impropers())
+                    particles->setImpropers(static_object_cast<Impropers>(trajectoryInteractions));
+                else
+                    throw Exception(tr("Unsupported interaction type in trajectory."));
+
+                topologyInteractions = trajectoryInteractions;
+            }
+
+            // If the input interactions are defined in terms of atom IDs (i.e.property "Particle Identifiers"), then map the IDs
+            // to corresponding particle indices and store them in the "Topology" property.
+            if(interactionParticleIdentifiers) {
+                // Build map from particle identifiers to particle indices.
+                std::unordered_map<IdentifierIntType, size_t> idToIndexMap;
+                idToIndexMap.reserve(particles->elementCount());
+                if(BufferReadAccess<IdentifierIntType> particleIdentifierProperty = particles->getProperty(Particles::IdentifierProperty)) {
+                    size_t index = 0;
+                    for(auto id : particleIdentifierProperty) {
+                        if(idToIndexMap.insert(std::make_pair(id, index++)).second == false)
+                            throw Exception(tr("Duplicate particle identifier %1 detected. Please make sure particle identifiers are unique.").arg(id));
+                    }
+                }
+                else {
+                    // Generate implicit IDs if the "Particle Identifier" property is not defined.
+                    for(size_t i = 0; i < particles->elementCount(); i++)
+                        idToIndexMap[i+1] = i;
+                }
+
+                // Perform lookup of particle IDs.
+                PropertyContainer* interactions = particles->makeMutable(topologyInteractions);
+                BufferWriteAccess<int64_t*, access_mode::discard_write> interactionTopologyArray = interactions->createProperty(topologyPropertyId);
+                auto t = interactionTopologyArray.begin();
+                for(const int64_t& id : BufferReadAccess<int64_t*>(interactionParticleIdentifiers)) {
+                    auto iter = idToIndexMap.find(id);
+                    if(iter == idToIndexMap.end())
+                        throw Exception(tr("Particle id %1 referenced by %2 #%3 does not exist.")
+                            .arg(id)
+                            .arg(interactionName)
+                            .arg(std::distance(interactionTopologyArray.begin(), t) / interactionTopologyArray.componentCount()));
+                    *t++ = iter->second;
+                }
+                OVITO_ASSERT(t == interactionTopologyArray.end());
+
+                // Remove the "Particle Identifiers" property from interactions again, because it is no longer needed.
+                interactions->removeProperty(interactionParticleIdentifiers);
+            }
+
+            // Compute the PBC shift vectors of the bonds based on current particle positions.
+            if(trajectoryInteractions == trajectoryParticles->bonds()) {
+                if(!trajectoryInteractions->getProperty(Bonds::PeriodicImageProperty)) {
+                    if(const SimulationCell* simCellObj = state.getObject<SimulationCell>()) {
+                        if(simCellObj->hasPbcCorrected()) {
+                            particles->makeBondsMutable()->generatePeriodicImageProperty(particles, simCellObj);
+                        }
+                    }
+                }
+            }
+        }
+        else if(topologyInteractions) {
+            // If the trajectory dataset doesn't contain the "Topology" nor the "Particle Identifiers" property,
+            // then add the properties to the existing interactions from the topology dataset.
+            // This requires that the number of interactions remains constant.
+            if(trajectoryInteractions->elementCount() != topologyInteractions->elementCount()) {
+                throw Exception(tr("Cannot merge %1 properties of trajectory dataset with topology dataset, because numbers of %1s in the two datasets do not match.").arg(interactionName));
+            }
+
+            if(!trajectoryInteractions->properties().empty()) {
+                PropertyContainer* interactions = particles->makeMutable(topologyInteractions);
+
+                // Add the properties to the existing interactions, overwriting existing values if necessary.
+                for(const Property* newProperty : trajectoryInteractions->properties()) {
+                    const Property* existingPropertyObj = interactions->getPropertyLike(newProperty);
+                    if(existingPropertyObj) {
+                        interactions->makeMutable(existingPropertyObj)->copyFrom(*newProperty);
+                    }
+                    else {
+                        interactions->addProperty(newProperty);
+                    }
+                }
+            }
+        }
+        else {
+            throw Exception(tr("Neither the trajectory nor the topology dataset contain %1 connectivity information.").arg(interactionName));
+        }
+    };
+
+    // Merge bonds from the trajectory dataset with the topology dataset.
+    mergeInteractionTopology(trajectoryParticles->bonds(), particles->bonds(), Bonds::TopologyProperty, Bonds::ParticleIdentifiersProperty, tr("bond"));
+    // Merge angles from the trajectory dataset with the topology dataset.
+    mergeInteractionTopology(trajectoryParticles->angles(), particles->angles(), Angles::TopologyProperty, Angles::ParticleIdentifiersProperty, tr("angle"));
+    // Merge dihedrals from the trajectory dataset with the topology dataset.
+    mergeInteractionTopology(trajectoryParticles->dihedrals(), particles->dihedrals(), Dihedrals::TopologyProperty, Dihedrals::ParticleIdentifiersProperty, tr("dihedral"));
+    // Merge impropers from the trajectory dataset with the topology dataset.
+    mergeInteractionTopology(trajectoryParticles->impropers(), particles->impropers(), Impropers::TopologyProperty, Impropers::ParticleIdentifiersProperty, tr("improper"));
+
+    // Merge global attributes of topology and trajectory datasets.
+    // If there is a naming collision, attributes from the trajectory dataset override those from the topology dataset.
+    for(const DataObject* obj : trajState.data()->objects()) {
+        if(const AttributeDataObject* attribute = dynamic_object_cast<AttributeDataObject>(obj)) {
+            const AttributeDataObject* existingAttribute = nullptr;
+            for(const DataObject* obj2 : state.data()->objects()) {
+                if(const AttributeDataObject* attribute2 = dynamic_object_cast<AttributeDataObject>(obj2)) {
+                    if(attribute2->identifier() == attribute->identifier()) {
+                        existingAttribute = attribute2;
+                        break;
+                    }
+                }
+            }
+            if(existingAttribute)
+                state.replaceObject(existingAttribute, attribute);
+            else
+                state.addObject(attribute);
+        }
+    }
+}
+
+/******************************************************************************
+* Is called when a RefTarget referenced by this object generated an event.
+******************************************************************************/
+bool LoadTrajectoryModifier::referenceEvent(RefTarget* source, const ReferenceEvent& event)
+{
+    if(event.type() == ReferenceEvent::AnimationFramesChanged && source == trajectorySource()) {
+        // Propagate animation interval events from the trajectory source.
+        return true;
+    }
+    return Modifier::referenceEvent(source, event);
+}
+
+/******************************************************************************
+* Gets called when the data object of the node has been replaced.
+******************************************************************************/
+void LoadTrajectoryModifier::referenceReplaced(const PropertyFieldDescriptor* field, RefTarget* oldTarget, RefTarget* newTarget, int listIndex)
+{
+    if(field == PROPERTY_FIELD(trajectorySource) && !shouldIgnoreChanges()) {
+        // The animation length might have changed when the trajectory source has been replaced.
+        notifyDependents(ReferenceEvent::AnimationFramesChanged);
+    }
+    Modifier::referenceReplaced(field, oldTarget, newTarget, listIndex);
+}
+
+/******************************************************************************
+* Returns a short piece of information (typically a string or color) to be
+* displayed next to the object's title in the pipeline editor.
+******************************************************************************/
+QVariant LoadTrajectoryModifier::getPipelineEditorShortInfo(Scene* scene, ModificationNode* node) const
+{
+    OVITO_ASSERT(this_task::get());
+    OVITO_ASSERT(scene);
+
+    // Display the name of the trajectory file as short info.
+    if(node && trajectorySource()) {
+        const PipelineFlowState& state = trajectorySource()->getCachedPipelineNodeOutput(scene->animationSettings()->currentTime());
+        const QString sourceFile = state.getAttributeValue(QStringLiteral("SourceFile")).toString();
+        if(!sourceFile.isEmpty()) {
+            // Extract filename from path.
+            return sourceFile.section('/', -1);
+        }
+    }
+    return {};
+}
+
+}   // End of namespace

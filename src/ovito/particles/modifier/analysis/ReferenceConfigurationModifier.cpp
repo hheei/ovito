@@ -1,0 +1,424 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/particles/Particles.h>
+#include <ovito/particles/objects/Particles.h>
+#include <ovito/core/dataset/pipeline/ModificationNode.h>
+#include <ovito/core/dataset/pipeline/PipelineEvaluationRequest.h>
+#include <ovito/core/dataset/animation/AnimationSettings.h>
+#include <ovito/core/utilities/units/UnitsManager.h>
+#include "ReferenceConfigurationModifier.h"
+
+namespace Ovito {
+
+IMPLEMENT_ABSTRACT_OVITO_CLASS(ReferenceConfigurationModifier);
+DEFINE_REFERENCE_FIELD(ReferenceConfigurationModifier, referenceConfiguration);
+DEFINE_PROPERTY_FIELD(ReferenceConfigurationModifier, affineMapping);
+DEFINE_PROPERTY_FIELD(ReferenceConfigurationModifier, useMinimumImageConvention);
+DEFINE_PROPERTY_FIELD(ReferenceConfigurationModifier, useReferenceFrameOffset);
+DEFINE_PROPERTY_FIELD(ReferenceConfigurationModifier, referenceFrameNumber);
+DEFINE_PROPERTY_FIELD(ReferenceConfigurationModifier, referenceFrameOffset);
+SET_PROPERTY_FIELD_LABEL(ReferenceConfigurationModifier, referenceConfiguration, "Reference Configuration");
+SET_PROPERTY_FIELD_LABEL(ReferenceConfigurationModifier, affineMapping, "Affine mapping");
+SET_PROPERTY_FIELD_LABEL(ReferenceConfigurationModifier, useMinimumImageConvention, "Use minimum image convention");
+SET_PROPERTY_FIELD_LABEL(ReferenceConfigurationModifier, useReferenceFrameOffset, "Use reference frame offset");
+SET_PROPERTY_FIELD_LABEL(ReferenceConfigurationModifier, referenceFrameNumber, "Reference frame number");
+SET_PROPERTY_FIELD_LABEL(ReferenceConfigurationModifier, referenceFrameOffset, "Reference frame offset");
+SET_PROPERTY_FIELD_UNITS_AND_MINIMUM(ReferenceConfigurationModifier, referenceFrameNumber, IntegerParameterUnit, 0);
+
+// This class can be removed in a future version of OVITO:
+IMPLEMENT_CREATABLE_OVITO_CLASS(ReferenceConfigurationModifierApplication);
+// Tag the class as optional, which means it's not an error if objects of this class cannot be deserialized from a state file.
+// In other words, it's okay to remove this class in a future version of OVITO without breaking compatibility with older state files.
+OVITO_CLASSINFO(ReferenceConfigurationModifierApplication, "NonessentialClass", "true");
+
+/******************************************************************************
+* Asks the modifier whether it can be applied to the given input data.
+******************************************************************************/
+bool ReferenceConfigurationModifier::OOMetaClass::isApplicableTo(const DataCollection& input) const
+{
+    return input.containsObject<Particles>();
+}
+
+/******************************************************************************
+* Throws an exception if the pipeline stage cannot be evaluated at this time.
+* This is called by the system to catch user mistakes that would lead to infinite recursion.
+******************************************************************************/
+void ReferenceConfigurationModifier::preEvaluationCheck(const PipelineEvaluationRequest& request) const
+{
+    // Walk up the reference config pipeline and ask each step if evaluation is allowed at this time.
+    if(referenceConfiguration())
+        referenceConfiguration()->preEvaluationCheck(request);
+}
+
+/******************************************************************************
+ * Is called by the pipeline system before a new modifier evaluation begins.
+ ******************************************************************************/
+void ReferenceConfigurationModifier::preevaluateModifier(const ModifierEvaluationRequest& request, PipelineEvaluationResult::EvaluationTypes& evaluationTypes, TimeInterval& validityInterval) const
+{
+    // Indicate that we will do different computations depending on whether the pipeline is evaluated in interactive mode or not.
+    if(request.interactiveMode())
+        evaluationTypes = PipelineEvaluationResult::EvaluationType::Interactive;
+    else
+        evaluationTypes = PipelineEvaluationResult::EvaluationType::Noninteractive;
+
+    if(useReferenceFrameOffset()) {
+        // Results will only be valid for the duration of the current frame when using a relative offset.
+        validityInterval.intersect(request.time());
+    }
+}
+
+/******************************************************************************
+* Asks the modifier for the set of animation time intervals that should be
+* cached by the upstream pipeline.
+******************************************************************************/
+void ReferenceConfigurationModifier::inputCachingHints(ModifierEvaluationRequest& request)
+{
+    // Only need to communicate caching hints when reference configuration is provided by the upstream pipeline.
+    if(!referenceConfiguration()) {
+        inputCachingHintsReusable(request, useReferenceFrameOffset(), referenceFrameNumber(), referenceFrameOffset());
+    }
+
+    Modifier::inputCachingHints(request);
+}
+
+/******************************************************************************
+* Computes the animation time intervals that should be cached by the upstream
+* pipeline to keep the reference configuration available.
+* This static function is reusable by other modifier classes not derived from ReferenceConfigurationModifier.
+******************************************************************************/
+void ReferenceConfigurationModifier::inputCachingHintsReusable(ModifierEvaluationRequest& request, bool useReferenceFrameOffset, int referenceFrameNumber, int referenceFrameOffset)
+{
+    if(useReferenceFrameOffset) {
+        // When using a relative reference configuration, we need to build the corresponding set of shifted time intervals.
+        for(const TimeInterval& iv : TimeIntervalUnion(request.cachingIntervals())) {
+            int startFrame = request.modificationNode()->animationTimeToSourceFrame(iv.start());
+            int endFrame = request.modificationNode()->animationTimeToSourceFrame(iv.end());
+            AnimationTime shiftedStartTime = request.modificationNode()->sourceFrameToAnimationTime(startFrame + referenceFrameOffset);
+            AnimationTime shiftedEndTime = request.modificationNode()->sourceFrameToAnimationTime(endFrame + referenceFrameOffset);
+            request.mutableCachingIntervals().add(TimeInterval(shiftedStartTime, shiftedEndTime));
+        }
+    }
+    else {
+        // When using a static reference configuration, ask the upstream pipeline to cache the corresponding animation frame.
+        request.mutableCachingIntervals().add(request.modificationNode()->sourceFrameToAnimationTime(referenceFrameNumber));
+    }
+}
+
+/******************************************************************************
+* Is called by the ModifierApplication to let the modifier adjust the
+* time interval of a TargetChanged event received from the upstream pipeline
+* before it is propagated to the downstream pipeline.
+******************************************************************************/
+void ReferenceConfigurationModifier::restrictInputValidityInterval(TimeInterval& iv) const
+{
+    Modifier::restrictInputValidityInterval(iv);
+
+    if(!referenceConfiguration()) {
+        // If the upstream pipeline changes, all computed output frames of the modifier become invalid.
+        iv.setEmpty();
+    }
+}
+
+/******************************************************************************
+* Is called when a RefTarget referenced by this object generated an event.
+******************************************************************************/
+bool ReferenceConfigurationModifier::referenceEvent(RefTarget* source, const ReferenceEvent& event)
+{
+    if(event.type() == ReferenceEvent::TargetChanged && source == referenceConfiguration()) {
+        // If the reference configuration state changes in some way, all output frames of the modifier
+        // become invalid --over the entire animation time interval.
+        notifyTargetChanged();
+        return false;
+    }
+    return Modifier::referenceEvent(source, event);
+}
+
+/******************************************************************************
+* Modifies the input data.
+******************************************************************************/
+Future<PipelineFlowState> ReferenceConfigurationModifier::evaluateModifier(const ModifierEvaluationRequest& request, PipelineFlowState&& state)
+{
+    // In interactive mode, do not perform a real computation. Instead, reuse an old result from the cached state if available.
+    if(request.interactiveMode()) {
+        if(PipelineFlowState cachedState = request.modificationNode()->getCachedPipelineNodeOutput(request.time(), true)) {
+            Particles* particles = state.expectMutableObject<Particles>();
+            particles->verifyIntegrity();
+            co_return co_await reuseCachedState(request, particles, std::move(state), cachedState);
+        }
+        co_return std::move(state);
+    }
+
+    // Copy parameters into the coroutine frame before the first suspension point.
+    const ModifierEvaluationRequest request_l = request;
+    PipelineFlowState state_l = std::move(state);
+
+    // Obtain the reference positions of the particles, either from the upstream pipeline or from a user-specified reference data source.
+    Future<PipelineFlowState> refStateFuture =
+        referenceConfiguration()
+        ? obtainExternalReferenceConfiguration(request_l, state_l, referenceConfiguration(), useReferenceFrameOffset(), referenceFrameNumber(), referenceFrameOffset())
+        : obtainUpstreamReferenceConfiguration(request_l, state_l, useReferenceFrameOffset(), referenceFrameNumber(), referenceFrameOffset());
+
+    // Wait for the reference configuration to become available.
+    PipelineFlowState referenceInput = co_await FutureAwaiter(ObjectExecutor(this), std::move(refStateFuture));
+
+    // Let subclass create the compute engine.
+    std::unique_ptr<Engine> engine = createEngine(request_l, state_l, referenceInput);
+
+    // Perform the actual calculation in a worker thread.
+    co_await ExecutorAwaiter(ThreadPoolExecutor());
+
+    // Execute algorithm of the sub-class.
+    engine->perform(state_l);
+
+    co_return std::move(state_l);
+}
+
+/******************************************************************************
+* Calculates the reference frame number to use.
+* This function is reusable by other modifier classes not derived from ReferenceConfigurationModifier.
+******************************************************************************/
+int ReferenceConfigurationModifier::calculateReferenceFrameNumber(const ModifierEvaluationRequest& request, const PipelineFlowState& inputState, bool useReferenceFrameOffset, int referenceFrameNumber, int referenceFrameOffset)
+{
+    // What is the reference frame number to use?
+    if(useReferenceFrameOffset) {
+        // Determine the current frame, preferably from the marker attribute stored in the pipeline flow state.
+        // If the source frame attribute is not present, fall back to inferring it from the current animation time.
+        int currentFrame = inputState.data() ? inputState.data()->sourceFrame() : -1;
+        if(currentFrame < 0)
+            currentFrame = request.modificationNode()->animationTimeToSourceFrame(request.time());
+
+        // Use frame offset relative to current configuration.
+        return currentFrame + referenceFrameOffset;
+    }
+    else {
+        // Use a constant, user-specified frame as reference configuration.
+        return referenceFrameNumber;
+    }
+}
+
+/******************************************************************************
+* Obtains the reference configuration from the upstream pipeline.
+* This function is reusable by other modifier classes not derived from ReferenceConfigurationModifier.
+******************************************************************************/
+Future<PipelineFlowState> ReferenceConfigurationModifier::obtainUpstreamReferenceConfiguration(const ModifierEvaluationRequest& request, const PipelineFlowState& inputState, bool useReferenceFrameOffset, int referenceFrameNumber, int referenceFrameOffset)
+{
+    // What is the reference frame number to use?
+    int referenceFrame = calculateReferenceFrameNumber(request, inputState, useReferenceFrameOffset, referenceFrameNumber, referenceFrameOffset);
+
+    // Set up the pipeline request for obtaining the reference configuration.
+    ModifierEvaluationRequest referenceRequest = request;
+    referenceRequest.setTime(request.modificationNode()->sourceFrameToAnimationTime(referenceFrame));
+    inputCachingHintsReusable(referenceRequest, useReferenceFrameOffset, referenceFrameNumber, referenceFrameOffset);
+
+    // Send the request to the upstream pipeline and wait for the result.
+    PipelineFlowState referenceInput = co_await request.modificationNode()->evaluateInput(referenceRequest).asFuture();
+
+    // Make sure the obtained reference configuration is valid and ready to use.
+    if(referenceInput.status().type() == PipelineStatus::Error)
+        throw Exception(tr("Reference configuration is not available: %1").arg(referenceInput.status().text()));
+    if(!referenceInput)
+        throw Exception(tr("Reference configuration is empty. Upstream pipeline did not yield any data at animation frame %1.").arg(referenceFrame));
+
+    // Make sure we really got back the requested reference frame.
+    if(int sourceFrame = referenceInput.data()->sourceFrame(); sourceFrame != -1 && sourceFrame != referenceFrame) {
+        if(referenceFrame > 0)
+            throw Exception(tr("Reference frame %1 is outside the range of the loaded trajectory.").arg(referenceFrame));
+        else
+            throw Exception(tr("Reference frame %1 is out of range. Cannot perform calculation at current animation time.").arg(referenceFrame));
+    }
+
+    co_return referenceInput;
+}
+
+/******************************************************************************
+* Obtains the reference configuration from a separate pipeline source.
+* This function is reusable by other modifier classes not derived from ReferenceConfigurationModifier.
+******************************************************************************/
+Future<PipelineFlowState> ReferenceConfigurationModifier::obtainExternalReferenceConfiguration(const ModifierEvaluationRequest& request, const PipelineFlowState& inputState, PipelineNode* referenceSource, bool useReferenceFrameOffset, int referenceFrameNumber, int referenceFrameOffset)
+{
+    // What is the reference frame number to use?
+    int referenceFrame = calculateReferenceFrameNumber(request, inputState, useReferenceFrameOffset, referenceFrameNumber, referenceFrameOffset);
+
+    int numberOfSourceFrames = referenceSource->numberOfSourceFrames();
+    if(numberOfSourceFrames <= 0) {
+        throw Exception(tr("Reference configuration has not been specified yet or is empty. Please pick a reference simulation file."));
+    }
+
+    if(referenceFrame < 0 || referenceFrame >= numberOfSourceFrames) {
+        if(referenceFrame > 0)
+            throw Exception(tr("Requested reference frame number %1 is out of range. "
+                "The loaded reference configuration contains only %2 frame(s).").arg(referenceFrame).arg(numberOfSourceFrames));
+        else
+            throw Exception(tr("Requested reference frame %1 is out of range. Cannot perform calculation at the current animation time.").arg(referenceFrame));
+    }
+
+    // Convert frame to animation time.
+    AnimationTime referenceTime = referenceSource->sourceFrameToAnimationTime(referenceFrame);
+
+    // Set up the pipeline request for obtaining the reference configuration.
+    PipelineEvaluationRequest referenceRequest(referenceTime);
+    referenceRequest.setThrowOnError(request.throwOnError());
+
+    // Send the request to the pipeline branch and wait for the result.
+    PipelineFlowState referenceInput = co_await referenceSource->evaluate(referenceRequest).asFuture();
+
+    // Make sure the obtained reference configuration is valid and ready to use.
+    if(referenceInput.status().type() == PipelineStatus::Error)
+        throw Exception(tr("Reference configuration is not available: %1").arg(referenceInput.status().text()));
+    if(!referenceInput)
+        throw Exception(tr("Reference configuration has not been specified yet or is empty. Please pick a reference simulation file."));
+
+    // Make sure we really got back the requested reference frame.
+    if(int sourceFrame = referenceInput.data()->sourceFrame(); sourceFrame != -1 && sourceFrame != referenceFrame) {
+        if(referenceFrame > 0)
+            throw Exception(tr("Requested reference frame %1 is out of range. Make sure the loaded reference configuration file contains a sufficent number of trajectory frames.").arg(referenceFrame));
+        else
+            throw Exception(tr("Requested reference frame %1 is out of range. Cannot perform calculation at the current animation time.").arg(referenceFrame));
+    }
+
+    co_return referenceInput;
+}
+
+/******************************************************************************
+* Constructor.
+******************************************************************************/
+ReferenceConfigurationModifier::Engine::Engine(
+    ConstPropertyPtr positions, const SimulationCell* simCell,
+    ConstPropertyPtr refPositions, const SimulationCell* simCellRef,
+    ConstPropertyPtr identifiers, ConstPropertyPtr refIdentifiers,
+    AffineMappingType affineMapping, bool useMinimumImageConvention) :
+    _positions(std::move(positions)),
+    _refPositions(std::move(refPositions)),
+    _simCell(simCell),
+    _simCellRef(simCellRef),
+    _identifiers(std::move(identifiers)),
+    _refIdentifiers(std::move(refIdentifiers)),
+    _affineMapping(affineMapping),
+    _useMinimumImageConvention(useMinimumImageConvention)
+{
+    // PBCs flags of the current configuration always override PBCs flags
+    // of the reference config.
+    _simCellRef.setPbcFlags(_simCell.pbcFlags());
+    _simCellRef.setIs2D(_simCell.is2D());
+
+    // Check that the simulation cells are valid.
+    if(_affineMapping != NO_MAPPING) {
+        if(simCellRef == nullptr && simCell == nullptr) {
+            _affineMapping = NO_MAPPING; // No simulation cells are available, so we cannot compute a valid affine mapping.
+        }
+        else {
+            if(cell().isDegenerate())
+                throw Exception(tr("Cannot compute affine cell mapping. Simulation cell is degenerate or missing in the deformed configuration."));
+            if(refCell().isDegenerate())
+                throw Exception(tr("Cannot compute affine cell mapping. Simulation cell is degenerate or missing in the reference configuration."));
+        }
+    }
+
+    // Precompute matrices for transforming points/vector between the two configurations.
+    if(!cell().isDegenerate() && !refCell().isDegenerate()) {
+        _refToCurTM = cell().cellMatrix() * refCell().reciprocalCellMatrix();
+        _curToRefTM = refCell().cellMatrix() * cell().reciprocalCellMatrix();
+    }
+    else {
+        // If one of the simulation cells is degenerate, we cannot compute a valid transformation matrix.
+        _refToCurTM.setIdentity();
+        _curToRefTM.setIdentity();
+    }
+}
+
+/******************************************************************************
+* Determines the mapping between particles in the reference configuration and
+* the current configuration and vice versa.
+******************************************************************************/
+void ReferenceConfigurationModifier::Engine::buildParticleMapping(bool requireCompleteCurrentToRefMapping, bool requireCompleteRefToCurrentMapping)
+{
+    // Build particle-to-particle index maps.
+    _currentToRefIndexMap.resize(positions()->size());
+    _refToCurrentIndexMap.resize(refPositions()->size());
+    if(identifiers() && refIdentifiers()) {
+        OVITO_ASSERT(identifiers()->size() == positions()->size());
+        OVITO_ASSERT(refIdentifiers()->size() == refPositions()->size());
+
+        // Build map of particle identifiers in reference configuration.
+        std::map<IdentifierIntType, size_t> refMap;
+        size_t index = 0;
+        BufferReadAccess<IdentifierIntType> refIdentifiersArray(refIdentifiers());
+        for(auto id : refIdentifiersArray) {
+            if(refMap.insert(std::make_pair(id, index)).second == false)
+                throw Exception(tr("Particles with duplicate identifiers detected in reference configuration."));
+            index++;
+        }
+        this_task::throwIfCanceled();
+
+        // Check for duplicate identifiers in current configuration
+        std::map<IdentifierIntType, size_t> currentMap;
+        index = 0;
+        BufferReadAccess<IdentifierIntType> identifiersArray(identifiers());
+        for(auto id : identifiersArray) {
+            if(currentMap.insert(std::make_pair(id, index)).second == false)
+                throw Exception(tr("Particles with duplicate identifiers detected in current configuration."));
+            index++;
+        }
+        this_task::throwIfCanceled();
+
+        // Build index maps.
+        auto id = identifiersArray.cbegin();
+        for(auto& mappedIndex : _currentToRefIndexMap) {
+            auto iter = refMap.find(*id);
+            if(iter != refMap.end())
+                mappedIndex = iter->second;
+            else if(requireCompleteCurrentToRefMapping)
+                throw Exception(tr("Particle ID %1 does exist in the current configuration but not in the reference configuration.").arg(*id));
+            else
+                mappedIndex = std::numeric_limits<size_t>::max();
+            ++id;
+        }
+        this_task::throwIfCanceled();
+
+        id = refIdentifiersArray.cbegin();
+        for(auto& mappedIndex : _refToCurrentIndexMap) {
+            auto iter = currentMap.find(*id);
+            if(iter != currentMap.end())
+                mappedIndex = iter->second;
+            else if(requireCompleteRefToCurrentMapping)
+                throw Exception(tr("Particle ID %1 does exist in the reference configuration but not in the current configuration.").arg(*id));
+            else
+                mappedIndex = std::numeric_limits<size_t>::max();
+            ++id;
+        }
+    }
+    else {
+        // Deformed and reference configuration must contain the same number of particles.
+        if(positions()->size() != refPositions()->size())
+            throw Exception(tr("Cannot perform calculation. Numbers of particles in reference configuration and current configuration do not match."));
+
+        // When particle identifiers are not available, assume the storage order of particles in the
+        // reference configuration and the current configuration are the same and use trivial 1-to-1 mapping.
+        boost::algorithm::iota(_refToCurrentIndexMap, size_t(0));
+        boost::algorithm::iota(_currentToRefIndexMap, size_t(0));
+    }
+
+    this_task::throwIfCanceled();
+}
+
+}   // End of namespace

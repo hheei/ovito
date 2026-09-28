@@ -1,0 +1,497 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/particles/Particles.h>
+#include <ovito/particles/util/CutoffNeighborFinder.h>
+#include <ovito/particles/objects/Particles.h>
+#include <ovito/stdobj/simcell/SimulationCell.h>
+#include <ovito/stdobj/table/DataTable.h>
+#include <ovito/stdobj/properties/PropertyReference.h>
+#include <ovito/core/app/Application.h>
+#include <ovito/core/dataset/DataSet.h>
+#include <ovito/core/dataset/data/SyclFlatSet.h>
+#include <ovito/core/dataset/pipeline/ModificationNode.h>
+#include <ovito/core/utilities/units/UnitsManager.h>
+#include <ovito/core/utilities/concurrent/ParallelFor.h>
+#include <ovito/core/utilities/concurrent/EnumerableThreadSpecific.h>
+#ifdef OVITO_USE_SYCL
+#include <ovito/core/utilities/concurrent/SyclParallelFor.h>
+#include <ovito/particles/util/SyclCutoffNeighborFinder.h>
+#endif
+#include "RadialDistributionFunctionModifier.h"
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(RadialDistributionFunctionModifier);
+// For backward compatibility with OVITO 2.9.0
+OVITO_CLASSINFO(RadialDistributionFunctionModifier, "ClassNameAlias", "CoordinationNumberModifier");
+// For backward compatibility with OVITO 3.14
+OVITO_CLASSINFO(RadialDistributionFunctionModifier, "ClassNameAlias", "CoordinationAnalysisModifier");
+OVITO_CLASSINFO(RadialDistributionFunctionModifier,
+                "Description",
+                "Determine number of neighbors (coordination number) and compute the RDF.");
+OVITO_CLASSINFO(RadialDistributionFunctionModifier, "DisplayName", "Radial distribution function (RDF)");
+OVITO_CLASSINFO(RadialDistributionFunctionModifier, "ModifierCategory", "Analysis");
+DEFINE_PROPERTY_FIELD(RadialDistributionFunctionModifier, cutoff);
+DEFINE_PROPERTY_FIELD(RadialDistributionFunctionModifier, numberOfBins);
+DEFINE_PROPERTY_FIELD(RadialDistributionFunctionModifier, computePartialRDF);
+DEFINE_PROPERTY_FIELD(RadialDistributionFunctionModifier, onlySelected);
+DEFINE_PROPERTY_FIELD(RadialDistributionFunctionModifier, typeProperty);
+SET_PROPERTY_FIELD_LABEL(RadialDistributionFunctionModifier, cutoff, "Cutoff radius");
+SET_PROPERTY_FIELD_LABEL(RadialDistributionFunctionModifier, numberOfBins, "Number of histogram bins");
+SET_PROPERTY_FIELD_LABEL(RadialDistributionFunctionModifier, computePartialRDF, "Compute partial RDFs");
+SET_PROPERTY_FIELD_LABEL(RadialDistributionFunctionModifier, onlySelected, "Use only selected particles");
+SET_PROPERTY_FIELD_LABEL(RadialDistributionFunctionModifier, typeProperty, "Type property");
+SET_PROPERTY_FIELD_UNITS_AND_MINIMUM(RadialDistributionFunctionModifier, cutoff, WorldParameterUnit, 0);
+SET_PROPERTY_FIELD_UNITS_AND_MINIMUM(RadialDistributionFunctionModifier, numberOfBins, IntegerParameterUnit, 4);
+
+/******************************************************************************
+ * Asks the modifier whether it can be applied to the given input data.
+ ******************************************************************************/
+bool RadialDistributionFunctionModifier::OOMetaClass::isApplicableTo(const DataCollection& input) const
+{
+    return input.containsObject<Particles>();
+}
+
+/******************************************************************************
+ * Constructor.
+ ******************************************************************************/
+void RadialDistributionFunctionModifier::initializeObject(ObjectInitializationFlags flags)
+{
+    Modifier::initializeObject(flags);
+
+    // Default to using the standard property "Particle Type" for backward compatibility
+    setTypeProperty(PropertyReference{&Particles::OOClass(), Particles::TypeProperty});
+}
+
+/******************************************************************************
+ * Is called by the pipeline system before a new modifier evaluation begins.
+ ******************************************************************************/
+void RadialDistributionFunctionModifier::preevaluateModifier(const ModifierEvaluationRequest& request,
+                                                             PipelineEvaluationResult::EvaluationTypes& evaluationTypes,
+                                                             TimeInterval& validityInterval) const
+{
+    // Indicate that we will do different computations depending on whether the pipeline is evaluated in interactive mode or not.
+    if(request.interactiveMode())
+        evaluationTypes = PipelineEvaluationResult::EvaluationType::Interactive;
+    else
+        evaluationTypes = PipelineEvaluationResult::EvaluationType::Noninteractive;
+}
+
+/******************************************************************************
+ * Modifies the input data.
+ ******************************************************************************/
+Future<PipelineFlowState> RadialDistributionFunctionModifier::evaluateModifier(const ModifierEvaluationRequest& request,
+                                                                               PipelineFlowState&& state)
+{
+    // Get input data.
+    Particles* particles = state.expectMutableObject<Particles>();
+    particles->verifyIntegrity();
+
+    // In interactive mode, do not perform a real computation. Instead, reuse old results if available in the pipeline cache.
+    if(request.interactiveMode()) {
+        if(PipelineFlowState cachedState = request.modificationNode()->getCachedPipelineNodeOutput(request.time(), true)) {
+            if(DataOORef<const Particles> cachedParticles = cachedState.getObject<Particles>()) {
+                if(const DataTable* cachedTable = cachedState.getObjectBy<DataTable>(
+                       request.modificationNode(), RadialDistributionFunctionModifier::TableIdentifier)) {
+                    state.addObject(cachedTable);
+                }
+                if(const Property* cachedCoordination = cachedParticles->getProperty(Particles::CoordinationProperty)) {
+                    const Property* cachedTypeCoordination = cachedParticles->getProperty(QStringLiteral("Per Type Coordination"));
+                    return asyncLaunch([state = std::move(state),
+                                        particles,
+                                        cachedCoordination,
+                                        cachedTypeCoordination,
+                                        cachedParticles = std::move(cachedParticles)]() mutable {
+                        particles->tryToAdoptProperties(cachedParticles, {cachedCoordination, cachedTypeCoordination}, {particles});
+                        return std::move(state);
+                    });
+                }
+            }
+        }
+        return std::move(state);
+    }
+
+    // Get selection particle property.
+    const Property* selection = onlySelected() ? particles->expectProperty(Particles::SelectionProperty) : nullptr;
+
+    // The number of sampling intervals for the radial distribution function.
+    int rdfSampleCount = std::max(numberOfBins(), 4);
+
+    if(cutoff() <= 0) throw Exception(tr("Invalid cutoff range value. Cutoff must be positive."));
+
+    // Get particle types if partial RDF calculation has been requested.
+    const Property* particleTypes = nullptr;
+    boost::container::flat_map<int, QString> uniqueTypes;
+    if(computePartialRDF()) {
+        if(!typeProperty()) throw Exception(tr("Calculation of partial RDFs requires a type property to be selected."));
+
+        particleTypes = typeProperty().findInContainer(particles);
+        if(!particleTypes)
+            throw Exception(
+                tr("Calculation of partial RDFs requires the '%1' particle property, which is not present in the input particle system.")
+                    .arg(typeProperty().nameWithComponent()));
+
+        if(!particleTypes->isTypedProperty())
+            throw Exception(tr("The selected property '%1' is not a typed property. Partial RDF calculation requires a typed property with "
+                               "defined element types.")
+                                .arg(typeProperty().nameWithComponent()));
+
+        // Build the set of unique particle type IDs, but only include enabled types.
+        for(const ElementType* pt : particleTypes->elementTypes()) {
+            // Only include enabled types in the partial RDF calculation
+            if(pt->enabled()) {
+#if BOOST_VERSION >= 106200
+                uniqueTypes.insert_or_assign(pt->numericId(), pt->name().isEmpty() ? QString::number(pt->numericId()) : pt->name());
+#else
+                // For backward compatibility with older Boost versions, which do not know insert_or_assign():
+                uniqueTypes[pt->numericId()] = pt->name().isEmpty() ? QString::number(pt->numericId()) : pt->name();
+#endif
+            }
+        }
+        if(uniqueTypes.empty()) throw Exception(tr("No enabled particle types have been defined."));
+        if(uniqueTypes.size() > 20)
+            throw Exception(tr("Calculation of partial RDFs is currently limited to 20 particle types for performance reasons. Your system "
+                               "contains %1 types.")
+                                .arg(uniqueTypes.size()));
+    }
+
+    // Perform the calculation in a separate thread.
+    return asyncLaunch([state = std::move(state),
+                        particles,
+                        particleTypes,
+                        selection,
+                        cutoff = cutoff(),
+                        rdfSampleCount,
+                        computePartialRDF = computePartialRDF(),
+                        uniqueTypes = std::move(uniqueTypes),
+                        createdByNode = request.modificationNodeWeak()]() mutable {
+        TaskProgress progress(this_task::ui());
+        progress.setText(tr("Coordination analysis"));
+
+        boost::container::flat_set<int> uniqueTypeIds;
+        uniqueTypeIds.reserve(uniqueTypes.size());
+
+        if(computePartialRDF && selection && particleTypes) {
+            // When computing particle RDFs only for selected particles, remove particle types from list that are not present in the subset
+            // of particles.
+            BufferReadAccess<SelectionIntType> selectionAcc(selection);
+            auto sel = selectionAcc.cbegin();
+            for(auto t : BufferReadAccess<int32_t>(particleTypes)) {
+                if(*sel++) uniqueTypeIds.insert(t);
+            }
+            // Remove elements from 'uniqueTypes' which are not present in 'uniqueTypeIds'.
+            for(auto iter = uniqueTypes.begin(); iter != uniqueTypes.end();) {
+                if(uniqueTypeIds.find(iter->first) == uniqueTypeIds.end())
+                    iter = uniqueTypes.erase(iter);
+                else
+                    ++iter;
+            }
+            OVITO_ASSERT(uniqueTypeIds.size() == uniqueTypes.size());
+        }
+        else {
+            for(const auto& t : uniqueTypes) uniqueTypeIds.insert(t.first);
+        }
+        if(computePartialRDF && uniqueTypeIds.empty())
+            throw Exception(tr("Cannot compute partial RDFs, because input comprises zero particle types."));
+
+        size_t rdfComponentCount = computePartialRDF ? (uniqueTypeIds.size() * (uniqueTypeIds.size() + 1) / 2) : 1;
+        QStringList coordinationComponentNames;
+        QStringList rdfComponentNames;
+        if(computePartialRDF) {
+            for(auto t1 = uniqueTypes.cbegin(); t1 != uniqueTypes.cend(); ++t1) {
+                coordinationComponentNames.push_back(t1->second);
+                for(auto t2 = t1; t2 != uniqueTypes.cend(); ++t2) {
+                    rdfComponentNames.push_back(QStringLiteral("%1-%2").arg(t1->second, t2->second));
+                }
+            }
+        }
+
+        // Create output property arrays.
+        Property* coordinationNumbers = particles->createProperty(DataBuffer::Uninitialized, Particles::CoordinationProperty);
+        PropertyPtr partialCoordinationNumbers;
+        if(computePartialRDF)
+            partialCoordinationNumbers = particles->createProperty(DataBuffer::Uninitialized,
+                                                                   QStringLiteral("Per Type Coordination"),
+                                                                   Property::Int32,
+                                                                   uniqueTypeIds.size(),
+                                                                   std::move(coordinationComponentNames));
+        PropertyPtr rdfY = DataTable::OOClass().createUserProperty(DataBuffer::Initialized,
+                                                                   rdfSampleCount,
+                                                                   Property::FloatDefault,
+                                                                   rdfComponentCount,
+                                                                   QStringLiteral("g(r)"),
+                                                                   0,
+                                                                   std::move(rdfComponentNames));
+
+        size_t particleCount = particles->elementCount();
+        const size_t typeCount = computePartialRDF ? uniqueTypeIds.size() : 1;
+        const size_t binCount = rdfSampleCount;
+        const size_t rdfCount = rdfComponentCount;
+        const FloatType rdfBinSize = cutoff / binCount;
+
+        // Get simulation cell.
+        const SimulationCell* simulationCell = state.getObject<SimulationCell>();
+
+#ifdef OVITO_USE_SYCL
+        OVITO_ASSERT(!partialCoordinationNumbers);
+
+        // Prepare the neighbor finder.
+        SyclCutoffNeighborFinder neighborFinder;
+        neighborFinder.prepare(cutoff, particles->expectProperty(Particles::PositionProperty), simulationCell, selection);
+
+        // Convert set of type IDs into a SYCL-compatible data structure.
+        SyclFlatSet uniqueTypeIdsFlat{uniqueTypeIds};
+
+        // Temporary buffer for computing the non-normalized RDF histogram, i.e., counting the number of pairs at each distance.
+        DataBufferPtr rdfHistogram = DataBufferPtr::create(DataBuffer::Initialized, binCount, DataBuffer::Int64, rdfCount);
+
+        // Calculate coordination numbers and RDF histogram.
+        syclParallelForWithProgress(particleCount, [&](sycl::handler& cgh, auto&& parallel_kernel) {
+            SyclBufferAccess<int32_t, access_mode::discard_write> coordinationAcc(coordinationNumbers, cgh);
+            SyclBufferAccess<int32_t, access_mode::read> particleTypeAcc(particleTypes, cgh);
+            SyclBufferAccess<SelectionIntType, access_mode::read> selectionAcc(selection, cgh);
+            SyclBufferAccess<int64_t*, access_mode::read_write> rdfAcc(rdfHistogram, cgh);
+            SyclCutoffNeighborFinder::Accessor neighborAcc(neighborFinder, cgh);
+            auto uniqueTypeIdsAcc = uniqueTypeIdsFlat.get_access(cgh);
+            sycl::local_accessor<int, 2> localHistogram{sycl::range<2>{binCount, rdfCount}, cgh};
+            parallel_kernel([=](sycl::nd_item<1> idx, size_t local_problem_size, size_t global_index_offset, auto&& was_canceled) {
+                // Parallelized histogram calculation.
+                // Phase I: Work-group items cooperate to zero local histogram memory.
+                auto grp = idx.get_group();
+                for(size_t b = idx.get_local_id(0); b < binCount; b += idx.get_local_range(0)) {
+                    for(size_t c = 0; c < rdfCount; c++) localHistogram[b][c] = 0;
+                }
+                sycl::group_barrier(grp);
+
+                // Phase II: Work-group items each add to the histogram in local memory.
+                for(size_t i_local = idx.get_global_id(0); i_local < local_problem_size; i_local += idx.get_global_range(0)) {
+                    size_t i = i_local + global_index_offset;
+
+                    if(was_canceled()) break;
+
+                    int coordination = 0;
+
+                    // Process only subset of selected particles if a selection has been specified.
+                    if(!selectionAcc || selectionAcc[i]) {
+                        size_t typeIndex1 = uniqueTypeIdsAcc ? uniqueTypeIdsAcc.index_of(particleTypeAcc[i]) : 0;
+                        if(typeIndex1 < typeCount) {
+                            neighborAcc.visitNeighbors(i, [&](const SyclCutoffNeighborFinder::Neighbor& neighbor) {
+                                coordination++;
+                                size_t rdfBin = sycl::min(static_cast<size_t>(neighbor.distance() / rdfBinSize), binCount - 1);
+
+                                // Calculating complete or partial RDF?
+                                if(!uniqueTypeIdsAcc) {
+                                    sycl::atomic_ref<int,
+                                                     sycl::memory_order::relaxed,
+                                                     sycl::memory_scope::work_group,
+                                                     sycl::access::address_space::local_space>(localHistogram[rdfBin][0])
+                                        .fetch_add(1);
+                                }
+                                else {
+                                    size_t typeIndex2 = uniqueTypeIdsAcc.index_of(particleTypeAcc[neighbor.neighborIndex()]);
+                                    if(typeIndex2 < typeCount) {
+                                        size_t lowerIndex = sycl::min(typeIndex1, typeIndex2);
+                                        size_t upperIndex = sycl::max(typeIndex1, typeIndex2);
+                                        size_t rdfIndex =
+                                            (typeCount * lowerIndex) - ((lowerIndex - 1) * lowerIndex) / 2 + upperIndex - lowerIndex;
+                                        sycl::atomic_ref<int,
+                                                         sycl::memory_order::relaxed,
+                                                         sycl::memory_scope::work_group,
+                                                         sycl::access::address_space::local_space>(localHistogram[rdfBin][rdfIndex])
+                                            .fetch_add(1);
+                                    }
+                                }
+                            });
+                        }
+                    }
+
+                    // Output coordination number.
+                    coordinationAcc[i] = coordination;
+                }
+                sycl::group_barrier(grp);
+
+                // Phase III: Work-group items cooperate to update histogram in global memory.
+                for(size_t b = idx.get_local_id(0); b < binCount; b += idx.get_local_range(0)) {
+                    for(size_t c = 0; c < rdfCount; c++) {
+                        sycl::atomic_ref<int64_t, sycl::memory_order::relaxed, sycl::memory_scope::device>(rdfAcc[b][c])
+                            .fetch_add(static_cast<int64_t>(localHistogram[b][c]));
+                    }
+                }
+            });
+        });
+#else
+        // Prepare the neighbor list.
+        CutoffNeighborFinder neighborFinder(cutoff, particles->expectProperty(Particles::PositionProperty), simulationCell, selection);
+
+        // Estimate average number of particles within cutoff range.
+        double density = (double)neighborFinder.particleCount() / neighborFinder.simulationCellVolume();
+        double estimatedNeighborCount =
+            density *
+            (!neighborFinder.simCell().is2D() ? (Ovito::pi * cutoff * cutoff * cutoff * (4.0 / 3.0)) : (Ovito::pi * cutoff * cutoff));
+        size_t chunkSize = 4096;
+        if(estimatedNeighborCount > 1.0) chunkSize = std::clamp<size_t>((4096 * 32) / estimatedNeighborCount, 8, chunkSize);
+
+        BufferWriteAccess<int32_t, access_mode::discard_write> coordinationData(coordinationNumbers);
+        BufferWriteAccess<int32_t*, access_mode::discard_read_write> partialCoordinationData(partialCoordinationNumbers);
+        BufferReadAccess<int32_t> particleTypeData(particleTypes);
+        BufferReadAccess<SelectionIntType> selectionData(selection);
+
+        if(partialCoordinationData) std::ranges::fill(partialCoordinationData, 0);
+
+        // Parallel calculation loop:
+        EnumerableThreadSpecific<std::vector<size_t>> threadLocalRDFs;
+        parallelForInnerOuter(particleCount, chunkSize, progress, [&](auto&& iterate) {
+            std::vector<size_t>& threadLocalRDF = threadLocalRDFs.create(binCount * rdfCount, 0);
+            iterate([&](size_t i) {
+                int coordination = 0;
+                if(!selectionData || selectionData[i]) {
+                    size_t typeIndex1 = computePartialRDF ? uniqueTypeIds.index_of(uniqueTypeIds.find(particleTypeData[i])) : 0;
+                    if(typeIndex1 < typeCount) {
+                        for(CutoffNeighborFinder::Query neighQuery(neighborFinder, i); !neighQuery.atEnd(); neighQuery.next()) {
+                            coordination++;
+                            if(computePartialRDF) {
+                                size_t typeIndex2 = uniqueTypeIds.index_of(uniqueTypeIds.find(particleTypeData[neighQuery.current()]));
+                                if(typeIndex2 < typeCount) {
+                                    partialCoordinationData.value(i, typeIndex2)++;
+                                    auto [lowerIndex, upperIndex] = std::minmax(typeIndex1, typeIndex2);
+                                    size_t rdfIndex =
+                                        (typeCount * lowerIndex) - ((lowerIndex - 1) * lowerIndex) / 2 + upperIndex - lowerIndex;
+                                    OVITO_ASSERT(rdfIndex < rdfCount);
+                                    size_t rdfBin = static_cast<size_t>(neighQuery.distance() / rdfBinSize);
+                                    threadLocalRDF[rdfIndex + std::min(rdfBin, binCount - 1) * rdfCount]++;
+                                }
+                            }
+                            else {
+                                size_t rdfBin = static_cast<size_t>(neighQuery.distance() / rdfBinSize);
+                                threadLocalRDF[std::min(rdfBin, binCount - 1)]++;
+                            }
+                        }
+                    }
+                }
+                coordinationData[i] = coordination;
+            });
+        });
+
+        // Combine per-thread RDFs into a set of master histograms.
+        BufferWriteAccess<FloatType*, access_mode::read_write> rdfData(rdfY);
+        threadLocalRDFs.visitEach([&](const std::vector<size_t>& r) {
+            OVITO_ASSERT(r.size() == rdfData.size() * rdfData.componentCount());
+            auto bin = r.cbegin();
+            for(auto iter = rdfData.begin(); iter != rdfData.end(); ++iter) *iter += *bin++;
+        });
+
+        particleTypeData.reset();
+        selectionData.reset();
+        coordinationData.reset();
+        partialCoordinationData.reset();
+        rdfData.reset();
+#endif
+        this_task::throwIfCanceled();
+
+        // Helper function that normalizes a RDF histogram.
+        auto normalizeRDF = [&](size_t type1Count, size_t type2Count, size_t component = 0, FloatType prefactor = 1) {
+            bool is2D = neighborFinder.simCell().is2D();
+            if(!is2D) {
+                prefactor *= FloatType(4.0 / 3.0) * Ovito::pi * type1Count / neighborFinder.simCell().volume3D() * type2Count;
+            }
+            else {
+                prefactor *= Ovito::pi * type1Count / neighborFinder.simCell().volume2D() * type2Count;
+            }
+            if(prefactor == 0.0) return;
+            OVITO_ASSERT(component < rdfY->componentCount());
+#ifdef OVITO_USE_SYCL
+            this_task::ui()->taskManager().syclQueue().submit([&](sycl::handler& cgh) {
+                SyclBufferAccess<int64_t*, access_mode::read> histogramAcc(rdfHistogram, cgh);
+                SyclBufferAccess<FloatType*, access_mode::discard_write> rdfAcc(rdfY, cgh);
+                OVITO_SYCL_PARALLEL_FOR(cgh, normalizeRDF_kernel)(sycl::range(rdfAcc.size()), [=](size_t i) {
+                    FloatType r1 = i * rdfBinSize;
+                    FloatType r2 = r1 + rdfBinSize;
+                    FloatType vol = is2D ? (r2 * r2 - r1 * r1) : (r2 * r2 * r2 - r1 * r1 * r1);
+                    rdfAcc[i][component] = histogramAcc[i][component] / (prefactor * vol);
+                });
+            });
+#else
+            FloatType r1 = 0;
+            BufferWriteAccess<FloatType*, access_mode::read_write> rdfData(rdfY);
+            for(FloatType& y : rdfData.componentRange(component)) {
+                FloatType r2 = r1 + rdfBinSize;
+                FloatType vol = is2D ? (r2 * r2 - r1 * r1) : (r2 * r2 * r2 - r1 * r1 * r1);
+                y /= prefactor * vol;
+                r1 = r2;
+            }
+#endif
+        };
+
+        if(!simulationCell) {
+            state.combineStatus(PipelineStatus::Warning,
+                                tr("A simulation cell volume is required for correct RDF normalization. "
+                                   "Using bounding box of particles likely leads to incorrect results."));
+        }
+        else if(simulationCell->isDegenerate()) {
+            state.combineStatus(PipelineStatus::Warning,
+                                tr("RDF calculation requires a non-zero simulation cell volume. Current box is degenerate."));
+            return std::move(state);
+        }
+
+        if(!computePartialRDF) {
+            if(selection) particleCount = selection->nonzeroCount();
+            normalizeRDF(particleCount, particleCount);
+        }
+        else {
+            // Count number of particles of each type.
+            BufferReadAccess<SelectionIntType> selectionAcc(selection);
+
+            std::vector<size_t> particleCounts(typeCount, 0);
+            const SelectionIntType* sel = selectionAcc ? selectionAcc.begin() : nullptr;
+            for(auto t : BufferReadAccess<int32_t>(particleTypes)) {
+                if(sel && !(*sel++)) continue;
+                size_t typeIndex = uniqueTypeIds.index_of(uniqueTypeIds.find(t));
+                if(typeIndex < typeCount) particleCounts[typeIndex]++;
+            }
+            this_task::throwIfCanceled();
+
+            // Normalize RDFs.
+            size_t component = 0;
+            for(size_t i = 0; i < particleCounts.size(); i++) {
+                for(size_t j = i; j < particleCounts.size(); j++) {
+                    normalizeRDF(particleCounts[i], particleCounts[j], component++, (i == j) ? 1 : 2);
+                    this_task::throwIfCanceled();
+                }
+            }
+        }
+
+        // Output RDF histogram(s).
+        DataTable* table = state.createObject<DataTable>(RadialDistributionFunctionModifier::TableIdentifier,
+                                                         createdByNode,
+                                                         DataTable::Line,
+                                                         tr("Radial distribution function"),
+                                                         std::move(rdfY));
+        table->setIntervalStart(0);
+        table->setIntervalEnd(cutoff);
+        table->setAxisLabelX(tr("Pair separation distance"));
+
+        return std::move(state);
+    });
+}
+
+}  // namespace Ovito

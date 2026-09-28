@@ -1,0 +1,153 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/core/Core.h>
+#include <ovito/core/dataset/pipeline/Modifier.h>
+#include "ModifierDelegate.h"
+
+namespace Ovito {
+
+/**
+ * \brief Base class for modifiers that delegate work to a ModifierDelegate object.
+ */
+class OVITO_CORE_EXPORT DelegatingModifier : public Modifier
+{
+public:
+
+    /// The abstract base class of delegates used by this modifier type.
+    using DelegateBaseType = ModifierDelegate;
+
+    /// Give this modifier class its own metaclass.
+    class OVITO_CORE_EXPORT DelegatingModifierClass : public ModifierClass
+    {
+    public:
+
+        /// Inherit constructor from base class.
+        using ModifierClass::ModifierClass;
+
+        /// Asks the metaclass whether the modifier can be applied to the given input data.
+        virtual bool isApplicableTo(const DataCollection& input) const override;
+
+        /// Return the metaclass of delegates for this modifier type.
+        virtual const ModifierDelegate::OOMetaClass& delegateMetaclass() const {
+            OVITO_ASSERT_MSG(false, "DelegatingModifier::OOMetaClass::delegateMetaclass()",
+                qPrintable(QStringLiteral("Delegating modifier class %1 does not define a corresponding delegate metaclass. "
+                "You must override the delegateMetaclass() method in the modifier's metaclass.").arg(name())));
+            return DelegateBaseType::OOClass();
+        }
+    };
+
+    OVITO_CLASS_META(DelegatingModifier, DelegatingModifierClass)
+
+public:
+
+    /// Constructor.
+    using Modifier::Modifier;
+
+protected:
+
+    /// Is called by the pipeline system before a new modifier evaluation begins.
+    virtual void preevaluateModifier(const ModifierEvaluationRequest& request, PipelineEvaluationResult::EvaluationTypes& evaluationTypes, TimeInterval& validityInterval) const override;
+
+    /// Modifies the input data.
+    virtual Future<PipelineFlowState> evaluateModifier(const ModifierEvaluationRequest& request, PipelineFlowState&& state) override;
+
+    /// Creates a default delegate for this modifier.
+    void createDefaultModifierDelegate(const OvitoClass& delegateType, const QString& defaultDelegateTypeName);
+
+    /// Lets the modifier's delegate operate on a pipeline flow state.
+    [[nodiscard]] Future<PipelineFlowState> applyDelegate(const ModifierEvaluationRequest& request, PipelineFlowState&& input, const std::vector<PipelineFlowState>& additionalInputs = {});
+
+protected:
+
+    /// The modifier delegate.
+    DECLARE_MODIFIABLE_REFERENCE_FIELD_FLAGS(OORef<ModifierDelegate>, delegate, setDelegate, PROPERTY_FIELD_ALWAYS_CLONE | PROPERTY_FIELD_MEMORIZE);
+};
+
+/**
+ * \brief Base class for modifiers that delegate work to a set of ModifierDelegate objects.
+ */
+class OVITO_CORE_EXPORT MultiDelegatingModifier : public Modifier
+{
+public:
+
+    /// The abstract base class of delegates used by this modifier type.
+    using DelegateBaseType = ModifierDelegate;
+
+    /// Give this modifier class its own metaclass.
+    class OVITO_CORE_EXPORT MultiDelegatingModifierClass : public ModifierClass
+    {
+    public:
+
+        /// Inherit constructor from base class.
+        using ModifierClass::ModifierClass;
+
+        /// Asks the metaclass whether the modifier can be applied to the given input data.
+        virtual bool isApplicableTo(const DataCollection& input) const override;
+
+        /// Return the metaclass of delegates for this modifier type.
+        virtual const ModifierDelegate::OOMetaClass& delegateMetaclass() const {
+            OVITO_ASSERT_MSG(false, "MultiDelegatingModifier::OOMetaClass::delegateMetaclass()",
+                qPrintable(QStringLiteral("Multi-delegating modifier class %1 does not define a corresponding delegate metaclass. "
+                    "You must override the delegateMetaclass() method in the modifier's metaclass.").arg(name())));
+            return ModifierDelegate::OOClass();
+        }
+    };
+
+    OVITO_CLASS_META(MultiDelegatingModifier, MultiDelegatingModifierClass)
+
+public:
+
+    /// Constructor.
+    using Modifier::Modifier;
+
+    /// Returns a short piece of information (typically a string or color) to be displayed next to the modifier's title in the pipeline
+    /// editor list.
+    virtual QVariant getPipelineEditorShortInfo(Scene* scene, ModificationNode* node) const override;
+
+protected:
+
+    /// Is called by the pipeline system before a new modifier evaluation begins.
+    virtual void preevaluateModifier(const ModifierEvaluationRequest& request, PipelineEvaluationResult::EvaluationTypes& evaluationTypes, TimeInterval& validityInterval) const override;
+
+    /// Modifies the input data.
+    virtual Future<PipelineFlowState> evaluateModifier(const ModifierEvaluationRequest& request, PipelineFlowState&& state) override;
+
+    /// Creates the list of delegate objects for this modifier.
+    void createModifierDelegates(const OvitoClass& delegateType, std::initializer_list<QString> defaultDelegateTypeNames = {});
+
+    /// Lets the registered modifier delegates operate on a pipeline flow state.
+    [[nodiscard]] Future<PipelineFlowState> applyDelegates(const ModifierEvaluationRequest& request, PipelineFlowState&& input, const std::vector<PipelineFlowState>& additionalInputs = {});
+
+    /// Is called when a RefTarget referenced by this object generated an event.
+    virtual bool referenceEvent(RefTarget* source, const ReferenceEvent& event) override;
+
+protected:
+
+    /// List of modifier delegates.
+    DECLARE_VECTOR_REFERENCE_FIELD_FLAGS(OORef<ModifierDelegate>, delegates, PROPERTY_FIELD_ALWAYS_CLONE | PROPERTY_FIELD_MEMORIZE);
+};
+
+}   // End of namespace

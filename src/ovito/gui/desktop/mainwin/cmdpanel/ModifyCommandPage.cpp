@@ -1,0 +1,469 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/gui/desktop/GUI.h>
+#include <ovito/core/dataset/pipeline/ModificationNode.h>
+#include <ovito/core/dataset/pipeline/Modifier.h>
+#include <ovito/core/dataset/scene/Pipeline.h>
+#include <ovito/core/dataset/scene/SelectionSet.h>
+#include <ovito/core/viewport/ViewportConfiguration.h>
+#include <ovito/core/app/undo/UndoableOperation.h>
+#include <ovito/core/dataset/DataSetContainer.h>
+#include <ovito/core/app/Application.h>
+#include <ovito/core/oo/CloneHelper.h>
+#include <ovito/gui/base/actions/ActionManager.h>
+#include <ovito/gui/base/mainwin/PipelineListModel.h>
+#include <ovito/gui/base/mainwin/templates/ModifierTemplates.h>
+#include <ovito/gui/desktop/app/GuiApplication.h>
+#include <ovito/gui/desktop/mainwin/MainWindowUI.h>
+#include <ovito/gui/desktop/widgets/general/InfoItemDelegate.h>
+#include <ovito/gui/desktop/dialogs/ModifierTemplatesPage.h>
+#include <ovito/gui/desktop/dialogs/CopyPipelineItemDialog.h>
+#include <ovito/gui/desktop/dialogs/ExportObjectSnippetDialog.h>
+#include <ovito/gui/desktop/dialogs/ImportObjectSnippetDialog.h>
+#include "CommandPanel.h"
+#include "ModifyCommandPage.h"
+#include "AvailableModifiersSelectorWidget.h"
+
+namespace Ovito {
+
+/******************************************************************************
+* Initializes the command panel tab.
+******************************************************************************/
+ModifyCommandPage::ModifyCommandPage(MainWindowUI& ui, QWidget* parent) : QWidget(parent), UserInterfaceComponent<MainWindowUI>(ui)
+{
+    QGridLayout* layout = new QGridLayout(this);
+    layout->setContentsMargins(2,2,2,2);
+    layout->setSpacing(4);
+    layout->setColumnStretch(0,1);
+
+    QAction* manageModifierTemplatesAction = actionManager()->createCommandAction(ACTION_MODIFIER_MANAGE_MODIFIER_TEMPLATES, tr("Manage Modifier Templates..."), "modify_modifier_save_preset", tr("Open the dialog that lets you manage the saved modifier templates."));
+    connect(manageModifierTemplatesAction, &QAction::triggered, this, [this]() {
+        ApplicationSettingsDialog dlg(this->ui(), &ModifierTemplatesPage::OOClass());
+        dlg.exec();
+    });
+
+    _pipelineListModel = new PipelineListModel(ui, this);
+    layout->addWidget(new AvailableModifiersSelectorWidget(this, ui, _pipelineListModel), 1, 0, 1, 1);
+
+    class PipelineListView : public QListView {
+    public:
+        using QListView::QListView;
+        virtual QSize sizeHint() const override { return QSize(256, 260); }
+    protected:
+        virtual bool edit(const QModelIndex& index, QAbstractItemView::EditTrigger trigger, QEvent* event) override {
+            if(trigger == QAbstractItemView::SelectedClicked && event->type() == QEvent::MouseButtonRelease) {
+                // Avoid triggering edit mode when user clicks the check box next to a list item.
+                QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
+                int origin = visualRect(index).left();
+#ifndef Q_OS_MACOS
+                if(mouseEvent->pos().x() < origin + 50)
+#else
+                if(mouseEvent->pos().x() < origin + 60)
+#endif
+                    trigger = QAbstractItemView::NoEditTriggers;
+            }
+            if((trigger == QAbstractItemView::SelectedClicked || trigger == QAbstractItemView::NoEditTriggers) && event->type() == QEvent::MouseButtonRelease) {
+                // Detect when user clicks on the collapsable part of a group item.
+                if(index.data(PipelineListModel::ItemTypeRole) == PipelineListItem::ModifierGroup) {
+                    QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
+                    int origin = visualRect(index).left();
+#ifndef Q_OS_MACOS
+                    if(mouseEvent->pos().x() >= origin + 25 && mouseEvent->pos().x() < origin + 50) {
+#else
+                    if(mouseEvent->pos().x() >= origin + 30 && mouseEvent->pos().x() < origin + 60) {
+#endif
+                        trigger = QAbstractItemView::NoEditTriggers;
+                        // Toggle the collapsed state of the group.
+                        bool isCollapsed = index.data(PipelineListModel::IsCollapsedRole).toBool();
+                        const_cast<QAbstractItemModel*>(index.model())->setData(index, !isCollapsed, PipelineListModel::IsCollapsedRole);
+                    }
+                }
+            }
+            return QListView::edit(index, trigger, event);
+        }
+    };
+
+    _splitter = new QSplitter(Qt::Vertical);
+    _splitter->setChildrenCollapsible(false);
+
+    QWidget* upperContainer = new QWidget();
+    _splitter->addWidget(upperContainer);
+    QHBoxLayout* subLayout = new QHBoxLayout(upperContainer);
+    subLayout->setContentsMargins(0,0,0,0);
+    subLayout->setSpacing(2);
+
+    _pipelineWidget = new PipelineListView(upperContainer);
+    _pipelineWidget->setDragDropMode(QAbstractItemView::InternalMove);
+    _pipelineWidget->setDragEnabled(true);
+    _pipelineWidget->setAcceptDrops(true);
+    _pipelineWidget->setDragDropOverwriteMode(false);
+    _pipelineWidget->setDropIndicatorShown(true);
+    _pipelineWidget->setEditTriggers(QAbstractItemView::SelectedClicked);
+    _pipelineWidget->setModel(_pipelineListModel);
+    _pipelineWidget->setSelectionModel(_pipelineListModel->selectionModel());
+    _pipelineWidget->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    _pipelineWidget->setIconSize(_pipelineListModel->iconSize());
+    _pipelineWidget->setItemDelegate(new InfoItemDelegate(_pipelineWidget, PipelineListModel::StatusInfoRole));
+    subLayout->addWidget(_pipelineWidget);
+
+    // Set up context menu.
+    QAction* separator;
+    //_pipelineWidget->addAction(actionManager()->getAction(ACTION_PIPELINE_TOGGLE_MODIFIER_GROUP));
+    //separator = new QAction(_pipelineWidget);
+    //separator->setSeparator(true);
+    //_pipelineWidget->addAction(separator);
+    _pipelineWidget->addAction(actionManager()->getAction(ACTION_PIPELINE_RENAME_ITEM));
+    separator = new QAction(_pipelineWidget);
+    separator->setSeparator(true);
+    _pipelineWidget->addAction(separator);
+    _pipelineWidget->addAction(actionManager()->getAction(ACTION_PIPELINE_COPY_ITEM));
+    _pipelineWidget->addAction(actionManager()->getAction(ACTION_MODIFIER_EXPORT_SNIPPET));
+    _pipelineWidget->addAction(actionManager()->getAction(ACTION_MODIFIER_IMPORT_SNIPPET));
+    separator = new QAction(_pipelineWidget);
+    separator->setSeparator(true);
+    _pipelineWidget->addAction(separator);
+    _pipelineWidget->addAction(actionManager()->getAction(ACTION_PIPELINE_MAKE_INDEPENDENT));
+    _pipelineWidget->addAction(actionManager()->getAction(ACTION_PIPELINE_GROUP_VIS_ELEMENTS));
+    separator = new QAction(_pipelineWidget);
+    separator->setSeparator(true);
+    _pipelineWidget->addAction(separator);
+    _pipelineWidget->addAction(actionManager()->getAction(ACTION_MODIFIER_DELETE));
+    _pipelineWidget->setContextMenuPolicy(Qt::ActionsContextMenu);
+
+    // Listen to selection changes in the pipeline editor list widget.
+    connect(_pipelineListModel, &PipelineListModel::selectedItemChanged, this, &ModifyCommandPage::onSelectedItemChanged);
+
+    // Double-click on a modifier or visual element toggles the enabled state of the element.
+    connect(_pipelineWidget, &PipelineListView::doubleClicked, this, &ModifyCommandPage::onModifierStackDoubleClicked);
+
+    QToolBar* editToolbar = new QToolBar(this);
+    editToolbar->setOrientation(Qt::Vertical);
+    subLayout->addWidget(editToolbar);
+
+    // Create pipeline editor toolbar.
+    editToolbar->addAction(actionManager()->getAction(ACTION_MODIFIER_DELETE));
+    editToolbar->addSeparator();
+    editToolbar->addAction(actionManager()->getAction(ACTION_MODIFIER_MOVE_UP));
+    editToolbar->addAction(actionManager()->getAction(ACTION_MODIFIER_MOVE_DOWN));
+    editToolbar->addSeparator();
+    editToolbar->addAction(actionManager()->getAction(ACTION_PIPELINE_TOGGLE_MODIFIER_GROUP));
+
+    editToolbar->addAction(manageModifierTemplatesAction);
+
+    connect(actionManager()->getAction(ACTION_PIPELINE_RENAME_ITEM), &QAction::triggered, this, [this]() {
+        _pipelineWidget->edit(_pipelineWidget->currentIndex());
+    });
+
+    connect(actionManager()->getAction(ACTION_PIPELINE_COPY_ITEM), &QAction::triggered, this, [this]() {
+        // Collect all currently selected pipeline nodes.
+        std::vector<OORef<PipelineNode>> nodes;
+        for(RefTarget* obj : _pipelineListModel->selectedObjects()) {
+            if(PipelineNode* pnode = dynamic_object_cast<PipelineNode>(obj)) {
+                if(std::find(nodes.begin(), nodes.end(), pnode) == nodes.end())
+                    nodes.push_back(pnode);
+            }
+            else if(ModifierGroup* group = dynamic_object_cast<ModifierGroup>(obj)) {
+                for(ModificationNode* modNode : group->nodes()) {
+                    if(std::find(nodes.begin(), nodes.end(), modNode) == nodes.end())
+                        nodes.push_back(modNode);
+                }
+            }
+        }
+        if(!nodes.empty()) {
+            CopyPipelineItemDialog dlg(this->ui(), window(), _pipelineListModel->selectedPipeline(), std::move(nodes));
+            dlg.exec();
+        }
+    });
+
+    connect(actionManager()->getAction(ACTION_MODIFIER_EXPORT_SNIPPET), &QAction::triggered, this, &ModifyCommandPage::onExportModifierSnippet);
+    connect(actionManager()->getAction(ACTION_MODIFIER_IMPORT_SNIPPET), &QAction::triggered, this, &ModifyCommandPage::onImportModifierSnippet);
+
+    layout->addWidget(_splitter, 2, 0, 1, 2);
+    layout->setRowStretch(2, 1);
+
+    // Create the properties panel.
+    _propertiesPanel = new PropertiesPanel(ui);
+    _propertiesPanel->setFrameStyle(QFrame::NoFrame | QFrame::Plain);
+    _splitter->addWidget(_propertiesPanel);
+    _splitter->setStretchFactor(1,1);
+
+    // Create About panel.
+    createAboutPanel();
+
+    // Initialize state.
+    onSelectedItemChanged();
+}
+
+/******************************************************************************
+* Loads the layout of the widgets from the settings store.
+******************************************************************************/
+void ModifyCommandPage::restoreLayout()
+{
+    QSettings settings;
+    settings.beginGroup("app/mainwindow/modify");
+    QVariant state = settings.value("splitter");
+    if(state.canConvert<QByteArray>())
+        _splitter->restoreState(state.toByteArray());
+}
+
+/******************************************************************************
+* Saves the layout of the widgets to the settings store.
+******************************************************************************/
+void ModifyCommandPage::saveLayout()
+{
+    QSettings settings;
+    settings.beginGroup("app/mainwindow/modify");
+    settings.setValue("splitter", _splitter->saveState());
+}
+
+/******************************************************************************
+* Is called when a new modification list item has been selected, or if the currently
+* selected item has changed.
+******************************************************************************/
+void ModifyCommandPage::onSelectedItemChanged()
+{
+    _propertiesPanel->setEditObject(pipelineListModel()->selectedObject());
+
+    // Whenever no object is selected, show information about the program.
+    if(pipelineListModel()->selectedItems().empty())
+        _aboutRollout->show();
+    else
+        _aboutRollout->hide();
+}
+
+/******************************************************************************
+* This called when the user double clicks on an item in the modifier stack.
+******************************************************************************/
+void ModifyCommandPage::onModifierStackDoubleClicked(const QModelIndex& index)
+{
+    PipelineListItem* item = pipelineListModel()->item(index.row());
+    OVITO_CHECK_OBJECT_POINTER(item);
+
+    if(ModificationNode* modNode = dynamic_object_cast<ModificationNode>(item->object())) {
+        // Toggle enabled state of modifier.
+        performTransaction(tr("Toggle modifier state"), [modNode]() {
+            modNode->modifier()->setEnabled(!modNode->modifier()->isEnabled());
+        });
+    }
+
+    if(DataVis* vis = dynamic_object_cast<DataVis>(item->object())) {
+        // Toggle enabled state of vis element.
+        performTransaction(tr("Toggle visual element"), [vis]() {
+            vis->setEnabled(!vis->isEnabled());
+        });
+    }
+}
+
+/******************************************************************************
+* Is called when the user triggers the "Export as Snippet..." action.
+******************************************************************************/
+void ModifyCommandPage::onExportModifierSnippet()
+{
+    handleExceptions([&]() {
+        // Collect all currently selected modifiers.
+        std::vector<OORef<RefTarget>> objects;
+        QStringList descriptions;
+        auto addModificationNode = [&](ModificationNode* modNode) {
+            QString description = modNode->objectTitle();
+            if(_pipelineListModel->selectedSceneNode()) {
+                QString shortInfo = modNode->getPipelineEditorShortInfo(_pipelineListModel->selectedSceneNode()->scene()).toString();
+                if(!shortInfo.isEmpty())
+                    description += " (" + shortInfo + ")";
+            }
+            descriptions.push_back(description);
+            objects.push_back(modNode->modifier());
+        };
+        for(RefTarget* obj : _pipelineListModel->selectedObjects()) {
+            if(ModificationNode* modNode = dynamic_object_cast<ModificationNode>(obj)) {
+                addModificationNode(modNode);
+            }
+            else if(ModifierGroup* group = dynamic_object_cast<ModifierGroup>(obj)) {
+                if(!group->isCollapsed())
+                    continue;
+                for(ModificationNode* modNode : group->nodes()) {
+                    addModificationNode(modNode);
+                }
+            }
+        }
+        std::ranges::reverse(descriptions);
+        if(objects.empty())
+            throw Exception(tr("No modifiers selected. Please select at least one modifier to export."));
+        ExportObjectSnippetDialog dlg(objects,
+            tr("OVITO Modifier Snippet: %1").arg(descriptions.join(" | ")), tr(
+            "The following text snippet represents the selected OVITO modifier(s). "
+            "You can save it to a file for later reuse, copy it to the clipboard, or share it with others. "
+            "The snippet can be imported back into OVITO to exactly recreate the modifier(s)."), this->ui(), this);
+
+        if(dlg.exec() == QDialog::Accepted) {
+            // Display tooltip that confirms the snippet has been copied to the clipboard.
+            // For positioning the tooltip, use the location of the selected item(s) in the pipeline editor list widget (_pipelineWidget).
+            // If multiple items are selected, use the position of the first selected item.
+            QPoint tooltipPos;
+            if(!_pipelineWidget->selectionModel()->selectedIndexes().isEmpty()) {
+                QModelIndex firstSelectedIndex = _pipelineWidget->selectionModel()->selectedIndexes().first();
+                QRect itemRect = _pipelineWidget->visualRect(firstSelectedIndex);
+                tooltipPos = _pipelineWidget->viewport()->mapToGlobal(itemRect.bottomLeft());
+            }
+            else {
+                // If no item is selected, show the tooltip at the current cursor position.
+                tooltipPos = QCursor::pos();
+            }
+            QToolTip::showText(tooltipPos, tr("Modifier snippet copied to clipboard"), this, QRect(), 3000);
+        }
+    });
+}
+
+/******************************************************************************
+* Is called when the user triggers the "Import from Snippet..." action.
+******************************************************************************/
+void ModifyCommandPage::onImportModifierSnippet()
+{
+    handleExceptions([&]() {
+        Pipeline* pipeline = _pipelineListModel->selectedPipeline();
+        if(!pipeline)
+            throw Exception(tr("No modification pipeline selected. Please select a scene node with a modification pipeline into which the imported modifier(s) should be inserted."));
+
+        // Open the import dialog.
+        ImportObjectSnippetDialog dialog(tr("modifier"), this->ui(), this);
+        if(dialog.exec() != QDialog::Accepted)
+            return;
+
+        // Cast the imported objects to Modifier instances.
+        QVector<OORef<Modifier>> modifiers;
+        for(const auto& obj : dialog.objects()) {
+            if(Modifier* modifier = dynamic_object_cast<Modifier>(obj.get())) {
+                modifiers.push_back(modifier);
+            }
+        }
+
+        if(modifiers.empty())
+            throw Exception(tr("No valid modifiers found in the imported snippet."));
+
+        // Insert the modifiers into the pipeline.
+        performTransaction(tr("Import modifiers from snippet"), [&]() {
+            // Put the modifiers into a group if there are two or more.
+            OORef<ModifierGroup> modifierGroup;
+            if(modifiers.size() >= 2) {
+                modifierGroup = OORef<ModifierGroup>::create();
+                modifierGroup->setCollapsed(true);
+                modifierGroup->setTitle(tr("Imported modifiers"));
+            }
+            // Note: Set initializeModifiers=false, because the deserialized modifiers are
+            // already in a fully initialized state. Re-initializing them can cause problems,
+            // such as changing existing settings.
+            _pipelineListModel->applyModifiers(modifiers, modifierGroup, false);
+        });
+    });
+}
+
+/******************************************************************************
+* Creates the rollout panel that shows information about the application
+* whenever no object is selected.
+******************************************************************************/
+void ModifyCommandPage::createAboutPanel()
+{
+    QWidget* rollout = new QWidget();
+    QVBoxLayout* layout = new QVBoxLayout(rollout);
+    layout->setContentsMargins(8,8,8,8);
+
+    QTextBrowser* aboutLabel = new QTextBrowser(rollout);
+    aboutLabel->setObjectName("AboutLabel");
+    aboutLabel->setOpenExternalLinks(true);
+    aboutLabel->setMinimumHeight(600);
+    aboutLabel->setFrameStyle(QFrame::NoFrame | QFrame::Plain);
+    aboutLabel->viewport()->setAutoFillBackground(false);
+    layout->addWidget(aboutLabel);
+
+    QByteArray newsPage;
+#if !defined(OVITO_BUILD_APPSTORE_VERSION)
+    QSettings settings;
+    if(settings.value("updates/check_for_updates", true).toBool()) {
+        // Retrieve cached news page from settings store.
+        newsPage = settings.value("news/cached_webpage").toByteArray();
+    }
+    if(newsPage.isEmpty()) {
+        QResource res("/gui/mainwin/command_panel/about_panel.html");
+        newsPage = QByteArray((const char *)res.data(), (int)res.size());
+    }
+#else
+    QResource res("/gui/mainwin/command_panel/about_panel_no_updates.html");
+    newsPage = QByteArray((const char *)res.data(), (int)res.size());
+#endif
+
+    // Display cached newsPage
+    _aboutRollout = _propertiesPanel->addRollout(rollout, Application::applicationName());
+    showProgramNotice(QString::fromUtf8(newsPage.constData()));
+}
+
+/******************************************************************************
+* Displays the given HTML page content in the About pane.
+******************************************************************************/
+void ModifyCommandPage::showProgramNotice(const QString& htmlPage)
+{
+    QString finalText = htmlPage;
+
+#if defined(OVITO_DEVELOPMENT_BUILD_DATE)
+    const QString previewNotice =
+        tr("<h4>Preview version notice</h4><p style=\"background-color: rgb(230,180,180); color: black;\">You are using an early "
+           "development build of %1, which was created on %2.</p> "
+           "<p style=\"background-color: rgb(230,180,180); color: black;\">Remember to install the final release of %1 as soon as it "
+           "becomes available on our website <a href=\"https://www.ovito.org/\">www.ovito.org</a>.</p>")
+            .arg(Application::applicationName())
+            .arg(QStringLiteral(OVITO_DEVELOPMENT_BUILD_DATE));
+    finalText.replace(QStringLiteral("<p>&nbsp;</p>"), previewNotice);
+#endif
+
+    QTextBrowser* aboutLabel = _aboutRollout->findChild<QTextBrowser*>("AboutLabel");
+    OVITO_CHECK_POINTER(aboutLabel);
+    aboutLabel->setHtml(finalText);
+}
+
+/******************************************************************************
+* Selects the given pipeline node in the pipeline editor and opens the
+* properties editor for the given pipeline node.
+******************************************************************************/
+PropertiesEditor* ModifyCommandPage::startEditingPipelineNode(PipelineNode* node)
+{
+    OVITO_ASSERT(this_task::get());
+
+    if(!node)
+        return nullptr;
+
+    // If this is a modification node that is part of a collapsed group, ensure its modifier group is expanded.
+    if(ModificationNode* modNode = dynamic_object_cast<ModificationNode>(node)) {
+        if(modNode->modifierGroup())
+            modNode->modifierGroup()->setCollapsed(false);
+    }
+
+    // Open the command panel tab.
+    ui().mainWindow()->setCurrentCommandPanelPage(MainWindow::CommandPanelPage::MODIFY_PAGE);
+
+    // Set the selection in the pipeline editor.
+    pipelineListModel()->setNextObjectToSelect(node);
+    pipelineListModel()->refreshListNow();
+
+    // Return the current editor.
+    return propertiesPanel()->editor();
+}
+
+}   // End of namespace

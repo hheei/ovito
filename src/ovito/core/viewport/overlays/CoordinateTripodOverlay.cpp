@@ -1,0 +1,451 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/core/Core.h>
+#include <ovito/core/viewport/Viewport.h>
+#include <ovito/core/rendering/FrameGraph.h>
+#include <ovito/core/rendering/TextPrimitive.h>
+#include <ovito/core/dataset/DataSet.h>
+#include <ovito/core/utilities/units/UnitsManager.h>
+#include <ovito/core/app/Application.h>
+#include "CoordinateTripodOverlay.h"
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(CoordinateTripodOverlay);
+OVITO_CLASSINFO(CoordinateTripodOverlay, "DisplayName", "Coordinate tripod");
+OVITO_CLASSINFO(CoordinateTripodOverlay, "Description", "Displays a coordinate tripod.");
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, alignment);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, tripodSize);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, lineWidth);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, font);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, fontSize);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, offsetX);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, offsetY);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis1Enabled);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis2Enabled);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis3Enabled);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis4Enabled);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis1Label);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis2Label);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis3Label);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis4Label);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis1Dir);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis2Dir);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis3Dir);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis4Dir);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis1Color);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis2Color);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis3Color);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, axis4Color);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, tripodStyle);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, outlineColor);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, outlineEnabled);
+DEFINE_PROPERTY_FIELD(CoordinateTripodOverlay, perspectiveDistortion);
+SET_PROPERTY_FIELD_LABEL(CoordinateTripodOverlay, alignment, "Position");
+SET_PROPERTY_FIELD_LABEL(CoordinateTripodOverlay, tripodSize, "Overall size");
+SET_PROPERTY_FIELD_LABEL(CoordinateTripodOverlay, lineWidth, "Line width");
+SET_PROPERTY_FIELD_LABEL(CoordinateTripodOverlay, font, "Font");
+SET_PROPERTY_FIELD_LABEL(CoordinateTripodOverlay, fontSize, "Text size");
+SET_PROPERTY_FIELD_LABEL(CoordinateTripodOverlay, offsetX, "Offset X");
+SET_PROPERTY_FIELD_LABEL(CoordinateTripodOverlay, offsetY, "Offset Y");
+SET_PROPERTY_FIELD_LABEL(CoordinateTripodOverlay, tripodStyle, "Style");
+SET_PROPERTY_FIELD_LABEL(CoordinateTripodOverlay, outlineColor, "Outline color");
+SET_PROPERTY_FIELD_LABEL(CoordinateTripodOverlay, outlineEnabled, "Enable outline");
+SET_PROPERTY_FIELD_LABEL(CoordinateTripodOverlay, perspectiveDistortion, "Perspective distortion");
+SET_PROPERTY_FIELD_UNITS(CoordinateTripodOverlay, offsetX, PercentParameterUnit);
+SET_PROPERTY_FIELD_UNITS(CoordinateTripodOverlay, offsetY, PercentParameterUnit);
+SET_PROPERTY_FIELD_UNITS_AND_RANGE(CoordinateTripodOverlay, tripodSize, FloatParameterUnit, 1e-4, 1);
+SET_PROPERTY_FIELD_UNITS_AND_RANGE(CoordinateTripodOverlay, lineWidth, FloatParameterUnit, 1e-4, 1);
+SET_PROPERTY_FIELD_UNITS_AND_RANGE(CoordinateTripodOverlay, fontSize, FloatParameterUnit, 0, 1);
+
+/******************************************************************************
+* Is called when the value of a property of this object has changed.
+******************************************************************************/
+void CoordinateTripodOverlay::propertyChanged(const PropertyFieldDescriptor* field)
+{
+    if(field == PROPERTY_FIELD(alignment) && !shouldIgnoreChanges() && !isUndoingOrRedoing() && this_task::isInteractive()) {
+        // Automatically reset offset to zero when user changes the alignment of the overlay in the viewport.
+        setOffsetX(0);
+        setOffsetY(0);
+    }
+    ViewportOverlay::propertyChanged(field);
+}
+
+/******************************************************************************
+* Lets the overlay paint its contents into the framebuffer.
+******************************************************************************/
+PipelineStatus CoordinateTripodOverlay::renderSynchronous(FrameGraph& frameGraph, FrameGraph::RenderingCommandGroup& commandGroup, const QRect& logicalViewportRect, const QRect& physicalViewportRect, const ViewProjectionParameters& noninteractiveProjParams, const Scene* scene)
+{
+    // Check alignment parameter.
+    if(!frameGraph.isInteractive())
+        checkAlignmentParameterValue(alignment());
+
+    if(this->tripodSize() > 1.0)
+        return PipelineStatus(PipelineStatus::Error, tr("Coordinate tripod size is too large. Maximum size factor is 1."));
+
+    FloatType tripodSize = this->tripodSize() * physicalViewportRect.height();
+    if(tripodSize <= 0) return {};
+
+    FloatType lineWidth = this->lineWidth() * tripodSize;
+    if(lineWidth <= 0) return {};
+
+    FloatType arrowSize = FloatType(0.17);
+
+    QPointF origin(offsetX() * physicalViewportRect.width() + physicalViewportRect.left(), -offsetY() * physicalViewportRect.height() + physicalViewportRect.top());
+    FloatType margin = tripodSize + lineWidth;
+
+    if(alignment() & Qt::AlignLeft) origin.rx() += margin;
+    else if(alignment() & Qt::AlignRight) origin.rx() += physicalViewportRect.width() - margin;
+    else if(alignment() & Qt::AlignHCenter) origin.rx() += FloatType(0.5) * physicalViewportRect.width();
+
+    if(alignment() & Qt::AlignTop) origin.ry() += margin;
+    else if(alignment() & Qt::AlignBottom) origin.ry() += physicalViewportRect.height() - margin;
+    else if(alignment() & Qt::AlignVCenter) origin.ry() += FloatType(0.5) * physicalViewportRect.height();
+
+    // Project axes to view space.
+    Vector3 axisDirs[4] = {
+            noninteractiveProjParams.viewMatrix * axis1Dir(),
+            noninteractiveProjParams.viewMatrix * axis2Dir(),
+            noninteractiveProjParams.viewMatrix * axis3Dir(),
+            noninteractiveProjParams.viewMatrix * axis4Dir()
+    };
+
+    // Get axis colors.
+    QColor axisColors[4] = {
+            axis1Color(),
+            axis2Color(),
+            axis3Color(),
+            axis4Color()
+    };
+
+    // Order axes back to front.
+    std::vector<int> orderedAxes;
+    if(axis1Enabled()) orderedAxes.push_back(0);
+    if(axis2Enabled()) orderedAxes.push_back(1);
+    if(axis3Enabled()) orderedAxes.push_back(2);
+    if(axis4Enabled()) orderedAxes.push_back(3);
+    std::sort(orderedAxes.begin(), orderedAxes.end(), [&axisDirs](int a, int b) {
+        return axisDirs[a].z() < axisDirs[b].z();
+    });
+
+    const QString labels[4] = {
+            axis1Label(),
+            axis2Label(),
+            axis3Label(),
+            axis4Label()
+    };
+
+    if(this->fontSize() > 1.0)
+        return PipelineStatus(PipelineStatus::Error, tr("Coordinate label font size is too large."));
+
+    QFont font = this->font();
+    qreal fontSize = tripodSize * std::max(0.0, (double)this->fontSize());
+    if(fontSize != 0)
+        TextPrimitive::setFontPixelSize(font, fontSize / frameGraph.devicePixelRatio()); // Font size is always in logical units.
+
+    auto renderSolidJoint = [&]() {
+        // Look up the image primitive for the axis arrow in the cache.
+        const auto& [image, offset] = frameGraph.visCache().lookup<std::tuple<QImage, QPointF>>(
+            RendererResourceKey<struct SolidJointImageCache, Matrix3, FloatType>{
+                noninteractiveProjParams.viewMatrix.linear(),
+                lineWidth
+            },
+            [&](QImage& image, QPointF& offset) {
+                // Compute bounding box of joint.
+                FloatType margin = sqrt(3.0) * lineWidth;
+                QRectF imageRect = QRectF(-margin, -margin, 2*margin, 2*margin);
+
+                // Convert bounding box to physical units.
+                QRect pixelBounds = imageRect.toAlignedRect();
+
+                // Draw the joint into an image buffer, which will be cached.
+                image = QImage(pixelBounds.width(), pixelBounds.height(), frameGraph.preferredImageFormat());
+                image.fill(0);
+                QPainter painter(&image);
+                painter.setRenderHint(QPainter::Antialiasing);
+                painter.setWindow(pixelBounds);
+                paintSolidJoint(painter, QPointF(0,0), noninteractiveProjParams.viewMatrix, lineWidth);
+                painter.end(); // Release the QImage we've been painting into.
+                offset = imageRect.topLeft();
+            });
+
+        // Render the prepared image into the output framebuffer.
+        QPoint alignedPos = (origin + offset).toPoint();
+        std::unique_ptr<ImagePrimitive> imagePrimitive = std::make_unique<ImagePrimitive>();
+        imagePrimitive->setImage(image);
+        imagePrimitive->setRectWindow(QRect(alignedPos, image.size()));
+        commandGroup.addPrimitivePreprojected(std::move(imagePrimitive));
+    };
+
+    // Render axis arrows.
+    FloatType lastZ = -1;
+    for(int axis : orderedAxes) {
+
+        if(tripodStyle() == SolidArrows && lastZ < 0 && axisDirs[axis].z() >= 0) {
+            renderSolidJoint();
+        }
+        lastZ = axisDirs[axis].z();
+
+        Vector3 dir3d = tripodSize * axisDirs[axis];
+        dir3d.y() = -dir3d.y();
+        Vector2 dir2d(dir3d.x(), dir3d.y());
+
+        // Apply perspective distortion to tripod axis.
+        if(perspectiveDistortion() && noninteractiveProjParams.isPerspective) {
+            // Calculate the tripod's origin in normalized device coordinates.
+            FloatType vporiginX =  (origin.x() - physicalViewportRect.left()) / physicalViewportRect.width()  * 2.0 - 1.0;
+            FloatType vporiginY = -(origin.y() - physicalViewportRect.top())  / physicalViewportRect.height() * 2.0 + 1.0;
+            FloatType distance = noninteractiveProjParams.zfar;
+            // Calculate the screen-space points on the near and far clipping planes.
+            Point3 p1 = noninteractiveProjParams.inverseProjectionMatrix * Point3(vporiginX, vporiginY, 1);
+            Point3 p2 = noninteractiveProjParams.inverseProjectionMatrix * Point3(vporiginX, vporiginY, 0);
+            Vector3 rayDir = (p1 - p2).safelyNormalized();
+            // View-space position of the tripod's origin.
+            Point3 viewSpaceOrigin = Point3::Origin() + rayDir * (distance / -rayDir.z());
+            // View-space position of the tripod's tip. Scale the axis length with the distance from the viewer.
+            Point3 viewSpaceTip = viewSpaceOrigin + (std::tan(noninteractiveProjParams.fieldOfView / 2) * distance * axisDirs[axis]);
+            // Screen-space position of the tripod's tip.
+            Point3 screenSpaceTip = noninteractiveProjParams.projectionMatrix * viewSpaceTip;
+            // Screen-space direction of the tripod axis.
+            dir2d = Point2(screenSpaceTip.x(), screenSpaceTip.y()) - Point2(vporiginX, vporiginY);
+            dir2d.y() = -dir2d.y();
+            dir2d.x() /= noninteractiveProjParams.aspectRatio;
+            dir2d *= this->tripodSize() * physicalViewportRect.height();
+        }
+
+        FloatType labelMargin = lineWidth * 2.5;
+
+        // Look up the image primitive for the axis arrow in the cache.
+        const auto& [image, offset, addedMargin] = frameGraph.visCache().lookup<std::tuple<QImage, QPointF, FloatType>>(
+            RendererResourceKey<struct ArrowAxisImageCache, TripodStyle, Vector3, Vector2, FloatType, Color>{
+                tripodStyle(),
+                dir3d,
+                dir2d,
+                lineWidth,
+                axisColors[axis]
+            },
+            [&](QImage& image, QPointF& offset, FloatType& addedMargin) {
+                // Compute bounding box of arrow.
+                QRectF imageRect = QRectF(0, 0, dir2d.x(), dir2d.y()).normalized();
+                FloatType margin = std::max(lineWidth, (tripodStyle() == FlatArrows) ? (arrowSize * tripodSize) : 0.0);
+                imageRect.adjust(-margin, -margin, margin, margin);
+
+                // Convert bounding box to physical units.
+                QRect pixelBounds = imageRect.toAlignedRect();
+
+                // Draw the arrow into an image buffer, which will be cached.
+                image = QImage(pixelBounds.width(), pixelBounds.height(), frameGraph.preferredImageFormat());
+                image.fill(0);
+                QPainter painter(&image);
+                painter.setRenderHint(QPainter::Antialiasing);
+                painter.setWindow(pixelBounds);
+                QBrush brush(axisColors[axis]);
+                QPen pen(axisColors[axis]);
+                pen.setWidthF(lineWidth);
+                pen.setJoinStyle(Qt::MiterJoin);
+                pen.setCapStyle(Qt::RoundCap);
+                painter.setPen(pen);
+                painter.setBrush(brush);
+                if(tripodStyle() == FlatArrows)
+                    addedMargin = paintFlatArrow(painter, dir2d, arrowSize, lineWidth, tripodSize, QPointF(0,0));
+                else if(tripodStyle() == SolidArrows)
+                    addedMargin += paintSolidArrow(painter, dir2d, dir3d, arrowSize, lineWidth, tripodSize, QPointF(0,0));
+                painter.end(); // Release the QImage we've been painting into.
+                offset = imageRect.topLeft();
+            });
+
+        // Paint the prepared image into the output framebuffer.
+        labelMargin += addedMargin;
+        QPoint alignedPos = (origin + offset).toPoint();
+        std::unique_ptr<ImagePrimitive> imagePrimitive = std::make_unique<ImagePrimitive>();
+        imagePrimitive->setImage(image);
+        imagePrimitive->setRectWindow(QRect(alignedPos, image.size()));
+        commandGroup.addPrimitivePreprojected(std::move(imagePrimitive));
+
+        // Render axis label.
+        if(fontSize != 0 && !labels[axis].isEmpty()) {
+            std::unique_ptr<TextPrimitive> textPrimitive = std::make_unique<TextPrimitive>();
+            textPrimitive->setText(labels[axis]);
+            textPrimitive->setFont(font);
+            textPrimitive->setColor(axisColors[axis]);
+            if(outlineEnabled())
+                textPrimitive->setOutlineColor(outlineColor());
+            textPrimitive->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
+            textPrimitive->setUseTightBox(true);
+            textPrimitive->setTextFormat(Qt::AutoText);
+
+            QRectF textRect = textPrimitive->queryLocalBounds(frameGraph.visCache(), frameGraph.devicePixelRatio());
+            textRect.moveTopLeft(QPointF(-textRect.width() / 2, -textRect.height() / 2));
+            textRect.translate(origin + QPointF(dir2d.x(), dir2d.y()));
+            if(dir2d.isZero() && orderedAxes.size() >= 2) {
+                // When looking on the axis head-on, determine the displacement of the label such that it moves away
+                // from the other axes.
+                Vector3 averageAxisDir = Vector3::Zero();
+                for(int otherAxis : orderedAxes)
+                    if(otherAxis != axis) averageAxisDir += axisDirs[otherAxis];
+                if(!averageAxisDir.isZero())
+                    dir2d = Vector2(-averageAxisDir.x(), averageAxisDir.y());
+            }
+            // Position the label at the end of the axis arrow and a bit beyond.
+            if(!dir2d.isZero()) {
+                FloatType offset1 = dir2d.x() != 0 ? textRect.width() / std::abs(dir2d.x()) : FLOATTYPE_MAX;
+                FloatType offset2 = dir2d.y() != 0 ? textRect.height() / std::abs(dir2d.y()) : FLOATTYPE_MAX;
+                textRect.translate(0.5 * std::min(offset1, offset2) * QPointF(dir2d.x(), dir2d.y()));
+                Vector2 dir2d_normalized = dir2d;
+                dir2d_normalized.resize(labelMargin);
+                textRect.translate(dir2d_normalized.x(), dir2d_normalized.y());
+            }
+            textPrimitive->setPositionWindow(Point2(textRect.center().x(), textRect.center().y()));
+            commandGroup.addPrimitivePreprojected(std::move(textPrimitive));
+        }
+    }
+
+    if(tripodStyle() == SolidArrows && lastZ < 0) {
+        renderSolidJoint();
+    }
+
+    return {};
+}
+
+/******************************************************************************
+* Paints a single arrow in flat style.
+******************************************************************************/
+FloatType CoordinateTripodOverlay::paintFlatArrow(QPainter& painter, const Vector2& dir2d, FloatType arrowSize, FloatType lineWidth, FloatType tripodSize, QPointF origin)
+{
+    if(!dir2d.isZero()) {
+        painter.drawLine(origin, origin + QPointF(dir2d.x(), dir2d.y()));
+        Vector2 dir2d_normalized = dir2d;
+        if(dir2d_normalized.length() > arrowSize * tripodSize)
+            dir2d_normalized.resize(arrowSize * tripodSize);
+        QPointF head[3];
+        head[1] = origin + QPointF(dir2d.x(), dir2d.y());
+        head[0] = head[1] + QPointF(0.5 * -dir2d_normalized.y() - dir2d_normalized.x(), -(0.5 * -dir2d_normalized.x() + dir2d_normalized.y()));
+        head[2] = head[1] + QPointF(0.5 *  dir2d_normalized.y() - dir2d_normalized.x(), -(0.5 *  dir2d_normalized.x() + dir2d_normalized.y()));
+        painter.drawConvexPolygon(head, 3);
+        return 0;
+    }
+    else {
+        // Draw a circle instead of an arrow when looking head onto the axis.
+        double arrowHeadSize = (lineWidth + tripodSize * arrowSize) * 0.5;
+        QPen pen = painter.pen();
+        painter.setPen(Qt::NoPen);
+        painter.drawEllipse(origin, arrowHeadSize, arrowHeadSize);
+        painter.setPen(pen);
+        return arrowHeadSize * 0.5;
+    }
+}
+
+/******************************************************************************
+* Paints a single arrow in solid style.
+******************************************************************************/
+FloatType CoordinateTripodOverlay::paintSolidArrow(QPainter& painter, const Vector2& dir2d, const Vector3& dir3d, FloatType arrowSize, FloatType lineWidth, FloatType tripodSize, QPointF origin)
+{
+    if(!dir2d.isZero()) {
+        QPainterPath cylPth;
+        QPainterPath capPth;
+        FloatType len = dir2d.length();
+        FloatType offset = len / tripodSize * lineWidth;
+        cylPth.moveTo(offset, lineWidth);
+        cylPth.lineTo(len, lineWidth);
+        if(std::abs(dir3d.z()) > Ovito::epsilon) {
+            qreal d = -dir3d.z() / tripodSize * lineWidth;
+            cylPth.arcTo(QRectF(len - d, -lineWidth, d*2, lineWidth*2), 270.0, 180.0);
+            if(dir3d.z() > 0) {
+                capPth.addEllipse(QRectF(len - d, -lineWidth, d*2, lineWidth*2));
+            }
+        }
+        else {
+            cylPth.lineTo(len, -lineWidth);
+        }
+        cylPth.lineTo(offset, -lineWidth);
+        if(std::abs(dir3d.z()) > Ovito::epsilon) {
+            qreal d = -dir3d.z() / tripodSize * lineWidth;
+            cylPth.arcTo(QRectF(offset - d, -lineWidth, d*2, lineWidth*2), 90.0, -180.0);
+        }
+        else {
+            cylPth.closeSubpath();
+        }
+        QTransform parentTransform = painter.transform();
+        QTransform transform;
+        transform.translate(origin.x(), origin.y());
+        transform.rotateRadians(std::atan2(dir2d.y(), dir2d.x()));
+        painter.setWorldTransform(transform, true);
+        QPen pen = painter.pen();
+        painter.setPen(QPen(Qt::black, 0.5));
+        painter.drawPath(capPth);
+        QBrush brush = painter.brush();
+        QLinearGradient gradient(0, -lineWidth, 0, lineWidth);
+        gradient.setColorAt(0.0, brush.color().darker());
+        gradient.setColorAt(0.2, brush.color());
+        gradient.setColorAt(0.4, (brush.color().lightness() != 0) ? brush.color().lighter() : QColor(200, 200, 200));
+        gradient.setColorAt(0.7, brush.color());
+        gradient.setColorAt(1.0, brush.color().darker());
+        painter.setBrush(gradient);
+        painter.drawPath(cylPth);
+        painter.setPen(pen);
+        painter.setBrush(brush);
+        painter.setWorldTransform(parentTransform);
+    }
+    else {
+        double arrowHeadSize = (lineWidth + tripodSize * arrowSize) * 0.5;
+        return arrowHeadSize * 0.5;
+    }
+    return 0;
+}
+
+/******************************************************************************
+* Paints the tripod's joint in solid style.
+******************************************************************************/
+void CoordinateTripodOverlay::paintSolidJoint(QPainter& painter, QPointF origin, const AffineTransformation& viewTM, FloatType lineWidth)
+{
+    const FloatType scaling = lineWidth;
+    const Vector3 dirs[3] = {
+        viewTM.column(0),
+        viewTM.column(1),
+        viewTM.column(2)
+    };
+
+    painter.setPen(QPen(Qt::black, 0.4));
+
+    QPointF vertices[4];
+    for(int side = 0; side < 3; side++) {
+        qreal lightness = (std::abs(dirs[side].z()) + 0.5) / 1.6;
+        painter.setBrush(QColor::fromHslF(0.0, 0.0, lightness));
+        FloatType flip = (dirs[side].z() < 0) ? -1 : 1;
+        vertices[0] = origin;
+        vertices[0].rx() += (flip * dirs[side].x() + dirs[(side+1)%3].x() + dirs[(side+2)%3].x()) * scaling;
+        vertices[0].ry() -= (flip * dirs[side].y() + dirs[(side+1)%3].y() + dirs[(side+2)%3].y()) * scaling;
+        vertices[1] = origin;
+        vertices[1].rx() += (flip * dirs[side].x() - dirs[(side+1)%3].x() + dirs[(side+2)%3].x()) * scaling;
+        vertices[1].ry() -= (flip * dirs[side].y() - dirs[(side+1)%3].y() + dirs[(side+2)%3].y()) * scaling;
+        vertices[2] = origin;
+        vertices[2].rx() += (flip * dirs[side].x() - dirs[(side+1)%3].x() - dirs[(side+2)%3].x()) * scaling;
+        vertices[2].ry() -= (flip * dirs[side].y() - dirs[(side+1)%3].y() - dirs[(side+2)%3].y()) * scaling;
+        vertices[3] = origin;
+        vertices[3].rx() += (flip * dirs[side].x() + dirs[(side+1)%3].x() - dirs[(side+2)%3].x()) * scaling;
+        vertices[3].ry() -= (flip * dirs[side].y() + dirs[(side+1)%3].y() - dirs[(side+2)%3].y()) * scaling;
+        painter.drawPolygon(vertices, 4);
+    }
+}
+
+}   // End of namespace

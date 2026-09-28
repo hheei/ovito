@@ -1,0 +1,59 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/particles/gui/ParticlesGui.h>
+#include <ovito/oxdna/OXDNAImporter.h>
+#include <ovito/gui/desktop/dataset/io/FileImporterEditor.h>
+
+namespace Ovito {
+
+/**
+ * \brief A properties editor for the OXDNAImporter class.
+ */
+class OXDNAImporterEditor : public FileImporterEditor
+{
+    OVITO_CLASS(OXDNAImporterEditor)
+    Q_OBJECT
+
+protected:
+
+    /// Creates the user interface controls for the editor.
+    virtual void createUI(const RolloutInsertionParameters& rolloutParams) override;
+
+private Q_SLOTS:
+
+    /// Is called by the system when the importer changes.
+    void importerChanged(RefTarget* editObject);
+
+    /// Lets the user choose a oxDNA topology file.
+    void onChooseTopologyFile();
+
+private:
+
+    QLineEdit* _topologyFileField;
+    QPushButton* _pickTopologyFileBtn;
+};
+
+}   // End of namespace

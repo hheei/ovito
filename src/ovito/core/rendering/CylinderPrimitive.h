@@ -1,0 +1,217 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+#include <ovito/core/Core.h>
+#include <ovito/core/dataset/data/DataBuffer.h>
+#include "PseudoColorMapping.h"
+#include "RenderingPrimitive.h"
+
+namespace Ovito {
+
+/**
+ * \brief A set of cylinders or arrow glyphs to be rendered by a SceneRenderer implementation.
+ */
+class OVITO_CORE_EXPORT CylinderPrimitive final : public RenderingPrimitive
+{
+    Q_GADGET
+
+#ifndef OVITO_BUILD_MONOLITHIC
+    // Give this exported c++ class a "key function" to work around dynamic_cast problems (observed on macOS platform).
+    // This function is not actually used but ensures that the class' vtable ends up in the core module.
+    // See also http://itanium-cxx-abi.github.io/cxx-abi/abi.html#vague-vtable
+    virtual void __key_function() override;
+#endif
+
+public:
+    enum ShadingMode
+    {
+        NormalShading,
+        FlatShading,
+    };
+    Q_ENUM(ShadingMode);
+
+    enum Shape
+    {
+        CylinderShape,
+        ArrowShape,
+    };
+    Q_ENUM(Shape);
+
+    /// Returns the shading mode for elements.
+    ShadingMode shadingMode() const { return _shadingMode; }
+
+    /// Changes the shading mode for elements.
+    void setShadingMode(ShadingMode mode) { _shadingMode = mode; }
+
+    /// Returns the selected element shape.
+    Shape shape() const { return _shape; }
+
+    /// Changes the element shape.
+    void setShape(Shape shape) { _shape = shape; }
+
+    /// Returns the cylinder diameter assigned to all primitives.
+    FloatType uniformWidth() const { return _uniformWidth; }
+
+    /// Sets the cylinder diameter of all primitives to the given value.
+    void setUniformWidth(FloatType width) { _uniformWidth = width; }
+
+    /// Returns the color assigned to all primitives.
+    const Color& uniformColor() const { return _uniformColor; }
+
+    /// Sets the color of all primitives to the given value.
+    void setUniformColor(const Color& color) { _uniformColor = color; }
+
+    /// Returns whether only one of the two cylinder caps is rendered.
+    bool renderSingleCylinderCap() const { return _renderSingleCylinderCap; }
+
+    /// Controls whether only one of the two cylinder caps is rendered.
+    void setRenderSingleCylinderCap(bool singleCap) { _renderSingleCylinderCap = singleCap; }
+
+    /// Returns the buffer storing the vertex positions (two per cylinder/arrow).
+    const ConstDataBufferPtr& vertexPositions() const { return _vertexPositions; }
+
+    /// Sets the coordinates of the vertex positions (two per cylinder/arrow).
+    void setVertexPositions(ConstDataBufferPtr vertexCoordinates)
+    {
+        OVITO_ASSERT(!vertexCoordinates || (vertexCoordinates->componentCount() == 3 && vertexCoordinates->size() % 2 == 0));
+        _vertexPositions = std::move(vertexCoordinates);
+    }
+
+    /// Returns the buffer storing the colors (either one or two per cylinder/arrow and either RGB or scalar pseudo-color values).
+    const ConstDataBufferPtr& colors() const { return _colors; }
+
+    /// Sets the per-primitive or per-vertex colors (either one or two per cylinder/arrow and either RGB or scalar pseudo-color values).
+    void setColors(ConstDataBufferPtr colors)
+    {
+        OVITO_ASSERT(!colors || (colors->componentCount() == 3 || colors->componentCount() == 1));
+        _colors = std::move(colors);
+    }
+
+    /// Sets the transparency values of the primitives (either one or two per cylinder/arrow).
+    void setTransparencies(ConstDataBufferPtr transparencies)
+    {
+        OVITO_ASSERT(!transparencies || transparencies->componentCount() == 1);
+        _transparencies = std::move(transparencies);
+    }
+
+    /// Returns the buffer storing the transparency values (either one or two per cylinder/arrow).
+    const ConstDataBufferPtr& transparencies() const { return _transparencies; }
+
+    /// Sets the diameters of the cylinders.
+    void setWidths(ConstDataBufferPtr widths)
+    {
+        OVITO_ASSERT(!widths || widths->componentCount() == 1);
+        _widths = std::move(widths);
+    }
+
+    /// Returns the buffer storing the per-cylinder diameter values.
+    const ConstDataBufferPtr& widths() const { return _widths; }
+
+    /// Returns the mapping from pseudo-color values to RGB colors.
+    const PseudoColorMapping& pseudoColorMapping() const { return _pseudoColorMapping; }
+
+    /// Sets the mapping from pseudo-color values to RGB colors.
+    void setPseudoColorMapping(const PseudoColorMapping& mapping) { _pseudoColorMapping = mapping; }
+
+    /// Returns the buffer storing the cylinder selection flags.
+    const ConstDataBufferPtr& selection() const { return _selection; }
+
+    /// Sets the selection flags of the cylinders.
+    void setSelection(ConstDataBufferPtr selection)
+    {
+        OVITO_ASSERT(!selection || (selection->dataType() == DataBuffer::IntSelection && selection->componentCount() == 1));
+        _selection = std::move(selection);
+    }
+
+    /// Returns the color used for rendering all selected cylinders.
+    const Color& selectionColor() const { return _selectionColor; }
+
+    /// Sets the color to be used for rendering the selected cylinders.
+    void setSelectionColor(const Color& color) { _selectionColor = color; }
+
+    /// Computes the 3d bounding box of the primitive in local coordinate space.
+    virtual Box3 computeBoundingBox(const RendererResourceCache::ResourceFrame& visCache) const override
+    {
+        OVITO_ASSERT(this);
+        const Box3& bb = visCache.lookup<Box3>(
+            RendererResourceKey<struct CylinderBoundingBoxCache, ConstDataBufferPtr>{vertexPositions()},
+            [this](Box3& bb) {
+                if(vertexPositions()) {
+                    bb.addBox(vertexPositions()->boundingBox3());
+                }
+            });
+        FloatType maxWidth = 0;
+        if(widths()) {
+            const FloatType& cachedMaxWidth =
+                visCache.lookup<FloatType>(RendererResourceKey<struct CylinderMaxWidthBoundingBoxCache, ConstDataBufferPtr>{widths()},
+                                           [this](FloatType& cachedMaxWidth) { cachedMaxWidth = widths()->minMax().second; });
+            maxWidth = std::max(maxWidth, cachedMaxWidth);
+        }
+        else {
+            maxWidth = std::max(maxWidth, uniformWidth());
+        }
+        return bb.padBox(maxWidth / FloatType(2) * (shape() == CylinderShape ? FloatType(1) : FloatType(2.5)));
+    }
+
+private:
+
+    /// Controls the shading.
+    ShadingMode _shadingMode = NormalShading;
+
+    /// The shape of the elements.
+    Shape _shape = CylinderShape;
+
+    /// The mapping from pseudo-color values to RGB colors.
+    PseudoColorMapping _pseudoColorMapping;
+
+    /// Indicates that only one of the two cylinder caps should be rendered.
+    bool _renderSingleCylinderCap = false;
+
+    /// The color to be used if no per-primitive colors have been specified.
+    Color _uniformColor{1, 1, 1};
+
+    /// The diameter of the cylinders.
+    FloatType _uniformWidth{2.0};
+
+    /// Buffer storing the vertex coordinates of the arrows/cylinders.
+    /// Tail and head vertex coordinates are interleaved.
+    ConstDataBufferPtr _vertexPositions;  // Array of Point3 or Point3G
+
+    /// Buffer storing the colors of the arrows/cylinders.
+    ConstDataBufferPtr _colors;  // Array of RGB ColorG or FloatType (pseudocolors)
+
+    /// The internal buffer storing the array of cylinder selection flags.
+    ConstDataBufferPtr _selection;  // Array of int8
+
+    /// Buffer storing the semi-transparency values.
+    ConstDataBufferPtr _transparencies;  // Array of GraphicsFloatType
+
+    /// Buffer storing the per-primitive width values.
+    ConstDataBufferPtr _widths;  // Array of GraphicsFloatType
+
+    /// The color used for rendering all selected cylinder.
+    Color _selectionColor{1.0, 0.0, 0.0};
+};
+
+}  // namespace Ovito

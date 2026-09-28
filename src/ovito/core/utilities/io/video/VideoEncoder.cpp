@@ -1,0 +1,198 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/core/Core.h>
+#include "VideoEncoder.h"
+#ifdef OVITO_VIDEO_OUTPUT_SUPPORT
+    #include "InternalVideoEncoderBackend.h"
+#endif
+#include "ExternalVideoEncoderBackend.h"
+
+namespace Ovito {
+
+/******************************************************************************
+* Constructor
+******************************************************************************/
+VideoEncoder::VideoEncoder(QObject* parent) : QObject(parent)
+{
+    if(getBackend() == Backend::INTERNAL) {
+#ifdef OVITO_VIDEO_OUTPUT_SUPPORT
+        _backend = std::make_unique<InternalVideoEncoderBackend>();
+#else
+        throw Exception(tr("Internal video encoding support is not available in this build of OVITO. Please set up external ffmpeg encoding instead."));
+#endif
+    }
+    else {
+        _backend = std::make_unique<ExternalVideoEncoderBackend>(this);
+    }
+}
+
+/******************************************************************************
+ * Returns the backend to be used for encoding.
+ ******************************************************************************/
+VideoEncoder::Backend VideoEncoder::getBackend()
+{
+    const QProcessEnvironment& env = QProcessEnvironment::systemEnvironment();
+    const QSettings settings;
+    // Read FFMPEG_USE_EXT_SETTING / OVITO_FFMPEG_USE_EXT
+    if(this_task::get() && this_task::isScripting() & env.contains(VideoEncoder::OVITO_FFMPEG_USE_EXT)) {
+        return env.value(VideoEncoder::OVITO_FFMPEG_USE_EXT) == "True" ? Backend::EXTERNAL : Backend::INTERNAL;
+    }
+    else {
+        return (settings.value(FFMPEG_USE_EXT_SETTING, false).toBool()) ? Backend::EXTERNAL : Backend::INTERNAL;
+    }
+}
+
+/******************************************************************************
+ * Returns the list of supported output formats.
+ ******************************************************************************/
+QList<VideoEncoder::Format> VideoEncoder::supportedFormats(std::optional<Backend> backend, std::optional<QString> path)
+{
+    const Backend b = backend ? *backend : getBackend();
+    if(b == Backend::INTERNAL) {
+#ifdef OVITO_VIDEO_OUTPUT_SUPPORT
+        return InternalVideoEncoderBackend::supportedFormats();
+#else
+        return {};
+#endif
+    }
+    else if(b == Backend::EXTERNAL) {
+        return ExternalVideoEncoderBackend::supportedFormats(path.value_or(ExternalVideoEncoderBackend::getExecutablePath()));
+    }
+    else {
+        OVITO_ASSERT(false);
+    }
+    return {};
+}
+
+/******************************************************************************
+ * Returns the list of supported output codecs.
+ ******************************************************************************/
+QList<const VideoEncoder::CandidateCodec*> VideoEncoder::supportedCodecs(std::optional<Backend> backend, std::optional<QString> path)
+{
+    const Backend b = backend ? *backend : getBackend();
+    if(b == Backend::INTERNAL) {
+#ifdef OVITO_VIDEO_OUTPUT_SUPPORT
+        return InternalVideoEncoderBackend::supportedCodecs();
+#else
+        return {};
+#endif
+    }
+    else if(b == Backend::EXTERNAL) {
+        return ExternalVideoEncoderBackend::supportedCodecs(path.value_or(ExternalVideoEncoderBackend::getExecutablePath()));
+    }
+    else {
+        OVITO_ASSERT(false);
+    }
+    return {};
+}
+
+/******************************************************************************
+* Opens a video file for writing.
+******************************************************************************/
+void VideoEncoder::openFile(const QString& filename, int width, int height, float framesPerSecond)
+{
+    _backend->openFile(filename, width, height, framesPerSecond);
+}
+
+/******************************************************************************
+* This closes the written video file.
+******************************************************************************/
+void VideoEncoder::closeFile() { _backend->closeFile(); }
+
+/******************************************************************************
+* Writes a single frame into the video file.
+******************************************************************************/
+void VideoEncoder::writeFrame(const QImage& image) { _backend->writeFrame(image); }
+
+/******************************************************************************
+ *  Returns the list of supported output formats from the backend.
+ ******************************************************************************/
+const VideoEncoder::CandidateFormat* VideoEncoder::VideoEncoderBackend::getCandidateFormat(QByteArrayView name)
+{
+    static const std::array<const CandidateFormat, 5> CandidateFormats{
+        {{
+             .name = QByteArrayLiteral("avi"),
+             .longName = QStringLiteral("AVI (Audio Video Interleaved)"),
+             .extensions = QStringList{QStringLiteral("avi")},
+         },
+         {
+             .name = QByteArrayLiteral("mp4"),
+             .longName = QStringLiteral("MP4 (MPEG-4 Part 14)"),
+             .extensions = QStringList{QStringLiteral("mp4")},
+         },
+         {
+             .name = QByteArrayLiteral("mov"),
+             .longName = QStringLiteral("QuickTime / MOV"),
+             .extensions = QStringList{QStringLiteral("mov")},
+         },
+         {
+             .name = QByteArrayLiteral("matroska"),
+             .longName = QStringLiteral("Matroska"),
+             .extensions = QStringList{QStringLiteral("mkv")},
+         },
+         {
+             .name = QByteArrayLiteral("gif"),
+             .longName = QStringLiteral("CompuServe Graphics Interchange Format (GIF)"),
+             .extensions = QStringList{QStringLiteral("gif")},
+         }}};
+
+    // Suggestion from clang-tidy: "'const auto it' can be declared as 'const auto *const it' (fix available)" does not work with MSVC
+    const auto it = std::ranges::find(CandidateFormats, name, &CandidateFormat::name);
+
+    return (it == CandidateFormats.end()) ? nullptr : &(*it);
+}
+
+/******************************************************************************
+ * Returns the list of supported output codecs from the backend.
+ ******************************************************************************/
+const VideoEncoder::CandidateCodec* VideoEncoder::VideoEncoderBackend::getCandidateCodec(QByteArrayView name)
+{
+    static const std::array<const CandidateCodec, 3> candidateCodecs{
+        {{
+             .name = QByteArrayLiteral("h264"),
+             .longName = QByteArrayLiteral("H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10"),
+             .libName = QByteArrayLiteral("libx264"),
+         },
+         {
+             .name = QByteArrayLiteral("hevc"),
+             .longName = QByteArrayLiteral("H.265 / HEVC (High Efficiency Video Coding)"),
+             .libName = QByteArrayLiteral("libx265"),
+         },
+         {
+             .name = QByteArrayLiteral("mpeg4"),
+             .longName = QByteArrayLiteral("MPEG-4 part 2"),
+             .libName = QByteArrayLiteral("mpeg4"),
+         }}};
+
+    // Suggestion from clang-tidy: "'const auto it' can be declared as 'const auto *const it' (fix available)" does not work with MSVC
+    const auto it = std::ranges::find(candidateCodecs, name, &CandidateCodec::libName);
+
+    return (it == candidateCodecs.end()) ? nullptr : &(*it);
+}
+
+/******************************************************************************
+* Clears the list of supported codecs.
+******************************************************************************/
+void VideoEncoder::clearCodecs() { ExternalVideoEncoderBackend::clearCodecs(); }
+
+}   // End of namespace

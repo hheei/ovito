@@ -1,0 +1,639 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * \file
+ * \brief Contains the definitions of the Ovito::ColorT and Ovito::ColorAT class templates.
+ */
+
+#pragma once
+
+
+#include <ovito/core/Core.h>
+#include <ovito/core/utilities/linalg/Vector3.h>
+#include <ovito/core/utilities/io/LoadStream.h>
+#include <ovito/core/utilities/io/SaveStream.h>
+
+namespace Ovito {
+
+/**
+ * \brief A color value with red, blue, and green components.
+ *
+ * This class stores three floating-point values in the range 0 to 1.
+ * Note that the class derives from std::array, which provides additional methods and component-wise data access.
+ *
+ * The typedef ::Color instantiates the ColorT class template with the default floating-point type ::FloatType.
+ *
+ * \tparam T The value type of the color components.
+ *
+ * \sa Color
+ * \sa ColorAT
+ */
+template<typename T>
+class ColorT : public std::array<T, 3>
+{
+public:
+
+    /// Default constructs a color without initializing its components.
+    /// The color components will therefore have an undefined value!
+    ColorT() = default;
+
+    /// Initializes the color with the given red, green and blue values (in the range 0 to 1).
+    constexpr ColorT(T red, T green, T blue) : std::array<T, 3>{{red, green, blue}} {}
+
+    /// Converts a 3-vector to a color.
+    /// The X, Y and Z vector components are used to initialize the red, green and blue components respectively.
+    constexpr ColorT(const Vector_3<T>& v) : std::array<T, 3>{{v.x(), v.y(), v.z()}} {}
+
+    /// Initializes the color from an array with three values.
+    constexpr explicit ColorT(const std::array<T, 3>& c) : std::array<T, 3>(c) {}
+
+    /// Conversion constructor from a Qt color.
+    constexpr ColorT(const QColor& c) : std::array<T, 3>{{T(c.redF()), T(c.greenF()), T(c.blueF())}} {}
+
+    /// Conversion constructor from a Qt color.
+    constexpr ColorT(const QVector3D& v) : std::array<T, 3>{{T(v.x()), T(v.y()), T(v.z())}} {}
+
+    /// Casts the color to another component type \a U.
+    template<typename U>
+    constexpr auto toDataType() const -> std::conditional_t<!std::is_same_v<T,U>, ColorT<U>, const ColorT<T>&> {
+        if constexpr(!std::is_same_v<T,U>)
+            return ColorT<U>(static_cast<U>(r()), static_cast<U>(g()), static_cast<U>(b()));
+        else
+            return *this;  // When casting to the same type \a T, this method becomes a no-op.
+    }
+
+    /// Sets all components of the color to zero.
+    constexpr void setBlack() { r() = g() = b() = T(0); }
+
+    /// Sets all components of the color to one.
+    constexpr void setWhite() { r() = g() = b() = T(1); }
+
+    /// Conversion operator to a Qt color.
+    /// All components of the returned Qt color are clamped to the [0,1] range.
+    operator QColor() const {
+        return QColor::fromRgbF(
+                qBound<float>(0.0f, static_cast<float>(r()), 1.0f),
+                qBound<float>(0.0f, static_cast<float>(g()), 1.0f),
+                qBound<float>(0.0f, static_cast<float>(b()), 1.0f));
+    }
+
+    /// Conversion to a QRgb value.
+    constexpr QRgb qrgb() const {
+        return qRgb(
+            static_cast<int>(qBound(T(0), r(), T(1)) * 255),
+            static_cast<int>(qBound(T(0), g(), T(1)) * 255),
+            static_cast<int>(qBound(T(0), b(), T(1)) * 255));
+    }
+
+    /// Converts the RGB color to a 3-vector with XYZ components.
+    constexpr operator const Vector_3<T>&() const {
+        return reinterpret_cast<const Vector_3<T>&>(*this);
+    }
+
+    /// Conversion operator to a Qt vector.
+    constexpr explicit operator QVector3D() const { return QVector3D(r(), g(), b()); }
+
+    //////////////////////////// Component access //////////////////////////
+
+    /// Returns the value of the red component of this color.
+    constexpr T r() const { return (*this)[0]; }
+
+    /// Returns the value of the green component of this color.
+    constexpr T g() const { return (*this)[1]; }
+
+    /// Returns the value of the blue component of this color.
+    constexpr T b() const { return (*this)[2]; }
+
+    /// Returns a reference to the red component of this color.
+    constexpr T& r() { return (*this)[0]; }
+
+    /// Returns a reference to the green component of this color.
+    constexpr T& g() { return (*this)[1]; }
+
+    /// Returns a reference to the blue component of this color.
+    constexpr T& b() { return (*this)[2]; }
+
+    ////////////////////////////////// Comparison ////////////////////////////////
+
+    /// Compares this color with another color for equality.
+    /// \param c The other color.
+    /// \return \c true if all three color components are exactly equal; \c false otherwise.
+    constexpr bool operator==(const ColorT& c) const { return (r() == c.r() && g() == c.g() && b() == c.b()); }
+
+    /// \brief Compares this color with another color for inequality.
+    /// \param c The second color.
+    /// \return \c true if any of the color components are not equal; \c false otherwise.
+    constexpr bool operator!=(const ColorT& c) const { return (r() != c.r() || g() != c.g() || b() != c.b()); }
+
+    /// \brief Tests if two color are equal within a given tolerance.
+    /// \param c The color to compare with this color.
+    /// \param tolerance A non-negative threshold for the equality test. The two color are considered equal if
+    ///        the differences in the three color components are all less than this tolerance value.
+    /// \return \c true if this color  is equal to \a c within the given tolerance; \c false otherwise.
+    constexpr bool equals(const ColorT& c, T tolerance = Ovito::epsilon_v<T>) const
+    {
+        return std::abs(c.r() - r()) <= tolerance && std::abs(c.g() - g()) <= tolerance && std::abs(c.b() - b()) <= tolerance;
+    }
+
+    /// Adds another color to this color in a component-wise manner.
+    constexpr ColorT& operator+=(const ColorT& c) { r() += c.r(); g() += c.g(); b() += c.b(); return *this; }
+
+    /// Multiplies the components of another color with the components of this color.
+    constexpr ColorT& operator*=(const ColorT& c) { r() *= c.r(); g() *= c.g(); b() *= c.b(); return *this; }
+
+    /// Assigns the XYZ components of the given vector to a RGB components of this color.
+    constexpr ColorT& operator=(const Vector_3<T>& v) { r() = v.x(); g() = v.y(); b() = v.z(); return *this; }
+
+    /// Ensures that none of the color components is greater than 1.
+    /// Any component greater than 1 is changed to 1.
+    /// \sa clampMin(), clampMinMax()
+    constexpr void clampMax() { if(r() > T(1)) r() = T(1); if(g() > T(1)) g() = T(1); if(b() > T(1)) b() = T(1); }
+
+    /// Ensures that none of the color components is less than 0.
+    /// Any color component less than 0 is set to 0.
+    /// \sa clampMax(), clampMinMax()
+    constexpr void clampMin() { if(r() < T(0)) r() = T(0); if(g() < T(0)) g() = T(0); if(b() < T(0)) b() = T(0); }
+
+    /// Ensures that all color components between 0 and 1.
+    /// \sa clampMin(), clampMax()
+    constexpr void clampMinMax() {
+        for(typename std::array<T, 3>::size_type i = 0; i < std::array<T, 3>::size(); i++) {
+            if((*this)[i] > T(1)) (*this)[i] = T(1);
+            else if((*this)[i] < T(0)) (*this)[i] = T(0);
+        }
+    }
+
+    /// \brief Creates a RGB color from a hue-saturation-value representation.
+    /// \param hue The hue value between 0 and 1.
+    /// \param saturation The saturation value between 0 and 1.
+    /// \param value The value of the color between 0 and 1.
+    /// \return The RGB representation of the color.
+    constexpr static ColorT fromHSV(T hue, T saturation, T value) {
+        if(saturation == 0) {
+            return ColorT(value, value, value);
+        }
+        else {
+            if(hue >= T(1) || hue < T(0)) hue = T(0);
+            hue *= T(6);
+            int i = (int)std::floor(hue);
+            T f = hue - (T)i;
+            T p = value * (T(1) - saturation);
+            T q = value * (T(1) - (saturation * f));
+            T t = value * (T(1) - (saturation * (T(1) - f)));
+            switch(i) {
+                case 0: return ColorT(value, t, p);
+                case 1: return ColorT(q, value, p);
+                case 2: return ColorT(p, value, t);
+                case 3: return ColorT(p, q, value);
+                case 4: return ColorT(t, p, value);
+                case 5: return ColorT(value, p, q);
+                default:
+                    return ColorT(value, value, value);
+            }
+        }
+    }
+
+    /// Produces a string representation of the color.
+    QString toString() const { return QString("(%1 %2 %3)").arg(r()).arg(g()).arg(b()); }
+};
+
+/// Multiplies the three components of a color \a c with a scalar value \a s.
+/// \relates ColorT
+template<typename T>
+constexpr inline ColorT<T> operator*(float s, const ColorT<T>& c) {
+    return ColorT<T>(c.r()*(T)s, c.g()*(T)s, c.b()*(T)s);
+}
+
+/// Multiplies the three components of a color \a c with a scalar value \a s.
+/// \relates ColorT
+template<typename T>
+constexpr inline ColorT<T> operator*(double s, const ColorT<T>& c) {
+    return ColorT<T>(c.r()*(T)s, c.g()*(T)s, c.b()*(T)s);
+}
+
+/// Multiplies the three components of a color \a c with a scalar value \a s.
+/// \relates ColorT
+template<typename T>
+constexpr inline ColorT<T> operator*(int s, const ColorT<T>& c) {
+    return ColorT<T>(c.r()*s, c.g()*s, c.b()*s);
+}
+
+/// Multiplies the three components of a color \a c with a scalar value \a s.
+/// \relates ColorT
+template<typename T>
+constexpr inline ColorT<T> operator*(const ColorT<T>& c, float s) {
+    return ColorT<T>(c.r()*(T)s, c.g()*(T)s, c.b()*(T)s);
+}
+
+/// Multiplies the three components of a color \a c with a scalar value \a s.
+/// \relates ColorT
+template<typename T>
+constexpr inline ColorT<T> operator*(const ColorT<T>& c, double s) {
+    return ColorT<T>(c.r()*(T)s, c.g()*(T)s, c.b()*(T)s);
+}
+
+/// Multiplies the three components of a color \a c with a scalar value \a s.
+/// \relates ColorT
+template<typename T>
+constexpr inline ColorT<T> operator*(const ColorT<T>& c, int s) {
+    return ColorT<T>(c.r()*s, c.g()*s, c.b()*s);
+}
+
+/// Computes the component-wise sum of two colors \a c1 and \a c2.
+/// \relates ColorT
+template<typename T>
+constexpr inline ColorT<T> operator+(const ColorT<T>& c1, const ColorT<T>& c2) {
+    return { c1.r()+c2.r(), c1.g()+c2.g(), c1.b()+c2.b() };
+}
+
+/// Computes the component-wise product of two colors \a c1 and \a c2.
+/// \relates ColorT
+template<typename T>
+constexpr inline ColorT<T> operator*(const ColorT<T>& c1, const ColorT<T>& c2) {
+    return { c1.r()*c2.r(), c1.g()*c2.g(), c1.b()*c2.b() };
+}
+
+/// Prints a color to a text output stream.
+/// \relates ColorT
+template<typename T>
+inline std::ostream& operator<<(std::ostream &os, const ColorT<T>& c) {
+    return os << c.r() << ' ' << c.g()  << ' ' << c.b();
+}
+
+/// Prints a color to a Qt debug stream.
+/// \relates ColorT
+template<typename T>
+inline QDebug operator<<(QDebug dbg, const ColorT<T>& c) {
+    dbg.nospace() << "(" << c.r() << " " << c.g() << " " << c.b() << ")";
+    return dbg.space();
+}
+
+/// Writes a color to a binary file stream.
+/// \relates ColorT
+template<typename T>
+inline SaveStream& operator<<(SaveStream& stream, const ColorT<T>& c) {
+    return stream << c.r() << c.g() << c.b();
+}
+
+/// Reads a color from a binary file stream.
+/// \relates ColorT
+template<typename T>
+inline LoadStream& operator>>(LoadStream& stream, ColorT<T>& c) {
+    return stream >> c.r() >> c.g() >> c.b();
+}
+
+/// Writes a color to a Qt data stream.
+/// \relates ColorT
+template<typename T>
+inline QDataStream& operator<<(QDataStream& stream, const ColorT<T>& c) {
+    return stream << c.r() << c.g() << c.b();
+}
+
+/// Reads a color from a Qt data stream.
+/// \relates ColorT
+template<typename T>
+inline QDataStream& operator>>(QDataStream& stream, ColorT<T>& c) {
+    return stream >> c.r() >> c.g() >> c.b();
+}
+
+/**
+ * \brief A color value with red, blue, green, and alpha components.
+ *
+ * This class stores four floating-point values in the range 0 to 1. The fourth component (alpha) controls
+ * the opacity of the color.
+ * Note that the class derives from std::array, which provides additional methods and component-wise data access.
+ *
+ * The typedef ::ColorA instantiates the ColorAT class template with the default floating-point type ::FloatType.
+ *
+ * \tparam T The value type of the color components.
+ *
+ * \sa ColorA
+ * \sa ColorT
+ */
+template<typename T>
+class ColorAT : public std::array<T, 4>
+{
+public:
+
+    /// Default constructs a color without initializing its components.
+    /// The components will therefore have an undefined value!
+    ColorAT() = default;
+
+    /// Initializes the color with the given red, green, blue, and alpha value.
+    constexpr ColorAT(T red, T green, T blue, T alpha = T(1)) : std::array<T, 4>{{red, green, blue, alpha}} {}
+
+    /// Converts a 4-vector to a color. The X, Y, Z, and W vector components are used to initialize the red, green, blue, and alpha components respectively.
+    constexpr explicit ColorAT(const Vector_4<T>& v) : std::array<T, 4>(v) {}
+
+    /// Conversion constructor from a Qt color value.
+    constexpr ColorAT(const QColor& c) : std::array<T, 4>{{T(c.redF()), T(c.greenF()), T(c.blueF()), T(c.alphaF())}} {}
+
+    /// Converts a color without alpha component to a color with alpha component set to 1.0.
+    constexpr ColorAT(const ColorT<T>& c) : std::array<T, 4>{{c.r(), c.g(), c.b(), T(1)}} {}
+
+    /// Converts a color without alpha component to a color with given alpha component.
+    constexpr ColorAT(const ColorT<T>& c, T alpha) : std::array<T, 4>{{c.r(), c.g(), c.b(), alpha}} {}
+
+    /// Initializes the color components from an array of four values.
+    constexpr explicit ColorAT(const std::array<T, 4>& c) : std::array<T, 4>(c) {}
+
+    /// Casts the color to another component type \a U.
+    template<typename U>
+    constexpr auto toDataType() const -> std::conditional_t<!std::is_same_v<T,U>, ColorAT<U>, const ColorAT<T>&> {
+        if constexpr(!std::is_same_v<T,U>)
+            return ColorAT<U>(static_cast<U>(r()), static_cast<U>(g()), static_cast<U>(b()), static_cast<U>(a()));
+        else
+            return *this;  // When casting to the same type \a T, this method becomes a no-op.
+    }
+
+    /// Sets the red, green, and blue components to zero and alpha to one.
+    constexpr void setBlack() { r() = g() = b() = T(0); a() = T(1); }
+
+    /// Sets all color components to one.
+    constexpr void setWhite() { r() = g() = b() = a() = T(1); }
+
+    /// Converts this RGBA color to a XYZW vector.
+    explicit constexpr operator const Vector_4<T>&() const { return reinterpret_cast<const Vector_4<T>&>(*this); }
+
+    /// Conversion operator to a Qt color.
+    /// All components of the returned Qt color are clamped to the [0,1] range.
+    operator QColor() const {
+        return QColor::fromRgbF(
+                qBound<float>(0.0f, static_cast<float>(r()), 1.0f),
+                qBound<float>(0.0f, static_cast<float>(g()), 1.0f),
+                qBound<float>(0.0f, static_cast<float>(b()), 1.0f),
+                qBound<float>(0.0f, static_cast<float>(a()), 1.0f));
+    }
+
+    /// Conversion to a QRgb value.
+    constexpr QRgb qrgb() const {
+        return qRgba(
+            static_cast<int>(qBound(T(0), r(), T(1)) * 255),
+            static_cast<int>(qBound(T(0), g(), T(1)) * 255),
+            static_cast<int>(qBound(T(0), b(), T(1)) * 255),
+            static_cast<int>(qBound(T(0), a(), T(1)) * 255));
+    }
+
+    //////////////////////////// Component access //////////////////////////
+
+    /// Returns the value of the red component of this color.
+    constexpr T r() const { return (*this)[0]; }
+
+    /// Returns the value of the green component of this color.
+    constexpr T g() const { return (*this)[1]; }
+
+    /// Returns the value of the blue component of this color.
+    constexpr T b() const { return (*this)[2]; }
+
+    /// Returns the value of the alpha component of this color.
+    constexpr T a() const { return (*this)[3]; }
+
+    /// Returns a reference to the red component of this color.
+    constexpr T& r() { return (*this)[0]; }
+
+    /// Returns a reference to the green component of this color.
+    constexpr T& g() { return (*this)[1]; }
+
+    /// Returns a reference to the blue component of this color.
+    constexpr T& b() { return (*this)[2]; }
+
+    /// Returns a reference to the alpha component of this color.
+    constexpr T& a() { return (*this)[3]; }
+
+    /// Returns the value of the red, green and blue components of this color.
+    constexpr const ColorT<T>& rgb() const { return reinterpret_cast<const ColorT<T>&>(*this); }
+
+    /// Returns a reference to the red, green and blue components of this color.
+    constexpr ColorT<T>& rgb() { return reinterpret_cast<ColorT<T>&>(*this); }
+
+    ////////////////////////////////// Comparison ////////////////////////////////
+
+    /// Compares this color with another color for equality.
+    /// \param c The other color.
+    /// \return \c true if all four color components are exactly equal; \c false otherwise.
+    constexpr bool operator==(const ColorAT& c) const { return (r() == c.r() && g() == c.g() && b() == c.b() && a() == c.a()); }
+
+    /// \brief Compares this color with another color for inequality.
+    /// \param c The second color.
+    /// \return \c true if any of the color components are not equal; \c false otherwise.
+    constexpr bool operator!=(const ColorAT& c) const { return (r() != c.r() || g() != c.g() || b() != c.b() || a() != c.a()); }
+
+    /// \brief Tests if two color are equal within a given tolerance.
+    /// \param c The color to compare with this color.
+    /// \param tolerance A non-negative threshold for the equality test. The two color are considered equal if
+    ///        the differences in the four color components are all less than this tolerance value.
+    /// \return \c true if this color  is equal to \a c within the given tolerance; \c false otherwise.
+    constexpr bool equals(const ColorAT& c, T tolerance = Ovito::epsilon_v<T>) const
+    {
+        return std::abs(c.r() - r()) <= tolerance && std::abs(c.g() - g()) <= tolerance && std::abs(c.b() - b()) <= tolerance && std::abs(c.a() - a()) <= tolerance;
+    }
+
+    /// Adds the components of another color to this color.
+    constexpr ColorAT& operator+=(const ColorAT& c) { r() += c.r(); g() += c.g(); b() += c.b(); a() += c.a(); return *this; }
+
+    /// Multiplies the components of another color with the components of this color.
+    constexpr ColorAT& operator*=(const ColorAT& c) { r() *= c.r(); g() *= c.g(); b() *= c.b(); a() *= c.a(); return *this; }
+
+    /// Converts a vector to a color assigns it to this object.
+    constexpr ColorAT& operator=(const Vector_4<T>& v) { r() = v.x(); g() = v.y(); b() = v.z(); a() = v.w(); return *this; }
+
+    /// Ensures that none of the color components is greater than 1.
+    /// Any component greater than 1 is changed to 1.
+    /// \sa clampMin(), clampMinMax()
+    constexpr void clampMax() { if(r() > T(1)) r() = T(1); if(g() > T(1)) g() = T(1); if(b() > T(1)) b() = T(1); if(a() > T(1)) a() = T(1); }
+
+    /// Ensures that none of the color components is less than 0.
+    /// Any color component less than 0 is set to 0.
+    /// \sa clampMax(), clampMinMax()
+    constexpr void clampMin() { if(r() < T(0)) r() = T(0); if(g() < T(0)) g() = T(0); if(b() < T(0)) b() = T(0); if(a() < T(0)) a() = T(0); }
+
+    /// Ensures that all color components between 0 and 1.
+    /// \sa clampMin(), clampMax()
+    constexpr void clampMinMax() {
+        for(typename std::array<T, 4>::size_type i = 0; i < std::array<T, 4>::size(); i++) {
+            if((*this)[i] > T(1)) (*this)[i] = T(1);
+            else if((*this)[i] < T(0)) (*this)[i] = T(0);
+        }
+    }
+
+    /// Produces a string representation of the color.
+    QString toString() const { return QString("(%1 %2 %3 %4)").arg(r()).arg(g()).arg(b()).arg(a()); }
+};
+
+/// Multiplies the four components of the color \a c with a scalar value \a s.
+/// \relates ColorAT
+template<typename T>
+constexpr inline ColorAT<T> operator*(float s, const ColorAT<T>& c) {
+    return ColorAT<T>(c.r()*(T)s, c.g()*(T)s, c.b()*(T)s, c.a()*(T)s);
+}
+
+/// Multiplies the four components of the color \a c with a scalar value \a s.
+/// \relates ColorAT
+template<typename T>
+constexpr inline ColorAT<T> operator*(double s, const ColorAT<T>& c) {
+    return ColorAT<T>(c.r()*(T)s, c.g()*(T)s, c.b()*(T)s, c.a()*(T)s);
+}
+
+/// Multiplies the four components of the color \a c with a scalar value \a s.
+/// \relates ColorAT
+template<typename T>
+constexpr inline ColorAT<T> operator*(int s, const ColorAT<T>& c) {
+    return ColorAT<T>(c.r()*s, c.g()*s, c.b()*s, c.a()*s);
+}
+
+/// Multiplies the four components of the color \a c with a scalar value \a s.
+/// \relates ColorAT
+template<typename T>
+constexpr inline ColorAT<T> operator*(const ColorAT<T>& c, float s) {
+    return ColorAT<T>(c.r()*(T)s, c.g()*(T)s, c.b()*(T)s, c.a()*(T)s);
+}
+
+/// Multiplies the four components of the color \a c with a scalar value \a s.
+/// \relates ColorAT
+template<typename T>
+constexpr inline ColorAT<T> operator*(const ColorAT<T>& c, double s) {
+    return ColorAT<T>(c.r()*(T)s, c.g()*(T)s, c.b()*(T)s, c.a()*(T)s);
+}
+
+/// Multiplies the four components of the color \a c with a scalar value \a s.
+/// \relates ColorAT
+template<typename T>
+constexpr inline ColorAT<T> operator*(const ColorAT<T>& c, int s) {
+    return ColorAT<T>(c.r()*s, c.g()*s, c.b()*s, c.a()*s);
+}
+
+/// Computes the component-wise sum of two colors.
+/// \relates ColorAT
+template<typename T>
+constexpr inline ColorAT<T> operator+(const ColorAT<T>& c1, const ColorAT<T>& c2) {
+    return { c1.r()+c2.r(), c1.g()+c2.g(), c1.b()+c2.b(), c1.a()+c2.a() };
+}
+
+/// Computes the component-wise product of two colors.
+/// \relates ColorAT
+template<typename T>
+constexpr inline ColorAT<T> operator*(const ColorAT<T>& c1, const ColorAT<T>& c2) {
+    return { c1.r()*c2.r(), c1.g()*c2.g(), c1.b()*c2.b(), c1.a()*c2.a() };
+}
+
+/// Prints a color to a text output stream.
+/// \relates ColorAT
+template<typename T>
+inline std::ostream& operator<<(std::ostream &os, const ColorAT<T>& c) {
+    return os << c.r() << ' ' << c.g()  << ' ' << c.b() << ' ' << c.a();
+}
+
+/// Prints a color to a Qt debug stream.
+/// \relates ColorAT
+template<typename T>
+inline QDebug operator<<(QDebug dbg, const ColorAT<T>& c) {
+    dbg.nospace() << "(" << c.r() << " " << c.g() << " " << c.b() << " " << c.a() << ")";
+    return dbg.space();
+}
+
+/// Writes a color to a binary output stream.
+/// \relates ColorAT
+template<typename T>
+inline SaveStream& operator<<(SaveStream& stream, const ColorAT<T>& c) {
+    return stream << c.r() << c.g() << c.b() << c.a();
+}
+
+/// Reads a color from a binary input stream.
+/// \relates ColorAT
+template<typename T>
+inline LoadStream& operator>>(LoadStream& stream, ColorAT<T>& c) {
+    return stream >> c.r() >> c.g() >> c.b() >> c.a();
+}
+
+/// Writes a color to a Qt data stream.
+/// \relates ColorAT
+template<typename T>
+inline QDataStream& operator<<(QDataStream& stream, const ColorAT<T>& c) {
+    return stream << c.r() << c.g() << c.b() << c.a();
+}
+
+/// Reads a color from a Qt data stream.
+/// \relates ColorAT
+template<typename T>
+inline QDataStream& operator>>(QDataStream& stream, ColorAT<T>& c) {
+    return stream >> c.r() >> c.g() >> c.b() >> c.a();
+}
+
+/// Hash function. Discovered via ADL on the type's enclosing namespace.
+template<typename T>
+inline std::size_t qHash(const ColorT<T>& c, std::size_t seed = 0) noexcept {
+    return qHashRange(std::begin(c), std::end(c), seed);
+}
+
+/// Hash function. Discovered via ADL on the type's enclosing namespace.
+template<typename T>
+inline std::size_t qHash(const ColorAT<T>& c, std::size_t seed = 0) noexcept {
+    return qHashRange(std::begin(c), std::end(c), seed);
+}
+
+/**
+ * \brief Instantiation of the ColorT class template with the default floating-point type (double precision).
+ * \relates ColorT
+ */
+using Color = ColorT<FloatType>;
+
+/**
+ * \brief Instantiation of the ColorT class template with the single-precision floating-point type.
+ * \relates ColorT
+ */
+using ColorF = ColorT<float>;
+
+/**
+ * \brief Instantiation of the ColorT class template with the low-precision floating-point type used for graphics data.
+ * \relates ColorT
+ */
+using ColorG = ColorT<GraphicsFloatType>;
+
+/**
+ * \brief Instantiation of the ColorAT class template with the default floating-point type (double precision).
+ * \relates ColorAT
+ */
+using ColorA = ColorAT<FloatType>;
+
+/**
+ * \brief Instantiation of the ColorAT class template with the single-precision floating-point type.
+ * \relates ColorAT
+ */
+using ColorAF = ColorAT<float>;
+
+/**
+ * \brief Instantiation of the ColorAT class template with the low-precision floating-point type used for graphics data.
+ * \relates ColorAT
+ */
+using ColorAG = ColorAT<GraphicsFloatType>;
+
+}   // End of namespace
+
+Q_DECLARE_METATYPE(Ovito::Color);
+Q_DECLARE_METATYPE(Ovito::ColorF);
+Q_DECLARE_METATYPE(Ovito::ColorA);
+Q_DECLARE_METATYPE(Ovito::ColorAF);
+Q_DECLARE_TYPEINFO(Ovito::Color, Q_PRIMITIVE_TYPE);
+Q_DECLARE_TYPEINFO(Ovito::ColorF, Q_PRIMITIVE_TYPE);
+Q_DECLARE_TYPEINFO(Ovito::ColorA, Q_PRIMITIVE_TYPE);
+Q_DECLARE_TYPEINFO(Ovito::ColorAF, Q_PRIMITIVE_TYPE);

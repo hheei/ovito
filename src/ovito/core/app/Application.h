@@ -1,0 +1,181 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/core/Core.h>
+#include <ovito/core/utilities/Exception.h>
+#include <ovito/core/utilities/io/FileManager.h>
+#include <ovito/core/utilities/concurrent/TaskManager.h>
+#include <ovito/core/app/UserInterface.h>
+
+namespace Ovito {
+
+/**
+ * \brief The main application.
+ */
+class OVITO_CORE_EXPORT Application : public QObject, public UserInterface
+{
+    Q_OBJECT
+
+public:
+
+    enum RunMode {
+        AppMode,        ///< The application is running in GUI mode as a regular desktop app.
+        TerminalMode,   ///< The application is running in terminal mode (command line interface or Python script execution).
+        PyImportMode,   ///< The application is running as an imported Python module in an external Python interpreter.
+        KernelMode,     ///< The application is running as a Jupyter kernel (may display a GUI window).
+    };
+
+    /// Returns the one and only instance of this class.
+    static Application* instance() { return _instance; }
+
+    /// Constructor.
+    explicit Application();
+
+    /// Destructor.
+    ~Application();
+
+    /// \brief Initializes the application.
+    /// \param argc The number of command line arguments.
+    /// \param argv The command line arguments.
+    /// \return \c true if the application was initialized successfully;
+    ///         \c false if an error occurred and the program should be terminated.
+    bool initialize(int& argc, char** argv);
+
+    /// Cancels all running tasks associated with this user interface and closes the user interface as soon as possible (without asking user to save changes).
+    virtual bool shutdown() override;
+
+    /// \brief Handler method for Qt error messages.
+    ///
+    /// This can be used to set a debugger breakpoint for the OVITO_ASSERT macros.
+    static void qtMessageOutput(QtMsgType type, const QMessageLogContext& context, const QString& msg);
+
+    /// Indicates how the application is currently running (with or without GUI, as a Python module, etc.)
+    static RunMode runMode() { return _runMode; }
+
+    /// Sets how the application is currently running.
+    static void setRunMode(RunMode mode) { _runMode = mode; }
+
+    /// Indicates whether the application is showing a graphical user interface or not.
+    static bool guiEnabled() { return runMode() == AppMode || runMode() == KernelMode; }
+
+    /// Returns whether printing of task status messages to the console is currently enabled.
+    bool taskConsoleLoggingEnabled() const { return _taskConsoleLoggingEnabled; }
+
+    /// Enables or disables printing of task status messages to the console.
+    void setTaskConsoleLoggingEnabled(bool enabled) { _taskConsoleLoggingEnabled = enabled; }
+
+    /// Reports task progress on the console (from any thread).
+    void logTaskActivity(const QString& text);
+
+    /// Returns the global FileManager class instance.
+    FileManager& fileManager() { return _fileManager; }
+
+    /// Returns the manager of asynchronous tasks.
+    TaskManager& taskManager() { return _taskManager; }
+
+    /// Similar to QCoreApplication::applicationDirPath() but doesn't require a Qt application.
+    QString applicationDirPath() const;
+
+    /// Similar to QCoreApplication::applicationFilePath() but doesn't require a Qt application.
+    QString applicationFilePath() const;
+
+    /// Returns the directory that the files shipped alongside OVITO's binaries are relative to.
+    ///
+    /// This is the directory of the executable, except in the PyPI wheel, where the executable is
+    /// the Python interpreter and lives nowhere near the installed package. There the location is
+    /// taken from the shared library this code is part of.
+    QString bundledResourceDirPath() const;
+
+    /// Returns the major version number of the application.
+    static int applicationVersionMajor();
+
+    /// Returns the minor version number of the application.
+    static int applicationVersionMinor();
+
+    /// Returns the revision version number of the application.
+    static int applicationVersionRevision();
+
+    /// Returns the complete version string of the application release.
+    static QString applicationVersionString();
+
+    /// Returns the human-readable name of the application.
+    static QString applicationName();
+
+    /// Emits the settingsChanged() signal.
+    void emitSettingsChangedSignal();
+
+#ifndef Q_OS_WASM
+    /// Returns the application-wide network access manager object.
+    QNetworkAccessManager* networkAccessManager();
+#endif
+
+    /// Create the global Qt application object.
+    void createQtApplication(bool supportGui);
+
+Q_SIGNALS:
+
+    /// Emitted when the application settings have potentially changed.
+    void settingsChanged();
+
+protected:
+
+    /// Creates the global instance of the right QCoreApplication derived class.
+    virtual QCoreApplication* createQtApplicationImpl(bool supportGui, int& argc, char** argv) = 0;
+
+    /// The number of original command line arguments.
+    int* _argc;
+
+    /// The original command line arguments.
+    char** _argv;
+
+    /// Enables printing of task status messages to the console.
+    bool _taskConsoleLoggingEnabled = false;
+
+    /// The global file manager instance.
+    FileManager _fileManager;
+
+    /// The global task manager instance.
+    TaskManager _taskManager;
+
+#ifndef Q_OS_WASM
+    /// The application-wide network manager object.
+    QNetworkAccessManager* _networkAccessManager = nullptr;
+#endif
+
+    /// The default message handler method of Qt.
+    static QtMessageHandler defaultQtMessageHandler;
+
+    /// The one and only instance of this class.
+    static Application* _instance;
+
+    /// Indicates what kind of application is running (GUI, console, Python module, etc.)
+    static RunMode _runMode;
+};
+
+}   // End of namespace
+
+#include <ovito/core/utilities/concurrent/ObjectExecutorImpl.h>
+#include <ovito/core/utilities/concurrent/DeferredObjectExecutorImpl.h>
+#include <ovito/core/utilities/concurrent/ThreadPoolExecutorImpl.h>

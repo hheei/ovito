@@ -1,0 +1,184 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/particles/Particles.h>
+#include <ovito/particles/objects/Particles.h>
+#include <ovito/particles/objects/ParticleType.h>
+#include <ovito/stdobj/simcell/SimulationCell.h>
+#include "XTCImporter.h"
+
+#include <xdrfile/xdrfile.h>
+#include <xdrfile/xdrfile_xtc.h>
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(XTCImporter);
+OVITO_CLASSINFO(XTCImporter, "DisplayName", "XTC");
+
+class XTCFile
+{
+public:
+
+    struct Frame {
+        int step;
+        float time;
+        float prec;
+        Matrix_3<float> cell;
+        std::vector<Point3F> xyz;
+    };
+
+    ~XTCFile() {
+        close();
+    }
+
+    void open(const char* filename) {
+        close();
+        int returnCode = read_xtc_natoms(filename, &_numAtoms);
+        if(returnCode != exdrOK || _numAtoms <= 0)
+            throw Exception(XTCImporter::tr("Error opening XTC file (error code %1).").arg(returnCode));
+        _file = xdrfile_open(filename, "r");
+        if(!_file)
+            throw Exception(XTCImporter::tr("Error opening XTC file."));
+        _eof = false;
+    }
+
+    void close() {
+        if(_file) {
+            if(xdrfile_close(_file) != exdrOK)
+                qWarning() << "XTCImporter: Failure reported by xdrfile_close()";
+            _file = nullptr;
+        }
+    }
+
+    Frame read() {
+        OVITO_ASSERT(_file);
+        OVITO_ASSERT(!_eof);
+        Frame frame;
+        frame.xyz.resize(_numAtoms);
+        int returnCode = read_xtc(_file, _numAtoms, &frame.step, &frame.time,
+            reinterpret_cast<matrix&>(frame.cell),
+            reinterpret_cast<rvec*>(frame.xyz.data()), &frame.prec);
+        if(returnCode != exdrOK && returnCode != exdrENDOFFILE)
+            throw Exception(XTCImporter::tr("Error reading XTC file (code %1).").arg(returnCode));
+        if(returnCode == exdrENDOFFILE)
+            _eof = true;
+        return frame;
+    }
+
+    void seek(qint64 offset) {
+        int returnCode = xdr_seek(_file, offset, SEEK_SET);
+        if(returnCode != exdrOK)
+            throw Exception(XTCImporter::tr("Error seeking in XTC file (code %1).").arg(returnCode));
+    }
+
+    qint64 byteOffset() const {
+        OVITO_ASSERT(_file);
+        return xdr_tell(_file);
+    }
+
+    bool eof() const { return _eof; }
+
+private:
+
+    XDRFILE* _file = nullptr;
+    int _numAtoms = 0;
+    bool _eof = false;
+};
+
+/******************************************************************************
+* Checks if the given file has format that can be read by this importer.
+******************************************************************************/
+bool XTCImporter::OOMetaClass::checkFileFormat(const FileHandle& file) const
+{
+    return file.sourceUrl().fileName().endsWith(QStringLiteral(".xtc"), Qt::CaseInsensitive);
+}
+
+/******************************************************************************
+* Scans the data file and builds a list of source frames.
+******************************************************************************/
+void XTCImporter::discoverFramesInFile(const FileHandle& fileHandle, QVector<FileSourceImporter::Frame>& frames) const
+{
+    TaskProgress progress(this_task::ui());
+    progress.setText(tr("Scanning file %1").arg(fileHandle.toString()));
+    progress.setMaximum(QFileInfo(fileHandle.localFilePath()).size());
+
+    // Open XTC file for reading.
+    XTCFile file;
+    file.open(QFile::encodeName(QDir::toNativeSeparators(fileHandle.localFilePath())).constData());
+
+    Frame frame(fileHandle);
+    while(!file.eof() && !this_task::isCanceled()) {
+        frame.byteOffset = file.byteOffset();
+
+        // Update progress bar and check for user cancellation.
+        progress.setValue(frame.byteOffset);
+
+        // Parse trajectory frame.
+        XTCFile::Frame xtcFrame = file.read();
+        if(file.eof())
+            break;
+
+        // Create a new record for the timestep.
+        frame.label.setToTimestep(xtcFrame.step);
+        frames.push_back(frame);
+    }
+}
+
+/******************************************************************************
+* Parses the given input file.
+******************************************************************************/
+void XTCImporter::FrameLoader::loadFile()
+{
+    TaskProgress progress(this_task::ui());
+    progress.setText(tr("Reading XTC file %1").arg(fileHandle().toString()));
+
+    // Open XTC file for reading.
+    XTCFile file;
+    file.open(QFile::encodeName(QDir::toNativeSeparators(fileHandle().localFilePath())).constData());
+
+    // Seek to byte offset of requested trajectory frame.
+    if(frame().byteOffset != 0)
+        file.seek(frame().byteOffset);
+
+    // Read trajectory frame data.
+    XTCFile::Frame xtcFrame = file.read();
+
+    // Transfer atomic coordinates to property storage. Also convert from nanometer units to angstroms.
+    size_t numParticles = xtcFrame.xyz.size();
+    setParticleCount(numParticles);
+    BufferWriteAccess<Point3, access_mode::discard_write> posProperty = particles()->createProperty(Particles::PositionProperty);
+    std::transform(xtcFrame.xyz.cbegin(), xtcFrame.xyz.cend(), posProperty.begin(), [](const Point3F& p) {
+        return (p * 10.0f).toDataType<FloatType>();
+    });
+    posProperty.reset();
+
+    // Convert cell vectors from nanometers to angstroms.
+    simulationCell()->setCellMatrix(AffineTransformation((xtcFrame.cell * 10.0f).toDataType<FloatType>()));
+
+    state().setAttribute(QStringLiteral("Timestep"), QVariant::fromValue(xtcFrame.step), pipelineNode());
+    state().setAttribute(QStringLiteral("Time"), QVariant::fromValue((FloatType)xtcFrame.time), pipelineNode());
+
+    // Call base implementation to finalize the loaded particle data.
+    ParticleImporter::FrameLoader::loadFile();
+}
+
+}   // End of namespace

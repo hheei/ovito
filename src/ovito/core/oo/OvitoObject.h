@@ -1,0 +1,357 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/core/Core.h>
+#include <ovito/core/oo/OORef.h>
+#include <ovito/core/oo/OvitoClass.h>
+
+namespace Ovito {
+
+#ifdef OVITO_DEBUG
+    /// Checks whether a pointer to an OvitoObject is valid.
+    #define OVITO_CHECK_OBJECT_POINTER(object) { OVITO_CHECK_POINTER(static_cast<const OvitoObject*>(object)); OVITO_ASSERT_MSG(static_cast<const OvitoObject*>(object)->__isObjectAlive(), "OVITO_CHECK_OBJECT_POINTER", "OvitoObject pointer is invalid. Object has been deleted."); }
+#else
+    /// Do nothing for release builds.
+    #define OVITO_CHECK_OBJECT_POINTER(object)
+#endif
+
+/**
+ * \brief Universal base class for most objects in OVITO.
+ */
+class OVITO_CORE_EXPORT OvitoObject : public std::enable_shared_from_this<OvitoObject>
+{
+    Q_GADGET
+    Q_DISABLE_COPY_MOVE(OvitoObject)
+
+private:
+
+    /// The meta-class descriptor for the OvitoObject C++ class.
+    static const OvitoClass __OOClass_instance;
+    inline static OvitoClass::MetadataItem* __OOClass_metadata_head = nullptr;
+
+public:
+
+    /// Flags which may be associated with an OvitoObject.
+    enum ObjectFlag
+    {
+        NoFlags = 0,                  //< No flags set.
+        BeingConstructed = (1 << 0),  //< Indicates that this object's constructor is executing.
+        BeingInitialized = (1 << 1),  //< Indicates that this object is being initialized (initializeObject() hasn't finished yet or the object state is being copied from another object).
+        BeingDeleted = (1 << 2),      //< Indicates that this object is in the process of being deleted.
+        BeingLoaded = (1 << 3),       //< Indicates that this object is in the process of being restored from an ObjectLoadStream.
+    };
+    Q_DECLARE_FLAGS(ObjectFlags, ObjectFlag);
+
+    using ovito_class = OvitoObject;
+    using OOMetaClass = OvitoClass;
+
+    /// Returns the class' meta-class descriptor.
+    static const OvitoClass& OOClass() { return __OOClass_instance; }
+
+    /// Mimic Qt's string localization function tr() for string literals.
+    static inline QString tr(const char* sourceText) { return QString::fromUtf8(sourceText); }
+
+    /// Default constructor.
+    OvitoObject() = default;
+
+#ifdef OVITO_DEBUG
+    /// Note: No need to make the base class destructor virtual, because we use std::shared_ptr to manage an object's lifetime.
+    /// std::shared_ptr will call the right destructor of a derived class automatically.
+    ~OvitoObject();
+#endif
+
+    /// Indicates whether this object is currently being constructed, i.e., the constructor is still executing.
+    inline bool isBeingConstructed() const { return _flags.testFlag(BeingConstructed); }
+
+    /// Indicates whether this object is currently being constructed and initialized,
+    /// which means the object is not yet in a fully initialized state (initializeObject() has not finished yet).
+    inline bool isBeingInitialized() const { return _flags.testFlag(BeingInitialized); }
+
+    /// Indicates whether this object is currently being loaded from an ObjectLoadStream,
+    /// which means it is not yet in a fully initialized state.
+    inline bool isBeingLoaded() const { return _flags.testFlag(BeingLoaded); }
+
+    /// Returns true if this object is about to be deleted, i.e., if the reference count has reached zero
+    /// and aboutToBeDeleted() is being invoked.
+    inline bool isBeingDeleted() const { return _flags.testFlag(BeingDeleted); }
+
+    /// Indicates whether this object is currently being initialized or destroyed.
+    inline bool isBeingInitializedOrDeleted() const { return _flags.testAnyFlags(ObjectFlags(BeingInitialized | BeingDeleted)); }
+
+    /// Indicates whether this object is currently being initialized, loaded, or destroyed.
+    /// During these times, changes made to the object's properties should typically be ignored.
+    inline bool shouldIgnoreChanges() const { return _flags.testAnyFlags(ObjectFlags(BeingInitialized | BeingDeleted | BeingLoaded)); }
+
+#ifdef OVITO_DEBUG
+    /// \brief Returns whether this object has not been deleted yet.
+    ///
+    /// This hidden function is used by the OVITO_CHECK_OBJECT_POINTER macro in debug builds.
+    bool __isObjectAlive() const { return _magicAliveCode == 0x87ABCDEF; }
+#endif
+
+    /// Returns the class descriptor for this object.
+    /// This default implementation is overridden by subclasses to return their type descriptor instead.
+    virtual const OvitoClass& getOOClass() const { return OOClass(); }
+
+    /// Returns the class descriptor for this object.
+    const OvitoClass& getOOMetaClass() const { return OOClass(); }
+
+protected:
+
+    /// This method gets called by OORef<T>::create() right after the object has been constructed by std::make_shared<>.
+    /// Subclasses can override this method to perform initialization work that may raise an exception or which needs to create
+    /// OORef references to the object itself (which isn't possible in the class constructor).
+    inline void initializeObject() {
+        OVITO_ASSERT(isBeingConstructed());
+        _flags.setFlag(BeingConstructed, false);
+    }
+
+    /// Clears the BeingInitialized flag of the object. This method gets called by OORef<T>::create() after the object has been fully initialized.
+    inline void completeObjectInitialization() {
+        OVITO_ASSERT(!isBeingConstructed());
+        OVITO_ASSERT(isBeingInitialized());
+        setIsBeingInitialized(false);
+    }
+
+    /// Sets the BeingInitialized flag of the object indicating that the object's parameters are in the
+    /// process of being initialized or being copied from another object.
+    void setIsBeingInitialized(bool isBeingInitialized) {
+        _flags.setFlag(BeingInitialized, isBeingInitialized);
+    }
+
+    /// This method is called after the reference counter of this object has reached zero
+    /// and before the object is being finally deleted. You should not call this method from user
+    /// code and typically it is not necessary to override this method.
+    virtual void aboutToBeDeleted() { OVITO_CHECK_OBJECT_POINTER(this); }
+
+private:
+
+    /// Internal method that calls this object's aboutToBeDeleted() routine and the deletes the object.
+    /// It is automatically called when the object's reference counter reaches zero.
+    void deleteObjectInternal() noexcept;
+
+    /// Bit-wise flags.
+    ObjectFlags _flags = ObjectFlags(BeingConstructed | BeingInitialized);
+
+#ifdef OVITO_DEBUG
+    /// This field is initialized with a special value by the class constructor to indicate that
+    /// the object is still alive and has not been deleted. When the object is deleted, the
+    /// destructor sets the field to a different value to indicate that the object is no longer alive.
+    quint32 _magicAliveCode = 0x87ABCDEF;
+
+    friend class OvitoClass;
+#endif
+
+    // Give OORef smart-pointer class access to the internal reference counter.
+    template<class T> friend class OORef;
+    template<typename T> friend struct OOAllocator;
+
+    // Give ObjectLoadStream direct acccess to the BeingLoaded object flag.
+    friend class ObjectLoadStream;
+};
+
+/// Prints an object to Qt debug stream.
+OVITO_CORE_EXPORT QDebug operator<<(QDebug dbg, const OvitoObject* o);
+
+/// \brief Dynamic cast operator for subclasses of OvitoObject.
+///
+/// Returns a pointer to the input object, cast to type \c T if the object is of type \c T
+/// (or a subclass); otherwise returns \c nullptr.
+///
+/// \relates OvitoObject
+template<class T, class U>
+inline T* dynamic_object_cast(U* obj) noexcept {
+    static_assert(std::is_base_of_v<OvitoObject, T>, "dynamic_object_cast can only be used with OvitoObject-derived classes.");
+    static_assert(std::is_base_of_v<OvitoObject, U>, "dynamic_object_cast can only be used with OvitoObject-derived classes.");
+    return dynamic_cast<T*>(obj);
+}
+
+/// \brief Dynamic cast operator for subclasses of OvitoObject derived.
+///
+/// Returns a constant pointer to the input object, cast to type \c T if the object is of type \c T
+/// (or subclass); otherwise returns \c nullptr.
+///
+/// \relates OvitoObject
+template<class T, class U>
+inline const T* dynamic_object_cast(const U* obj) noexcept {
+    static_assert(std::is_base_of_v<OvitoObject, T>, "dynamic_object_cast can only be used with OvitoObject-derived classes.");
+    static_assert(std::is_base_of_v<OvitoObject, U>, "dynamic_object_cast can only be used with OvitoObject-derived classes.");
+    return dynamic_cast<const T*>(obj);
+}
+
+/// \brief Static cast operator for OvitoObject derived classes.
+///
+/// Returns a pointer to the object, cast to target type \c T.
+/// Performs a runtime check in debug builds to make sure the input object
+/// is really an instance of the target class.
+///
+/// \relates OvitoObject
+template<class T, class U>
+inline T* static_object_cast(U* obj) noexcept {
+    static_assert(std::is_base_of_v<OvitoObject, T>, "static_object_cast can only be used with OvitoObject-derived classes.");
+    static_assert(std::is_base_of_v<OvitoObject, U>, "static_object_cast can only be used with OvitoObject-derived classes.");
+    OVITO_ASSERT_MSG(!obj || obj->getOOClass().isDerivedFrom(T::OOClass()), "static_object_cast",
+        qPrintable(QStringLiteral("Runtime type check failed. The source object %1 is not an instance of the target class %2.").arg(obj->getOOClass().name()).arg(T::OOClass().name())));
+    return static_cast<T*>(obj);
+}
+
+/// \brief Static cast operator for OvitoObject derived object.
+///
+/// Returns a const pointer to the object, cast to target type \c T.
+/// Performs a runtime check in debug builds to make sure the input object
+/// is really an instance of the target class.
+///
+/// \relates OvitoObject
+template<class T, class U>
+inline const T* static_object_cast(const U* obj) noexcept {
+    static_assert(std::is_base_of_v<OvitoObject, T>, "static_object_cast can only be used with OvitoObject-derived classes.");
+    static_assert(std::is_base_of_v<OvitoObject, U>, "static_object_cast can only be used with OvitoObject-derived classes.");
+    OVITO_ASSERT_MSG(!obj || obj->getOOClass().isDerivedFrom(T::OOClass()), "static_object_cast",
+        qPrintable(QStringLiteral("Runtime type check failed. The source object %1 is not an instance of the target class %2.").arg(obj->getOOClass().name()).arg(T::OOClass().name())));
+    return static_cast<const T*>(obj);
+}
+
+/// \brief Turns a pointer to a const object into a pointer to a non-const object.
+template<class T>
+T* const_pointer_cast(const T* p) noexcept {
+    return const_cast<T*>(p);
+}
+
+/// \brief Dynamic cast operator for fancy pointers to OVITO objects.
+///
+/// Returns a fancy pointer to the input object, cast to type \c T if the object is of type \c T
+/// (or a subclass); otherwise returns \c nullptr.
+///
+/// \relates OORef, DataOORef
+template<class T, class U, template<typename> class Pointer>
+inline Pointer<T> dynamic_object_cast(const Pointer<U>& obj) noexcept {
+    static_assert(std::is_base_of_v<OvitoObject, T>, "dynamic_object_cast can only be used with OvitoObject-derived classes.");
+    static_assert(std::is_base_of_v<OvitoObject, U>, "dynamic_object_cast can only be used with OvitoObject-derived classes.");
+    return dynamic_pointer_cast<T, U>(obj);
+}
+
+/// \brief Dynamic cast operator for fancy pointers to OVITO objects.
+///
+/// Returns a fancy pointer to the input object, cast to type \c T if the object is of type \c T
+/// (or a subclass); otherwise returns \c nullptr.
+///
+/// \relates OORef, DataOORef
+template<class T, class U, template<typename> class Pointer>
+inline Pointer<const T> dynamic_object_cast(const Pointer<const U>& obj) noexcept {
+    static_assert(std::is_base_of_v<OvitoObject, T>, "dynamic_object_cast can only be used with OvitoObject-derived classes.");
+    static_assert(std::is_base_of_v<OvitoObject, U>, "dynamic_object_cast can only be used with OvitoObject-derived classes.");
+    return dynamic_pointer_cast<const T, const U>(obj);
+}
+
+/// \brief Dynamic cast operator for fancy pointers to OVITO objects.
+///
+/// Returns a fancy pointer to the input object, cast to type \c T if the object is of type \c T
+/// (or a subclass); otherwise returns \c nullptr.
+///
+/// \relates OORef, DataOORef
+template<class T, class U, template<typename> class Pointer>
+inline Pointer<T> dynamic_object_cast(Pointer<U>&& obj) noexcept {
+    static_assert(std::is_base_of_v<OvitoObject, T>, "dynamic_object_cast can only be used with OvitoObject-derived classes.");
+    static_assert(std::is_base_of_v<OvitoObject, U>, "dynamic_object_cast can only be used with OvitoObject-derived classes.");
+    return dynamic_pointer_cast<T, U>(std::move(obj));
+}
+
+/// \brief Dynamic cast operator for fancy pointers to OVITO objects.
+///
+/// Returns a fancy pointer to the input object, cast to type \c T if the object is of type \c T
+/// (or a subclass); otherwise returns \c nullptr.
+///
+/// \relates OORef, DataOORef
+template<class T, class U, template<typename> class Pointer>
+inline Pointer<const T> dynamic_object_cast(Pointer<const U>&& obj) noexcept {
+    return dynamic_pointer_cast<const T, const U>(std::move(obj));
+}
+
+/// \brief Static cast operator for fancy pointers to OVITO objects.
+///
+/// Returns the given object cast to type \c T.
+/// Performs a runtime check of the object type in debug build.
+///
+/// \relates OORef, DataOORef
+template<class T, class U, template<typename> class Pointer>
+inline Pointer<T> static_object_cast(const Pointer<U>& obj) noexcept {
+    static_assert(std::is_base_of_v<OvitoObject, T>, "static_object_cast can only be used with OvitoObject-derived classes.");
+    static_assert(std::is_base_of_v<OvitoObject, U>, "static_object_cast can only be used with OvitoObject-derived classes.");
+    OVITO_ASSERT_MSG(!obj || obj->getOOClass().isDerivedFrom(T::OOClass()), "static_object_cast",
+        qPrintable(QStringLiteral("Runtime type check failed. The source object %1 is not an instance of the target class %2.").arg(obj->getOOClass().name()).arg(T::OOClass().name())));
+    return static_pointer_cast<T, U>(obj);
+}
+
+/// \brief Static cast operator for fancy pointers to OVITO objects.
+///
+/// Returns the given object cast to type \c T.
+/// Performs a runtime check of the object type in debug build.
+///
+/// \relates OORef, DataOORef
+template<class T, class U, template<typename> class Pointer>
+inline Pointer<const T> static_object_cast(const Pointer<const U>& obj) noexcept {
+    static_assert(std::is_base_of_v<OvitoObject, T>, "static_object_cast can only be used with OvitoObject-derived classes.");
+    static_assert(std::is_base_of_v<OvitoObject, U>, "static_object_cast can only be used with OvitoObject-derived classes.");
+    OVITO_ASSERT_MSG(!obj || obj->getOOClass().isDerivedFrom(T::OOClass()), "static_object_cast",
+        qPrintable(QStringLiteral("Runtime type check failed. The source object %1 is not an instance of the target class %2.").arg(obj->getOOClass().name()).arg(T::OOClass().name())));
+    return static_pointer_cast<const T, const U>(obj);
+}
+
+/// \brief Static cast operator for fancy pointers to OVITO objects.
+///
+/// Returns the given object cast to type \c T.
+/// Performs a runtime check of the object type in debug build.
+///
+/// \relates OORef, DataOORef
+template<class T, class U, template<typename> class Pointer>
+inline Pointer<T> static_object_cast(Pointer<U>&& obj) noexcept {
+    static_assert(std::is_base_of_v<OvitoObject, T>, "static_object_cast can only be used with OvitoObject-derived classes.");
+    static_assert(std::is_base_of_v<OvitoObject, U>, "static_object_cast can only be used with OvitoObject-derived classes.");
+    OVITO_ASSERT_MSG(!obj || obj->getOOClass().isDerivedFrom(T::OOClass()), "static_object_cast",
+        qPrintable(QStringLiteral("Runtime type check failed. The source object %1 is not an instance of the target class %2.").arg(obj->getOOClass().name()).arg(T::OOClass().name())));
+    return static_pointer_cast<T, U>(std::move(obj));
+}
+
+/// \brief Static cast operator for fancy pointers to OVITO objects.
+///
+/// Returns the given object cast to type \c T.
+/// Performs a runtime check of the object type in debug build.
+///
+/// \relates OORef, DataOORef
+template<class T, class U, template<typename> class Pointer>
+inline Pointer<const T> static_object_cast(Pointer<const U>&& obj) noexcept {
+    static_assert(std::is_base_of_v<OvitoObject, T>, "static_object_cast can only be used with OvitoObject-derived classes.");
+    static_assert(std::is_base_of_v<OvitoObject, U>, "static_object_cast can only be used with OvitoObject-derived classes.");
+    OVITO_ASSERT_MSG(!obj || obj->getOOClass().isDerivedFrom(T::OOClass()), "static_object_cast",
+        qPrintable(QStringLiteral("Runtime type check failed. The source object %1 is not an instance of the target class %2.").arg(obj->getOOClass().name()).arg(T::OOClass().name())));
+    return static_pointer_cast<const T, const U>(std::move(obj));
+}
+
+}   // End of namespace
+
+Q_DECLARE_SMART_POINTER_METATYPE(Ovito::OORef);
+
+#include <ovito/core/utilities/concurrent/ObjectExecutor.h>
+#include <ovito/core/utilities/concurrent/DeferredObjectExecutor.h>

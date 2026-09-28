@@ -1,0 +1,147 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/grid/Grid.h>
+#include <ovito/grid/objects/VoxelGrid.h>
+#include <ovito/stdobj/properties/PropertyColorMapping.h>
+#include <ovito/core/dataset/data/DataVis.h>
+#include <ovito/core/rendering/SceneRenderer.h>
+#include <ovito/core/dataset/animation/controller/Controller.h>
+#include <ovito/core/dataset/animation/AnimationSettings.h>
+
+namespace Ovito {
+
+/**
+ * \brief A visualization element for rendering VoxelGrid data objects.
+ */
+class OVITO_GRID_EXPORT VoxelGridVis : public DataVis
+{
+    OVITO_CLASS(VoxelGridVis)
+
+public:
+
+    enum RepresentationMode {
+        Boundary,
+        Volume,
+    };
+    Q_ENUM(RepresentationMode);
+
+    /// Constructor.
+    void initializeObject(ObjectInitializationFlags flags);
+
+    /// Lets the visualization element render the data object.
+    virtual PipelineStatus renderSynchronous(const ConstDataObjectPath& path, const PipelineFlowState& flowState, FrameGraph& frameGraph, const SceneNode* sceneNode) override;
+
+    /// Computes the bounding box of the object.
+    virtual Box3 boundingBoxImmediate(AnimationTime time, const ConstDataObjectPath& path, const Pipeline* pipeline, const PipelineFlowState& flowState, TimeInterval& validityInterval) override;
+
+    /// Returns the transparency parameter.
+    FloatType transparency() const { return transparencyController() ? transparencyController()->getFloatValue(AnimationTime(0)) : 0; }
+
+    /// Sets the transparency parameter.
+    void setTransparency(FloatType t) { if(transparencyController()) transparencyController()->setFloatValue(AnimationTime(0), t); }
+
+    /// Returns the opacity mapping function after making it mutable.
+    OpacityFunction* mutableOpacityFunction();
+
+    /// Replaces this visual element with a shared visual element by telling all dependents to update their references.
+    virtual void replaceWithSharedElement(DataVis* sharedVis) const override;
+
+private:
+
+    /// Renders the outer surfaces of the grid.
+    void renderGridBoundary(FrameGraph& frameGraph, const SceneNode* sceneNode, const VoxelGrid* gridObj, const Property* colorProperty, const Property* pseudoColorProperty, int pseudoColorPropertyComponent, PipelineStatus& status);
+
+    /// Renders the interior volume of the grid.
+    void renderGridVolume(FrameGraph& frameGraph, const SceneNode* sceneNode, const VoxelGrid* gridObj, const Property* pseudoColorProperty, int pseudoColorPropertyComponent, PipelineStatus& status);
+
+private:
+
+    /// Controls the transparency of the grid's surfaces.
+    DECLARE_MODIFIABLE_REFERENCE_FIELD(OORef<Controller>, transparencyController, setTransparencyController);
+
+    /// Controls whether the grid lines on the surface should be highlighted.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{true}, highlightGridLines, setHighlightGridLines);
+
+    /// Controls whether the voxel colors should be interpolated.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{false}, interpolateColors, setInterpolateColors);
+
+    /// Transfer function for pseudo-color visualization of a field property.
+    DECLARE_MODIFIABLE_REFERENCE_FIELD(OORef<PropertyColorMapping>, colorMapping, setColorMapping);
+
+    /// Controls how the grid is represented in the viewport.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(RepresentationMode{Boundary}, representationMode, setRepresentationMode);
+
+    /// Opacity transfer function for volume rendering.
+    DECLARE_MODIFIABLE_REFERENCE_FIELD(DataOORef<const OpacityFunction>, opacityFunction, setOpacityFunction);
+
+    /// Controls the distance after which a 'opacity' fraction of light traveling through the volume is absorbed.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(FloatType{0}, absorptionUnitDistance, setAbsorptionUnitDistance);
+};
+
+/**
+ * \brief This data structure is attached to the geometry rendered by the VoxelGridVis
+ * in the viewports. It facilitates the picking of grid cells with the mouse.
+ */
+class OVITO_GRID_EXPORT VoxelGridPickInfo : public ObjectPickInfo
+{
+    OVITO_CLASS(VoxelGridPickInfo)
+
+public:
+
+    /// Constructor.
+    void initializeObject(const VoxelGridVis* visElement, const VoxelGrid* voxelGrid, std::array<int, 3> numCells, size_t trianglesPerCell) {
+        ObjectPickInfo::initializeObject();
+        _visElement = visElement;
+        _voxelGrid = voxelGrid;
+        _numCells = numCells;
+        _trianglesPerCell = trianglesPerCell;
+    }
+
+    /// Returns the data object.
+    const DataOORef<const VoxelGrid>& voxelGrid() const { return _voxelGrid; }
+
+    /// Returns the vis element that rendered the voxel grid.
+    const VoxelGridVis* visElement() const { return _visElement; }
+
+    /// Returns a human-readable string describing the picked object, which will be displayed in the status bar by OVITO.
+    virtual QString infoString(const Pipeline* pipeline, uint32_t subobjectId) override;
+
+private:
+
+    /// The data object holding the original grid data.
+    DataOORef<const VoxelGrid> _voxelGrid;
+
+    /// The vis element that rendered the voxel grid.
+    OORef<VoxelGridVis> _visElement;
+
+    /// Number of visible cells in each grid direction.
+    std::array<int, 3> _numCells;
+
+    /// The number of triangles rendered per voxel grid cell.
+    size_t _trianglesPerCell;
+};
+
+}   // End of namespace

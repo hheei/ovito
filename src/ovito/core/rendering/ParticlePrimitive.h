@@ -1,0 +1,350 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/core/Core.h>
+#include <ovito/core/dataset/data/DataBuffer.h>
+#include "RenderingPrimitive.h"
+
+namespace Ovito {
+
+/**
+ * \brief A set of particles to be rendered by a SceneRenderer implementation.
+ */
+class OVITO_CORE_EXPORT ParticlePrimitive final : public RenderingPrimitive
+{
+    Q_GADGET
+
+#ifndef OVITO_BUILD_MONOLITHIC
+    // Give this exported c++ class a "key function" to work around dynamic_cast problems (observed on macOS platform).
+    // This function is not actually used but ensures that the class' vtable ends up in the core module.
+    // See also http://itanium-cxx-abi.github.io/cxx-abi/abi.html#vague-vtable
+    virtual void __key_function() override;
+#endif
+
+public:
+
+    enum ShadingMode {
+        NormalShading,
+        FlatShading,
+    };
+    Q_ENUM(ShadingMode);
+
+    enum RenderingQuality {
+        LowQuality,
+        MediumQuality,
+        HighQuality,
+        AutoQuality
+    };
+    Q_ENUM(RenderingQuality);
+
+    enum ParticleShape {
+        SphericalShape,
+        SquareCubicShape,
+        BoxShape,
+        EllipsoidShape,
+        SuperquadricShape
+    };
+    Q_ENUM(ParticleShape);
+
+    /// Sets the coordinates of the particles.
+    void setPositions(ConstDataBufferPtr coordinates) {
+        OVITO_ASSERT(!coordinates || coordinates->componentCount() == 3);
+        _positions = std::move(coordinates);
+    }
+
+    /// Sets the radii of the particles.
+    void setRadii(ConstDataBufferPtr radii) {
+        OVITO_ASSERT(!radii || radii->componentCount() == 1);
+        _radii = std::move(radii);
+    }
+
+    /// Sets the radius of all particles to the given value.
+    void setUniformRadius(FloatType radius) {
+        _uniformParticleRadius = radius;
+    }
+
+    /// Sets the colors of the particles.
+    void setColors(ConstDataBufferPtr colors) {
+        OVITO_ASSERT(!colors || colors->componentCount() == 3);
+        _colors = std::move(colors);
+    }
+
+    /// Sets the color of all particles to the given value.
+    void setUniformColor(const Color& color) {
+        _uniformParticleColor = color;
+    }
+
+    /// Sets the selection flags of the particles.
+    void setSelection(ConstDataBufferPtr selection) {
+        OVITO_ASSERT(!selection || (selection->dataType() == DataBuffer::IntSelection && selection->componentCount() == 1));
+        _selection = std::move(selection);
+    }
+
+    /// Sets the color to be used for rendering the selected particles.
+    void setSelectionColor(const Color& color) {
+        _selectionParticleColor = color;
+    }
+
+    /// Sets the transparency values of the particles.
+    void setTransparencies(ConstDataBufferPtr transparencies) {
+        OVITO_ASSERT(!transparencies || transparencies->componentCount() == 1);
+        _transparencies = std::move(transparencies);
+    }
+
+    /// Sets the aspherical shape of the particles.
+    void setAsphericalShapes(ConstDataBufferPtr shapes) {
+        OVITO_ASSERT(!shapes || shapes->componentCount() == 3);
+        _asphericalShapes = std::move(shapes);
+    }
+
+    /// Sets the aspherical shape of the particles.
+    void setOrientations(ConstDataBufferPtr orientations) {
+        OVITO_ASSERT(!orientations || orientations->componentCount() == 4);
+        _orientations = std::move(orientations);
+    }
+
+    /// Sets the superquadric roundness values of the particles.
+    void setRoundness(ConstDataBufferPtr roundness) {
+        OVITO_ASSERT(!roundness || roundness->componentCount() == 2);
+        _roundness = std::move(roundness);
+    }
+
+    /// Returns the shading mode for particles.
+    ShadingMode shadingMode() const { return _shadingMode; }
+
+    /// Changes the shading mode for particles.
+    void setShadingMode(ShadingMode mode) { _shadingMode = mode; }
+
+    /// Returns the rendering quality of particles.
+    RenderingQuality renderingQuality() const { return _renderingQuality; }
+
+    /// Changes the rendering quality of particles.
+    void setRenderingQuality(RenderingQuality quality) { _renderingQuality = quality; }
+
+    /// Returns the display shape of particles.
+    ParticleShape particleShape() const { return _particleShape; }
+
+    /// Changes the display shape of particles.
+    void setParticleShape(ParticleShape shape) { _particleShape = shape; }
+
+    /// Returns the buffer storing the particle positions.
+    const ConstDataBufferPtr& positions() const { return _positions; }
+
+    /// Returns the buffer storing the particle radii.
+    const ConstDataBufferPtr& radii() const { return _radii; }
+
+    /// Returns the buffer storing the particle colors.
+    const ConstDataBufferPtr& colors() const { return _colors; }
+
+    /// Returns the buffer storing the particle selection flags.
+    const ConstDataBufferPtr& selection() const { return _selection; }
+
+    /// Returns the buffer storing the particle transparency values.
+    const ConstDataBufferPtr& transparencies() const { return _transparencies; }
+
+    /// Returns the buffer storing the shapes of aspherical particles.
+    const ConstDataBufferPtr& asphericalShapes() const { return _asphericalShapes; }
+
+    /// Returns the buffer storing the orientations of aspherical particles.
+    const ConstDataBufferPtr& orientations() const { return _orientations; }
+
+    /// Returns the buffer storing the roundness values of superquadric particles.
+    const ConstDataBufferPtr& roundness() const { return _roundness; }
+
+    /// Returns the radius assigned to all particles.
+    FloatType uniformRadius() const { return _uniformParticleRadius; }
+
+    /// Returns the color assigned to all particles.
+    const Color& uniformColor() const { return _uniformParticleColor; }
+
+    /// Returns the color used for rendering all selected particles.
+    const Color& selectionColor() const { return _selectionParticleColor; }
+
+	/// Computes the 3d bounding box of the primitive in local coordinates.
+	virtual Box3 computeBoundingBox(const RendererResourceCache::ResourceFrame& visCache) const override {
+        OVITO_ASSERT(this);
+        const auto& bb = visCache.lookup<Box3>(
+            RendererResourceKey<struct ParticlePositionsBoundingBoxCache, ConstDataBufferPtr>{positions()},
+            [this](Box3& bb) {
+                if(positions())
+                    bb = positions()->boundingBox3();
+            });
+        FloatType maxRadius = std::max(uniformRadius(), FloatType(0));
+        if(radii()) {
+            auto& [cachedMinRadius, cachedMaxRadius] = visCache.lookup<std::tuple<FloatType, FloatType>>(RendererResourceKey<struct ParticlesMaxRadiusCache, ConstDataBufferPtr>{radii()}, [this](FloatType& cachedMinRadius, FloatType& cachedMaxRadius) {
+                std::tie(cachedMinRadius, cachedMaxRadius) = radii()->minMax();
+            });
+            if(cachedMinRadius <= 0)
+                maxRadius = std::max(maxRadius, cachedMaxRadius);
+            else
+                maxRadius = cachedMaxRadius;
+        }
+        if(asphericalShapes()) {
+            auto& cachedShapeBox = visCache.lookup<Box3>(RendererResourceKey<struct ParticleMaxShapeBoxCache, ConstDataBufferPtr>{asphericalShapes()}, [this](Box3& cachedShapeBox) {
+                cachedShapeBox = asphericalShapes()->boundingBox3();
+            });
+            FloatType cachedMaxShape = (cachedShapeBox.maxc - Point3::Origin()).length();
+            if(cachedShapeBox.minc == Point3::Origin())
+                maxRadius = std::max(maxRadius, cachedMaxShape);
+            else
+                maxRadius = cachedMaxShape;
+        }
+        return bb.padBox(maxRadius);
+    }
+
+    /// Modifies the primitive's particle data arrays to contain only the particles specified by the given index array.
+    void makeSubset(const ConstDataBufferPtr& indices, const RendererResourceCache::ResourceFrame& visCache) {
+        OVITO_ASSERT(positions());
+        if(!indices || indices->size() == positions()->size())
+            return; // No subset to be made.
+        OVITO_ASSERT(indices->dataType() == DataBuffer::Int32);
+        OVITO_ASSERT(indices->componentCount() == 1);
+        OVITO_ASSERT(indices->size() != 0);
+        OVITO_ASSERT(indices->size() <= positions()->size());
+
+        setPositions(makeSubsetBuffer(positions(), indices, visCache));
+        setRadii(makeSubsetBuffer(radii(), indices, visCache));
+        setColors(makeSubsetBuffer(colors(), indices, visCache));
+        setSelection(makeSubsetBuffer(selection(), indices, visCache));
+        setTransparencies(makeSubsetBuffer(transparencies(), indices, visCache));
+        setAsphericalShapes(makeSubsetBuffer(asphericalShapes(), indices, visCache));
+        setOrientations(makeSubsetBuffer(orientations(), indices, visCache));
+        setRoundness(makeSubsetBuffer(roundness(), indices, visCache));
+    }
+
+    /// Some renderers, such as ANARI, don't support highlighting selecting particles with a marker color due to
+    /// limitations in their shaders system. This method allows to work around this by baking the selection color into
+    /// the colors array (as well as transparency, if present).
+    void bakeSelectionIntoColorsAndTransparencies(const RendererResourceCache::ResourceFrame& visCache) {
+        if(!this->selection())
+            return;  // No selection to bake.
+
+        const auto& [selectionBakedColors, selectionBakedTransparencies] =
+            visCache.lookup<std::tuple<ConstDataBufferPtr, ConstDataBufferPtr>>(
+                RendererResourceKey<struct AnariSphereSelectionCache, ConstDataBufferPtr, ConstDataBufferPtr, ConstDataBufferPtr, Color, Color>{
+                    this->selection(),
+                    this->colors(),
+                    this->transparencies(),
+                    this->uniformColor(),
+                    this->selectionColor(),
+                },
+                [&](ConstDataBufferPtr& selectionBakedColors, ConstDataBufferPtr& selectionBakedTransparencies) {
+                    BufferReadAccess<SelectionIntType> selectionAcc(this->selection());
+
+                    // Bake the selection state into the colors array.
+                    const ColorG selectionColor = this->selectionColor().toDataType<GraphicsFloatType>();
+                    BufferFactory<ColorG> outColorAcc(selectionAcc.size());
+                    if(this->colors()) {
+                        BufferAccessConvertedTo<ColorG> inColorAcc(this->colors());
+                        for(auto [selected, inColor, outColor] : std::views::zip(selectionAcc, inColorAcc, outColorAcc)) {
+                            outColor = selected ? selectionColor : inColor;
+                        }
+                    }
+                    else {
+                        const ColorF uniformColor = this->uniformColor().toDataType<GraphicsFloatType>();
+                        for(auto [selected, outColor] : std::views::zip(selectionAcc, outColorAcc)) {
+                            outColor = selected ? selectionColor : uniformColor;
+                        }
+                    }
+                    selectionBakedColors = outColorAcc.take();
+
+                    // Bake the selection state into the transparencies array, if present.
+                    if(this->transparencies()) {
+                        BufferAccessConvertedTo<GraphicsFloatType> inTranspAcc(this->transparencies());
+                        BufferFactory<GraphicsFloatType> outTranspAcc(selectionAcc.size());
+                        for(auto [selected, inTransp, outTransp] : std::views::zip(selectionAcc, inTranspAcc, outTranspAcc)) {
+                            outTransp = selected ? 0.0f : inTransp;  // Make selected particles fully opaque to ensure that the selection color is visible.
+                        }
+                        selectionBakedTransparencies = outTranspAcc.take();
+                    }
+                });
+        setSelection({});
+        setColors(selectionBakedColors);
+        setTransparencies(selectionBakedTransparencies);
+    }
+
+private:
+
+    /// Extracts a subset of elements from the input buffer based on the given index array and returns it as a new buffer. The result is cached in the vis cache.
+    static ConstDataBufferPtr makeSubsetBuffer(const ConstDataBufferPtr& inputBuffer, const ConstDataBufferPtr& indices, const RendererResourceCache::ResourceFrame& visCache) {
+        OVITO_ASSERT(indices);
+        if(!inputBuffer)
+            return nullptr;  // No input buffer to be subsetted.
+        auto& outputBuffer = visCache.lookup<ConstDataBufferPtr>(
+            RendererResourceKey<struct ParticleSubsetBufferCache, ConstDataBufferPtr, ConstDataBufferPtr>{inputBuffer, indices},
+            [&](ConstDataBufferPtr& outputBuffer) {
+                auto b = DataBufferPtr::create(DataBuffer::Uninitialized, indices->size(), inputBuffer->dataType(), inputBuffer->componentCount());
+                inputBuffer->mappedCopyTo(*b, BufferReadAccess<int32_t>(indices));
+                outputBuffer = std::move(b);
+            });
+        return outputBuffer;
+    }
+
+private:
+
+    /// Controls the shading of particles.
+    ShadingMode _shadingMode = NormalShading;
+
+    /// Controls the rendering quality.
+    RenderingQuality _renderingQuality = MediumQuality;
+
+    /// Selects the type of visual shape of the rendered particles.
+    ParticleShape _particleShape = SphericalShape;
+
+    /// The internal buffer storing the array of particle coordinates.
+    ConstDataBufferPtr _positions; // Array of Vector3
+
+    /// The internal buffer stores the array of particle radii.
+    ConstDataBufferPtr _radii; // Array of GraphicsFloatType
+
+    /// The internal buffer storing the particle RGB colors.
+    ConstDataBufferPtr _colors; // Array of ColorG
+
+    /// The internal buffer storing the array of particle selection flags.
+    ConstDataBufferPtr _selection; // Array of SelectionIntType
+
+    /// The internal buffer storing the particle semi-transparency values.
+    ConstDataBufferPtr _transparencies; // Array of GraphicsFloatType
+
+    /// The internal buffer storing the shapes of aspherical particles.
+    ConstDataBufferPtr _asphericalShapes; // Array of Vector3G
+
+    /// The internal buffer storing the orientations of aspherical particles.
+    ConstDataBufferPtr _orientations; // Array of QuaternionG
+
+    /// The internal buffer storing the roundness values of superquadric particles.
+    ConstDataBufferPtr _roundness; // Array of Vector2G
+
+    /// The radius value to be used if no per-particle radii have been specified.
+    FloatType _uniformParticleRadius = 0;
+
+    /// The color to be used if no per-particle colors have been specified.
+    Color _uniformParticleColor{1,1,1};
+
+    /// The color used for rendering all selected particles.
+    Color _selectionParticleColor{1,0,0};
+};
+
+}   // End of namespace

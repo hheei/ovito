@@ -1,0 +1,84 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/particles/Particles.h>
+#include <ovito/particles/export/ParticleExporter.h>
+#include <ovito/particles/import/lammps/LAMMPSDataImporter.h>
+
+namespace Ovito {
+
+/**
+ * \brief Exporter that writes the particles to a LAMMPS data file.
+ */
+class OVITO_PARTICLES_EXPORT LAMMPSDataExporter : public ParticleExporter
+{
+    /// Defines a metaclass specialization for this exporter type.
+    class OOMetaClass : public ParticleExporter::OOMetaClass
+    {
+    public:
+        /// Inherit standard constructor from base meta class.
+        using ParticleExporter::OOMetaClass::OOMetaClass;
+
+        /// Returns the file filter that specifies the extension of files written by this service.
+        virtual QString fileFilter() const override { return QStringLiteral("*"); }
+
+        /// Returns the filter description that is displayed in the drop-down box of the file dialog.
+        virtual QString fileFilterDescription() const override { return tr("LAMMPS Data"); }
+    };
+
+    OVITO_CLASS_META(LAMMPSDataExporter, OOMetaClass)
+
+protected:
+
+    /// Creates a worker performing the actual data export.
+    virtual OORef<FileExportJob> createExportJob(const QString& filePath, int numberOfFrames) override;
+
+private:
+
+    /// Selects the kind of LAMMPS data file to write.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(LAMMPSDataImporter::LAMMPSAtomStyle{LAMMPSDataImporter::AtomStyle_Atomic}, atomStyle, setAtomStyle, PROPERTY_FIELD_MEMORIZE);
+
+    /// The list of sub-styles if the hybrid atom style is used.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(std::vector<LAMMPSDataImporter::LAMMPSAtomStyle>{}, atomSubStyles, setAtomSubStyles);
+
+    /// Flag that allows the user to suppress the "Masses" file section.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{false}, omitMassesSection, setOmitMassesSection);
+
+    /// Flag that allows the user to suppress export of existing particle identifiers.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{false}, ignoreParticleIdentifiers, setIgnoreParticleIdentifiers);
+
+    /// Exports the type names of particles, bonds, angles, etc.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{false}, exportTypeNames, setExportTypeNames);
+
+    /// Controls whether new consecutive IDs are assigned to particle/bond/... types during export.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{false}, generateConsecutiveTypeIds, setGenerateConsecutiveTypeIds);
+
+    /// Controls the triclinic data file format.
+    /// If true, the triclinic box is restricted (old lammps format).
+    /// If false, the new triclinic box format is used.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(bool{false}, restrictedTriclinic, setRestrictedTriclinic, PROPERTY_FIELD_MEMORIZE);
+};
+
+}   // End of namespace

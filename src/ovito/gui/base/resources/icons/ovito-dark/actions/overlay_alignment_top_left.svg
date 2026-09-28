@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="31.054012mm"
+   height="24.444834mm"
+   viewBox="0 0 31.054012 24.444834"
+   version="1.1"
+   id="svg5"
+   inkscape:version="1.1.1 (c3084ef, 2021-09-22)"
+   sodipodi:docname="alignment_top_left.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview7"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:pageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:document-units="mm"
+     showgrid="false"
+     showguides="false"
+     inkscape:snap-global="false"
+     fit-margin-top="0"
+     fit-margin-left="0"
+     fit-margin-right="0"
+     fit-margin-bottom="0"
+     inkscape:zoom="2.6020841"
+     inkscape:cx="-4.4195343"
+     inkscape:cy="79.359463"
+     inkscape:window-width="1728"
+     inkscape:window-height="991"
+     inkscape:window-x="0"
+     inkscape:window-y="38"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1" />
+  <defs
+     id="defs2" />
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-44.368681,-102.199)">
+    <g
+       id="g1707"
+       transform="matrix(1,0,0,-1,-4.206543e-6,228.84284)">
+      <rect
+         style="fill:none;fill-rule:evenodd;stroke:#d9d9d9;stroke-width:2.965;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+         id="rect31"
+         width="28.089012"
+         height="21.479834"
+         x="45.851181"
+         y="103.6815"
+         ry="3.43801" />
+      <rect
+         style="fill:#d9d9d9;fill-opacity:1;stroke:none;stroke-width:3.27093;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+         id="rect986"
+         width="10.745261"
+         height="8.6000919"
+         x="46.766312"
+         y="115.7478"
+         ry="0" />
+    </g>
+  </g>
+</svg>

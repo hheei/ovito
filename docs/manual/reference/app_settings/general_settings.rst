@@ -1,0 +1,51 @@
+.. _application_settings.general:
+
+General settings
+================
+
+.. image:: /images/app_settings/general_settings.*
+  :width: 45%
+  :align: right
+
+On this tab of the :ref:`application settings dialog <application_settings>`, you can adjust global options affecting the program's user interface and graphics system.
+
+User interface options
+""""""""""""""""""""""
+
+Auto-detect color scheme and enable dark mode
+  Lets OVITO use a UI color scheme that matches the current light/dark mode settings of the operating system.
+  This option is permanently active on Linux and macOS platforms. Note that the :ref:`background color of the viewport windows <application_settings.viewports>`
+  is controlled by a separate option.
+
+Use separate working directories for data import/export and session states
+  If this option is turned on (default), OVITO remembers the most recently used folders
+  for different file I/O operations across program sessions, e.g., data file import & export,
+  session state loading & saving, or image output.
+
+  If turned off, the current working directory of the process is used as initial choice in all file operations.
+  This typically depends on where OVITO was launched from on the terminal.
+
+Use native file selection dialog
+  By default, OVITO uses the native file selection dialog provided by the operating system, which is typically the best choice.
+  However, on certain platforms (e.g. Linux with older GNOME desktops) the native dialog may ignore the working directory set by OVITO and always start in the same default directory, which can be very inconvenient.
+  In such cases, you can disable this option to force OVITO to use the Qt widget-based file selection dialog instead of the native dialog.
+
+Data import options
+"""""""""""""""""""
+
+Import multiple files of the same type |ovito-pro|
+  This option controls what should happen when you import multiple files of the same
+  file format. By default, OVITO loads the selected files as frames of a trajectory sequence, which can be played
+  back as an animation. Alternatively, you can choose to import each file as a separate
+  data pipeline and show all datasets side by side.
+  The latter option requires OVITO Pro, because only this edition supports adding more than
+  one pipeline to the visualization scene.
+
+Program updates
+"""""""""""""""
+
+Periodically check ovito.org website for program updates
+  If activated, the program checks for new software updates upon program start by contacting
+  the server `www.ovito.org`. In case a new program release is available for download, a corresponding notice
+  is displayed in the command panel of the program. No personal information or usage data is transmitted to or logged by the
+  software vendor.

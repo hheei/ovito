@@ -1,0 +1,72 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#version 450
+// Replaces DrawOutlinesKernel / DrawOutlinesPremultipliedKernel.
+//
+// Writes only the outline layer (premultiplied alpha) into an RGBA8
+// storage image. The caller blends it onto the viewport target with a
+// fullscreen pass using blend factors (One, OneMinusSrcAlpha).
+//
+// Coverage = popcount(flags) / 8, exactly like the CUDA version.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(std140, binding = 0) uniform Params {
+    ivec2 size;
+    vec2  depthRange;
+    vec2  widthRange;
+    vec2  _pad;
+    vec4  color;       // outline rgb in .rgb
+    float nearPlane;
+    float farPlane;
+    int   isPerspective;
+    int   _padDepthRange; // unused (was depthZeroToOne)
+} P;
+
+layout(std430, binding = 1) readonly buffer Tri { uvec2 tri[]; };
+layout(rgba8, binding = 2) writeonly uniform image2D outlineLayer;
+// Per-pixel linearised depth of the frontmost ExcludeFromOutline surface (NO_EXCLUDED = none)
+// and the composited eligible depth. The triangle path has no seed to reference, so it falls
+// back to per-pixel suppression where the excluded surface is the frontmost one.
+layout(std430, binding = 3) readonly buffer ExclDepth { float exclDepth[]; };
+layout(std430, binding = 4) readonly buffer Depth     { float depthFixed[]; };
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if(p.x >= P.size.x || p.y >= P.size.y)
+        return;
+    int idx = p.y * P.size.x + p.x;
+
+    uint flags = tri[idx].x & 0xFFu;
+    float a = float(bitCount(flags)) / 8.0;
+
+    // Suppress the outline where an ExcludeFromOutline surface is the frontmost one at this pixel.
+    // (exclDepth >= depthFixed always; equality means the excluded surface occludes the eligible one.)
+    // Additive |depth| tolerance (not multiplicative) so the test holds for negative linearised depth
+    // under an orthographic projection with a negative near plane.
+    if(exclDepth[idx] <= depthFixed[idx] + abs(depthFixed[idx]) * 0.001)
+        a = 0.0;
+
+    imageStore(outlineLayer, p, vec4(P.color.rgb * a, a));
+}

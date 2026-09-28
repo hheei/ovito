@@ -1,0 +1,111 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/crystalanalysis/CrystalAnalysis.h>
+#include <ovito/stdobj/properties/ElementType.h>
+#include <ovito/particles/objects/ParticleType.h>
+#include "BurgersVectorFamily.h"
+
+namespace Ovito {
+
+/**
+ * \brief Data structure representing a phase (e.g. a crystal structure) in a Microstructure.
+ */
+class OVITO_CRYSTALANALYSIS_EXPORT MicrostructurePhase : public ElementType
+{
+    OVITO_CLASS(MicrostructurePhase)
+
+public:
+
+    /// The dimensionality of the structure.
+    enum Dimensionality {
+        None,           ///< None of the types below
+        Volumetric,     ///< Volumetric phase
+        Planar,         ///< Planar interface, grain boundary, stacking fault, etc.
+        Pointlike       ///< Zero-dimensional defect
+    };
+    Q_ENUM(Dimensionality);
+
+    /// The type of symmetry of the crystal lattice.
+    enum CrystalSymmetryClass {
+        NoSymmetry,         ///< Unknown or no crystal symmetry.
+        CubicSymmetry,      ///< Used for cubic crystals like FCC, BCC, diamond.
+        HexagonalSymmetry   ///< Used for hexagonal crystals like HCP, hexagonal diamond.
+    };
+    Q_ENUM(CrystalSymmetryClass);
+
+public:
+
+    /// Returns the title of this phase.
+    const QString& longName() const { return name(); }
+
+    /// Assigns a long title to this phase.
+    void setLongName(const QString& name) { setName(name); }
+
+    /// Adds a new family to this phase's list of Burgers vector families.
+    void addBurgersVectorFamily(const BurgersVectorFamily* family) { _burgersVectorFamilies.push_back(this, PROPERTY_FIELD(burgersVectorFamilies), family); }
+
+    /// Adds a new family to this phase's list of Burgers vector families.
+    BurgersVectorFamily* createBurgersVectorFamily(int id = 0, const QString& name = tr("Other"), const Vector3& burgersVector = Vector3::Zero(), const Color& color = Color(0.9, 0.2, 0.2)) {
+        DataOORef<BurgersVectorFamily> family = DataOORef<BurgersVectorFamily>::create(id, name);
+        family->setBurgersVector(burgersVector);
+        family->setColor(color);
+        family->freezeInitialParameterValues({SNAPSHOT_PROPERTY_FIELD(ElementType::name), SNAPSHOT_PROPERTY_FIELD(ElementType::color), SNAPSHOT_PROPERTY_FIELD(BurgersVectorFamily::burgersVector)});
+        addBurgersVectorFamily(family);
+        return family.get();
+    }
+
+    /// Removes a family from this lattice pattern's list of Burgers vector families.
+    void removeBurgersVectorFamily(int index) { _burgersVectorFamilies.remove(this, PROPERTY_FIELD(burgersVectorFamilies), index); }
+
+    /// Returns the default Burgers vector family, which is assigned to dislocation segments that
+    /// don't belong to any family.
+    const BurgersVectorFamily* defaultBurgersVectorFamily() const { return !burgersVectorFamilies().empty() ? burgersVectorFamilies().front() : nullptr; }
+
+    /// Returns the display color to be used for a given Burgers vector.
+    static Color getBurgersVectorColor(const QString& latticeName, const Cluster::VecType& b);
+
+    /// Returns the display color to be used for a given Burgers vector.
+    static Color getBurgersVectorColor(ParticleType::PredefinedStructureType structureType, const Cluster::VecType& b);
+
+private:
+
+    /// The shortened title of this phase.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(QString{}, shortName, setShortName);
+    DECLARE_SNAPSHOT_PROPERTY_FIELD(shortName);
+
+    /// The dimensionality type of the phase.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(Dimensionality{Dimensionality::None}, dimensionality, setDimensionality);
+    DECLARE_SNAPSHOT_PROPERTY_FIELD(dimensionality);
+
+    /// The type of crystal symmetry of the phase if it is crystalline.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(CrystalSymmetryClass{CrystalSymmetryClass::NoSymmetry}, crystalSymmetryClass, setCrystalSymmetryClass);
+    DECLARE_SNAPSHOT_PROPERTY_FIELD(crystalSymmetryClass);
+
+    /// List of Burgers vector families defined for the phase if it is crystalline.
+    DECLARE_MODIFIABLE_VECTOR_REFERENCE_FIELD(DataOORef<const BurgersVectorFamily>, burgersVectorFamilies, setBurgersVectorFamilies);
+};
+
+}   // End of namespace

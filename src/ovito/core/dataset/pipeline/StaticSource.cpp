@@ -1,0 +1,85 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/core/Core.h>
+#include <ovito/core/dataset/pipeline/StaticSource.h>
+#include <ovito/core/dataset/pipeline/PipelineFlowState.h>
+#include <ovito/core/utilities/concurrent/SharedFuture.h>
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(StaticSource);
+OVITO_CLASSINFO(StaticSource, "DisplayName", "Pipeline source");
+DEFINE_REFERENCE_FIELD(StaticSource, dataCollection);
+SET_PROPERTY_FIELD_LABEL(StaticSource, dataCollection, "Data");
+
+/******************************************************************************
+* Asks the object for the result of the data pipeline.
+******************************************************************************/
+SharedFuture<PipelineFlowState> StaticSource::evaluateInternal(const PipelineEvaluationRequest& request)
+{
+    return PipelineFlowState(dataCollection(), PipelineStatus::Success);
+}
+
+/******************************************************************************
+* Handles reference events sent by reference targets of this object.
+******************************************************************************/
+bool StaticSource::referenceEvent(RefTarget* source, const ReferenceEvent& event)
+{
+    if(event.type() == ReferenceEvent::TargetChanged && source == dataCollection()) {
+        if(!event.sender()->isBeingLoaded()) {
+            // Inform the pipeline that we have a new input state.
+            notifyDependents(ReferenceEvent::InteractiveStateAvailable);
+        }
+    }
+
+    return PipelineNode::referenceEvent(source, event);
+}
+
+/******************************************************************************
+* Is called when a RefTarget referenced by this object has been replaced with a different one.
+******************************************************************************/
+void StaticSource::referenceReplaced(const PropertyFieldDescriptor* field, RefTarget* oldTarget, RefTarget* newTarget, int listIndex)
+{
+    if(field == PROPERTY_FIELD(dataCollection) && !shouldIgnoreChanges()) {
+        // The cached pipeline output still refers to the previous data collection.
+        // Throw it away so that the next evaluation picks up the newly assigned data collection.
+        pipelineCache().invalidate();
+    }
+
+    PipelineNode::referenceReplaced(field, oldTarget, newTarget, listIndex);
+}
+
+/******************************************************************************
+* Replaces all references to the given visual element in the pipeline with new compatible objects.
+******************************************************************************/
+void StaticSource::replaceVisualElement(DataVis* visElement, const std::function<OORef<DataVis>(const QString&)>& getReplacement)
+{
+    if(dataCollection()) {
+        // Make the replacement in all of the data collection's data objects.
+        if(dataCollection()->replaceVisualElement(visElement, getReplacement)) {
+            notifyDependents(ReferenceEvent::InteractiveStateAvailable);
+        }
+    }
+}
+
+}   // End of namespace

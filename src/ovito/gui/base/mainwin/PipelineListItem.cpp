@@ -1,0 +1,188 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/gui/base/GUIBase.h>
+#include <ovito/core/dataset/data/DataObject.h>
+#include <ovito/core/dataset/pipeline/PipelineNode.h>
+#include <ovito/core/dataset/pipeline/Modifier.h>
+#include "PipelineListItem.h"
+
+namespace Ovito {
+
+IMPLEMENT_ABSTRACT_OVITO_CLASS(PipelineListItem);
+DEFINE_REFERENCE_FIELD(PipelineListItem, object);
+
+/******************************************************************************
+* Constructor.
+******************************************************************************/
+void PipelineListItem::initializeObject(RefTarget* object, PipelineItemType itemType, PipelineListItem* parent)
+{
+    RefMaker::initializeObject();
+
+    _parent = parent;
+    _itemType = itemType;
+    _object.set(this, PROPERTY_FIELD(object), object);
+
+    if(ActiveObject* activeObject = dynamic_object_cast<ActiveObject>(object))
+        _isObjectActive = activeObject->isObjectActive();
+
+    switch(_itemType) {
+    case VisualElementsHeader: _title = tr("Visual elements"); break;
+    case ModificationsHeader: _title = tr("Modifications"); break;
+    case DataSourceHeader: _title = tr("Data source"); break;
+    case PipelineBranch: _title = tr("Pipeline branch"); break;
+    default: updateTitle(); break;
+    }
+}
+
+/******************************************************************************
+* This method is called when the object presented by the modifier
+* list item generates a message.
+******************************************************************************/
+bool PipelineListItem::referenceEvent(RefTarget* source, const ReferenceEvent& event)
+{
+    // The list must be updated if a modifier has been added or removed
+    // from a PipelineNode, or if a data object has been added/removed from the data source.
+    if((event.type() == ReferenceEvent::ReferenceAdded || event.type() == ReferenceEvent::ReferenceRemoved || event.type() == ReferenceEvent::ReferenceChanged) && dynamic_object_cast<PipelineNode>(object())) {
+        if(event.type() == ReferenceEvent::ReferenceChanged && static_cast<const ReferenceFieldEvent&>(event).field() == PROPERTY_FIELD(ModificationNode::modifierGroup)) {
+            Q_EMIT itemChanged(this);
+        }
+        Q_EMIT subitemsChanged(this);
+    }
+    // Update item if it has been enabled/disabled or its title has changed.
+    else if(event.type() == ReferenceEvent::TargetEnabledOrDisabled || event.type() == ReferenceEvent::TitleChanged) {
+        updateTitle();
+        Q_EMIT itemChanged(this);
+    }
+    // Update item with some delay after its status has changed.
+    else if(event.type() == ReferenceEvent::ObjectStatusChanged) {
+        // Display new status in the UI with a short delay to prevent excessive updates in case of frequent updates.
+        _statusUpdatePending = true;
+        if(!_statusAndActivityTimer.isActive())
+            _statusAndActivityTimer.start(200, Qt::CoarseTimer, this);
+    }
+    // Update item with some delay after its activity status has changed.
+    else if(event.type() == ActiveObject::ActivityChanged && ActiveObject::OOClass().isMember(object())) {
+        // Display activity state in the UI with a short delay to prevent excessive updates in case of many short-running tasks.
+        _activityUpdatePending = true;
+        if(!_statusAndActivityTimer.isActive())
+            _statusAndActivityTimer.start(200, Qt::CoarseTimer, this);
+    }
+    // Update item (and the entire list) if a group is being collapsed or uncollapsed.
+    else if(event.type() == ReferenceEvent::TargetChanged && static_cast<const PropertyFieldEvent&>(event).field() == PROPERTY_FIELD(ModifierGroup::isCollapsed)) {
+        Q_EMIT subitemsChanged(this);
+    }
+    else if(event.type() == ReferenceEvent::TargetDeleted) {
+        _isObjectActive = false;
+        if(_itemType == VisualElement)
+            _itemType = DeletedVisualElement;
+        else
+            _itemType = DeletedObject;
+        Q_EMIT subitemsChanged(this);
+    }
+
+    return RefMaker::referenceEvent(source, event);
+}
+
+/******************************************************************************
+* Handles timer events for this object.
+******************************************************************************/
+void PipelineListItem::timerEvent(QTimerEvent* event)
+{
+    if(event->timerId() == _statusAndActivityTimer.timerId()) {
+        OVITO_ASSERT(_statusAndActivityTimer.isActive());
+        if(_activityUpdatePending) {
+            _activityUpdatePending = false;
+            bool isActive = false;
+            if(ActiveObject* activeObject = dynamic_object_cast<ActiveObject>(object()))
+                isActive = activeObject->isObjectActive();
+            if(isActive != _isObjectActive) {
+                _isObjectActive = isActive;
+                _statusUpdatePending = true;
+            }
+        }
+        if(_statusUpdatePending) {
+            _statusUpdatePending = false;
+            updateTitle();
+            Q_EMIT itemChanged(this);
+        }
+        else {
+            _statusAndActivityTimer.stop();
+        }
+    }
+    QObject::timerEvent(event);
+}
+
+/******************************************************************************
+* Updates the stored title string of the item.
+******************************************************************************/
+void PipelineListItem::updateTitle()
+{
+    if(object()) {
+        _title = object()->objectTitle();
+    }
+}
+
+/******************************************************************************
+* Returns the status of the object represented by the list item.
+******************************************************************************/
+const PipelineStatus& PipelineListItem::status() const
+{
+    if(ActiveObject* activeObject = dynamic_object_cast<ActiveObject>(object())) {
+        if(ModificationNode* modNode = dynamic_object_cast<ModificationNode>(activeObject)) {
+            if(!modNode->modifierAndGroupEnabled()) {
+                // Override modifier's status if it is currently disabled.
+                if(!modNode->modifierGroup() || modNode->modifierGroup()->isEnabled()) {
+                    static const PipelineStatus disabledModifierStatus(tr("Modifier is currently turned off."));
+                    return disabledModifierStatus;
+                }
+                else {
+                    static const PipelineStatus disabledGroupStatus(tr("Modifier group is currently turned off."));
+                    return disabledGroupStatus;
+                }
+            }
+        }
+        return activeObject->status();
+    }
+    else {
+        static const PipelineStatus defaultStatus;
+        return defaultStatus;
+    }
+}
+
+/******************************************************************************
+* Returns a short piece of information (typically a string or color) to be displayed next to the object's title in the pipeline editor.
+******************************************************************************/
+QVariant PipelineListItem::shortInfo(SceneNode* selectedSceneNode) const
+{
+    OVITO_ASSERT(this_task::get());
+    OVITO_ASSERT(selectedSceneNode);
+
+    if(ActiveObject* activeObject = dynamic_object_cast<ActiveObject>(object())) {
+        if(Scene* scene = selectedSceneNode->scene()) {
+            return activeObject->getPipelineEditorShortInfo(scene);
+        }
+    }
+    return {};
+}
+
+}   // End of namespace

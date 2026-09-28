@@ -1,0 +1,200 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/core/Core.h>
+#include <ovito/core/app/PluginManager.h>
+#include <ovito/core/utilities/io/FileManager.h>
+#include <ovito/core/utilities/concurrent/TaskManager.h>
+#include <ovito/core/dataset/io/FileSourceImporter.h>
+#include <ovito/core/app/Application.h>
+#include "FileImporter.h"
+
+namespace Ovito {
+
+namespace {
+bool sortFileImporters(const FileImporter::OOMetaClass* a, const FileImporter::OOMetaClass* b)
+{
+    if(a->autodetectionPriority() == b->autodetectionPriority()) {
+        return std::strcmp(a->className(), b->className()) < 0;
+    }
+    return a->autodetectionPriority() > b->autodetectionPriority();
+}
+}  // namespace
+
+IMPLEMENT_ABSTRACT_OVITO_CLASS(FileImporter);
+
+/******************************************************************************
+* Tries to detect the format of the given file.
+******************************************************************************/
+Future<OORef<FileImporter>> FileImporter::autodetectFileFormat(const QUrl& url, OORef<FileImporter> existingImporterHint)
+{
+    if(!url.isValid())
+        throw Exception(tr("Invalid path or URL."));
+
+    // Resolve filename if it contains a wildcard.
+    return FileSourceImporter::findWildcardMatchesResolved(url).then([existingImporterHint = std::move(existingImporterHint)](std::vector<QUrl>&& urls) {
+        if(urls.empty())
+            throw Exception(tr("There are no files in the directory matching the filename pattern."));
+
+        // Download file so we can determine its format.
+        return Application::instance()->fileManager().fetchUrl(urls.front())
+            .then([url = urls.front(), existingImporterHint = std::move(existingImporterHint)](const FileHandle& file) {
+                // Detect file format.
+                return autodetectFileFormat(file, std::move(existingImporterHint));
+            });
+    });
+}
+
+/******************************************************************************
+* Returns the list of all available FileImporter classes, sorted by priority.
+******************************************************************************/
+auto getInstalledFileImporterClasses()
+{
+    static std::vector<const FileImporter::OOMetaClass*> importers;
+    static std::mutex mutex;
+    if(importers.empty()) {
+        std::lock_guard lock(mutex);
+        if(importers.empty()) {
+            // Obtain a list of all installed file importer classes from the PluginManager at program startup.
+            importers = PluginManager::instance().metaclassMembers<FileImporter>();
+            std::ranges::sort(importers, sortFileImporters);
+        }
+    }
+    return std::span(importers);
+}
+
+/******************************************************************************
+* Tries to detect the format of the given file.
+******************************************************************************/
+OORef<FileImporter> FileImporter::autodetectFileFormat(const FileHandle& file, FileImporter* existingImporterHint)
+{
+    // Note: FileImporter::autodetectFileFormat() may only be called from the main thread.
+    // Event though the implementation of autodetectFileFormat() itself is thread-safe,
+    // FileImporterClass::determineFileFormat() is currently limited to the main thread.
+    OVITO_ASSERT(this_task::isMainThread());
+
+    // Cache for the format of files already loaded during the current program session.
+    //
+    // Keys:   Local filesystem paths
+    // Values: The importer class handling the file and an optional sub-format specifier.
+    static std::map<QString, std::pair<const FileImporterClass*, QString>> formatDetectionCache;
+
+    // Mutex for synchronized access to the format detection cache.
+    static std::mutex formatDetectionCacheMutex;
+
+    // Check the format cache if we have already detected the format of the same file before.
+    const QString& fileIdentifier = file.localFilePath();
+    std::unique_lock lock(formatDetectionCacheMutex);
+    if(auto entry = formatDetectionCache.find(fileIdentifier); entry != formatDetectionCache.end()) {
+        const FileImporterClass* clazz = entry->second.first;
+        const QString& format = entry->second.second;
+        // Can we reuse the existing importer instance?
+        if(existingImporterHint && &existingImporterHint->getOOClass() == clazz) {
+            existingImporterHint->setSelectedFileFormat(format);
+            return existingImporterHint;
+        }
+        else {
+            // Create a new importer class instance and configure it.
+            OORef<FileImporter> importer = static_object_cast<FileImporter>(clazz->createInstance());
+            importer->setSelectedFileFormat(format);
+            return importer;
+        }
+    }
+    lock.unlock();
+
+    // If caller has provided an existing importer, check it first against the file.
+    if(existingImporterHint) {
+        try {
+            if(std::optional<QString> formatIdentifier = existingImporterHint->getOOMetaClass().determineFileFormat(file)) {
+                // Insert detected format into cache to speed up future requests for the same file.
+                lock.lock();
+                formatDetectionCache.emplace(fileIdentifier, std::make_pair(&existingImporterHint->getOOMetaClass(), *formatIdentifier));
+                existingImporterHint->setSelectedFileFormat(*formatIdentifier);
+                return existingImporterHint;
+            }
+        }
+        catch(const Exception&) {
+            // Ignore errors that occur during file format detection.
+        }
+    }
+
+    // Prepare a permanent list of all available FileImporter classes, sorted by priority.
+    static std::vector<const FileImporter::OOMetaClass*> installedFileImporterClasses;
+    static std::mutex installedFileImporterClassesMutex;
+    std::lock_guard classesLocker(installedFileImporterClassesMutex);
+    if(installedFileImporterClasses.empty()) {
+
+        // Obtain a list of all installed file importer classes from the PluginManager at program startup.
+        installedFileImporterClasses = PluginManager::instance().metaclassMembers<FileImporter>();
+        std::ranges::sort(installedFileImporterClasses, sortFileImporters);
+
+        // If a newly installed file importer class is being registered at runtime, we need to amend the list of installed classes.
+        QObject::connect(&PluginManager::instance(), &PluginManager::extensionClassAdded, [](OvitoClassPtr clazz) {
+            if(clazz->isDerivedFrom(FileImporter::OOClass())) {
+                QMutexLocker locker(&installedFileImporterClassesMutex);
+                const FileImporter::OOMetaClass* importerClass = static_cast<const FileImporter::OOMetaClass*>(clazz);
+                // Insert the new importer class into the list of installed classes, sorted by priority.
+                auto iter = std::ranges::lower_bound(installedFileImporterClasses, importerClass, sortFileImporters);
+                installedFileImporterClasses.insert(iter, importerClass);
+            }
+        });
+    }
+
+    // Test all installed importer types.
+    for(const FileImporterClass* importerClass : installedFileImporterClasses) {
+        try {
+            if(std::optional<QString> formatIdentifier = importerClass->determineFileFormat(file)) {
+                // Insert detected format into cache to speed up future requests for the same file.
+                lock.lock();
+                formatDetectionCache.emplace(fileIdentifier, std::make_pair(importerClass, *formatIdentifier));
+
+                // Instantiate the file importer for this file format.
+                OORef<FileImporter> importer = static_object_cast<FileImporter>(importerClass->createInstance());
+                importer->setSelectedFileFormat(*formatIdentifier);
+                return importer;
+            }
+        }
+        catch(const Exception&) {
+            // Ignore errors that occur during file format detection.
+        }
+    }
+
+    // Special check for empty files.
+    if(std::unique_ptr<QIODevice> device = file.createIODevice()) {
+        if(!device->isSequential() && device->size() == 0) {
+            throw Exception(tr("Could not auto-detect the format of the file %1. The file is empty.").arg(file.sourceUrl().fileName()));
+        }
+    }
+
+    return nullptr;
+}
+
+/******************************************************************************
+* Utility method which splits a string at whitespace separators into tokens.
+******************************************************************************/
+QStringList FileImporter::splitString(const QString& str)
+{
+    static const QRegularExpression ws_re(QStringLiteral("\\s+"));
+    return str.split(ws_re, Qt::SkipEmptyParts);
+}
+
+}   // End of namespace

@@ -1,0 +1,130 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-linux:
+    name: Package Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+            ninja-build build-essential \
+            libboost-dev libnetcdf-dev libhdf5-dev \
+            libgl1-mesa-dev libvulkan-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            tar gzip
+
+      - name: Install Qt 6.10.2
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.10.2'
+          modules: 'qtshadertools'
+          set-env: true
+
+      - name: Build
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=install \
+            -DOVITO_BUILD_CPP_TESTS=OFF
+          ninja -C build install
+
+      - name: Archive
+        run: |
+          tar -czvf ovito-linux-x86_64.tar.gz -C install .
+
+      - name: Upload Linux Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ovito-linux-x86_64.tar.gz
+
+  release-macos:
+    name: Package macOS (arm64)
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          brew install ninja boost netcdf hdf5
+
+      - name: Install Qt 6.10.2
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.10.2'
+          target: 'desktop'
+          arch: 'clang_64'
+          modules: 'qtshadertools'
+          set-env: true
+
+      - name: Build
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}" \
+            -DCMAKE_INSTALL_PREFIX=install \
+            -DOVITO_BUILD_CPP_TESTS=OFF
+          ninja -C build install
+
+      - name: Archive
+        run: |
+          tar -czvf ovito-macos-arm64.tar.gz -C install .
+
+      - name: Upload macOS Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ovito-macos-arm64.tar.gz
+
+  release-windows:
+    name: Package Windows (x64)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Qt 6.10.2
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.10.2'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtshadertools'
+          set-env: true
+
+      - name: Build
+        run: |
+          cmake -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}" `
+            -DCMAKE_INSTALL_PREFIX=install `
+            -DOVITO_BUILD_CPP_TESTS=OFF
+          ninja -C build install
+
+      - name: Archive
+        run: |
+          Compress-Archive -Path install\* -DestinationPath ovito-windows-x64.zip
+
+      - name: Upload Windows Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ovito-windows-x64.zip

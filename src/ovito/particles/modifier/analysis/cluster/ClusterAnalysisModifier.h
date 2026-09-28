@@ -1,0 +1,226 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/particles/Particles.h>
+#include <ovito/particles/objects/Particles.h>
+#include <ovito/particles/util/CutoffNeighborFinder.h>
+#include <ovito/particles/objects/Bonds.h>
+#include <ovito/stdobj/simcell/SimulationCell.h>
+#include <ovito/stdobj/table/DataTable.h>
+#include <ovito/core/dataset/pipeline/Modifier.h>
+
+namespace Ovito {
+
+/**
+ * \brief This modifier builds clusters of particles.
+ */
+class OVITO_PARTICLES_EXPORT ClusterAnalysisModifier : public Modifier
+{
+    /// Give this modifier class its own metaclass.
+    class ClusterAnalysisModifierClass : public Modifier::OOMetaClass
+    {
+    public:
+
+        /// Inherit constructor from base metaclass.
+        using Modifier::OOMetaClass::OOMetaClass;
+
+        /// Asks the metaclass whether the modifier can be applied to the given input data.
+        virtual bool isApplicableTo(const DataCollection& input) const override;
+    };
+
+    OVITO_CLASS_META(ClusterAnalysisModifier, ClusterAnalysisModifierClass)
+
+public:
+
+    enum NeighborMode {
+        CutoffRange,    ///< Treats particles as neighbors which are within a certain distance.
+        Bonding,        ///< Treats particles as neighbors which are connected by a bond.
+    };
+    Q_ENUM(NeighborMode);
+
+    /// Is called by the pipeline system before a new modifier evaluation begins.
+    virtual void preevaluateModifier(const ModifierEvaluationRequest& request, PipelineEvaluationResult::EvaluationTypes& evaluationTypes, TimeInterval& validityInterval) const override;
+
+    /// Modifies the input data.
+    virtual Future<PipelineFlowState> evaluateModifier(const ModifierEvaluationRequest& request, PipelineFlowState&& state) override;
+
+    /// Indicates that a preliminary viewport update will be performed immediately after this modifier
+	/// has computed new results.
+    virtual bool shouldRefreshViewportsAfterEvaluation() override { return true; }
+
+private:
+
+    /// Computes the modifier's results.
+    class ClusterAnalysisEngine
+    {
+    public:
+
+        /// Constructor.
+        ClusterAnalysisEngine(OOWeakRef<const PipelineNode> createdByNode, ConstPropertyPtr positions, ConstPropertyPtr masses, const SimulationCell* simCell, bool sortBySize, bool unwrapParticleCoordinates, bool colorParticlesByCluster, bool computeCentersOfMass, bool computeRadiusOfGyration, ConstPropertyPtr selection, PropertyPtr periodicImageBondProperty, ConstPropertyPtr bondTopology) :
+            _createdByNode(std::move(createdByNode)),
+            _positions(positions),
+            _masses(std::move(masses)),
+            _simCell(simCell),
+            _sortBySize(sortBySize),
+            _unwrapParticleCoordinates(unwrapParticleCoordinates),
+            _colorParticlesByCluster(colorParticlesByCluster),
+            _unwrappedPositions((unwrapParticleCoordinates || computeCentersOfMass || computeRadiusOfGyration) ? positions.makeCopy() : nullptr),
+            _centersOfMass(computeCentersOfMass ? DataTable::OOClass().createUserProperty(DataBuffer::Uninitialized, 0, Property::FloatDefault, 3, QStringLiteral("Center of Mass"),
+                0, QStringList() << QStringLiteral("X") << QStringLiteral("Y") << QStringLiteral("Z")) : nullptr),
+            _radiiOfGyration(computeRadiusOfGyration ? DataTable::OOClass().createUserProperty(DataBuffer::Uninitialized, 0, Property::FloatDefault, 1, QStringLiteral("Radius of Gyration")) : nullptr),
+            _gyrationTensors(computeRadiusOfGyration ? DataTable::OOClass().createUserProperty(DataBuffer::Uninitialized, 0, Property::FloatDefault, 6, QStringLiteral("Gyration Tensor"),
+                0, QStringList() << QStringLiteral("XX") << QStringLiteral("YY") << QStringLiteral("ZZ") << QStringLiteral("XY") << QStringLiteral("XZ") << QStringLiteral("YZ")) : nullptr),
+            _selection(std::move(selection)),
+            _periodicImageBondProperty(std::move(periodicImageBondProperty)),
+            _bondTopology(std::move(bondTopology)),
+            _clusterSizes(DataTable::OOClass().createUserProperty(DataBuffer::Uninitialized, 0, Property::Int64, 1, QStringLiteral("Cluster Size"))),
+            _clusterIds(DataTable::OOClass().createUserProperty(DataBuffer::Uninitialized, 0, Property::Int64, 1, QStringLiteral("Cluster Identifier"))),
+            _particleClusters(Particles::OOClass().createStandardProperty(DataBuffer::Uninitialized, _positions->size(), Particles::ClusterProperty)) {}
+
+        /// Destructor.
+        virtual ~ClusterAnalysisEngine() = default;
+
+        /// Computes the modifier's results.
+        void perform();
+
+        /// Injects the computed results into the data pipeline.
+        void applyResults(PipelineFlowState& state);
+
+        /// Returns the property storage that contains the computed cluster number of each particle.
+        const PropertyPtr& particleClusters() const { return _particleClusters; }
+
+        /// Returns the number of clusters.
+        size_t numClusters() const { return _numClusters; }
+
+        /// Sets the number of clusters.
+        void setNumClusters(size_t num) { _numClusters = num; }
+
+        /// Returns the size of the largest cluster.
+        size_t largestClusterSize() const { return _largestClusterSize; }
+
+        /// Sets the size of the largest cluster.
+        void setLargestClusterSize(size_t size) { _largestClusterSize = size; }
+
+        /// Performs the actual clustering algorithm.
+        virtual void doClustering(std::vector<Point3>& centersOfMass, TaskProgress& progress) = 0;
+
+        /// Returns the property storage that contains the input particle positions.
+        const ConstPropertyPtr& positions() const { return _positions; }
+
+        /// Returns the simulation cell data.
+        const SimulationCellData& cell() const { return _simCell; }
+
+        /// Returns the property storage that contains the particle selection (optional).
+        const ConstPropertyPtr& selection() const { return _selection; }
+
+        /// Returns the list of input bonds.
+        const ConstPropertyPtr& bondTopology() const { return _bondTopology; }
+
+        const OOWeakRef<const PipelineNode>& createdByNode() const { return _createdByNode; }
+
+    protected:
+
+        const SimulationCellData _simCell;
+        const bool _sortBySize;
+        const bool _unwrapParticleCoordinates;
+        const bool _colorParticlesByCluster;
+        ConstPropertyPtr _positions;
+        ConstPropertyPtr _selection;
+        ConstPropertyPtr _bondTopology;
+        ConstPropertyPtr _masses;
+        size_t _numClusters = 0;
+        size_t _largestClusterSize = 0;
+        const PropertyPtr _particleClusters;
+        PropertyPtr _clusterIds;
+        PropertyPtr _clusterSizes;
+        PropertyPtr _unwrappedPositions;
+        PropertyPtr _periodicImageBondProperty;
+        PropertyPtr _centersOfMass;
+        PropertyPtr _radiiOfGyration;
+        PropertyPtr _gyrationTensors;
+        bool _hasZeroWeightCluster = false;
+        OOWeakRef<const PipelineNode> _createdByNode;
+    };
+
+    /// Computes the modifier's results.
+    class CutoffClusterAnalysisEngine : public ClusterAnalysisEngine
+    {
+    public:
+
+        /// Constructor.
+        CutoffClusterAnalysisEngine(OOWeakRef<const PipelineNode> createdByNode, ConstPropertyPtr positions, ConstPropertyPtr masses, const SimulationCell* simCell, bool sortBySize, bool unwrapParticleCoordinates, bool colorParticlesByCluster, bool computeCentersOfMass, bool computeRadiusOfGyration, ConstPropertyPtr selection, PropertyPtr periodicImageBondProperty, ConstPropertyPtr bondTopology, FloatType cutoff) :
+            ClusterAnalysisEngine(std::move(createdByNode), std::move(positions), std::move(masses), simCell, sortBySize, unwrapParticleCoordinates, colorParticlesByCluster, computeCentersOfMass, computeRadiusOfGyration, std::move(selection), std::move(periodicImageBondProperty), std::move(bondTopology)),
+            _cutoff(cutoff) {}
+
+        /// Performs the actual clustering algorithm.
+        virtual void doClustering(std::vector<Point3>& centersOfMass, TaskProgress& progress) override;
+
+        /// Returns the cutoff radius.
+        FloatType cutoff() const { return _cutoff; }
+
+    private:
+
+        const FloatType _cutoff;
+    };
+
+    /// Computes the modifier's results.
+    class BondClusterAnalysisEngine : public ClusterAnalysisEngine
+    {
+    public:
+
+        /// Constructor.
+        BondClusterAnalysisEngine(OOWeakRef<const PipelineNode> createdByNode, ConstPropertyPtr positions, ConstPropertyPtr masses, const SimulationCell* simCell, bool sortBySize, bool unwrapParticleCoordinates, bool colorParticlesByCluster, bool computeCentersOfMass, bool computeRadiusOfGyration, ConstPropertyPtr selection, PropertyPtr periodicImageBondProperty, ConstPropertyPtr bondTopology) :
+            ClusterAnalysisEngine(std::move(createdByNode), std::move(positions), std::move(masses), simCell, sortBySize, unwrapParticleCoordinates, colorParticlesByCluster, computeCentersOfMass, computeRadiusOfGyration, std::move(selection), std::move(periodicImageBondProperty), std::move(bondTopology)) {}
+
+        /// Performs the actual clustering algorithm.
+        virtual void doClustering(std::vector<Point3>& centersOfMass, TaskProgress& progress) override;
+    };
+
+    /// The neighbor mode.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(NeighborMode{CutoffRange}, neighborMode, setNeighborMode, PROPERTY_FIELD_MEMORIZE);
+
+    /// The cutoff radius for the distance-based neighbor criterion.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(FloatType{3.2}, cutoff, setCutoff, PROPERTY_FIELD_MEMORIZE);
+
+    /// Controls whether analysis should take into account only selected particles.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{false}, onlySelectedParticles, setOnlySelectedParticles);
+
+    /// Controls the sorting of cluster IDs by cluster size.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(bool{false}, sortBySize, setSortBySize, PROPERTY_FIELD_MEMORIZE);
+
+    /// Controls the unwrapping of the particle coordinates that make up a cluster.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(bool{false}, unwrapParticleCoordinates, setUnwrapParticleCoordinates, PROPERTY_FIELD_MEMORIZE);
+
+    /// Controls the computation of cluster centers of mass.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(bool{false}, computeCentersOfMass, setComputeCentersOfMass, PROPERTY_FIELD_MEMORIZE);
+
+    /// Controls the computation of cluster radius of gyration.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(bool{false}, computeRadiusOfGyration, setComputeRadiusOfGyration, PROPERTY_FIELD_MEMORIZE);
+
+    /// Controls the coloring of particles by cluster ID.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS(bool{false}, colorParticlesByCluster, setColorParticlesByCluster, PROPERTY_FIELD_MEMORIZE);
+};
+
+}   // End of namespace

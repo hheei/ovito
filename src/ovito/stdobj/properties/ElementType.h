@@ -1,0 +1,136 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/stdobj/StdObj.h>
+#include <ovito/stdobj/properties/OwnerPropertyRef.h>
+#include <ovito/stdobj/properties/ElementTypeSymbol.h>
+#include <ovito/core/dataset/data/DataObject.h>
+#include "ElementTypeClass.h"
+
+namespace Ovito {
+
+/**
+ * \brief Describes the basic properties (unique ID, name & color) of a "type" of elements stored in a Property.
+ *        This serves as generic base class for particle types, bond types, structural types, etc.
+ */
+class OVITO_STDOBJ_EXPORT ElementType : public DataObject
+{
+    OVITO_CLASS_META(ElementType, ElementTypeClass)
+
+public:
+
+    /// Constructor.
+    void initializeObject(ObjectInitializationFlags flags);
+
+    /// Initializes the element type to default parameter values.
+    void initializeType(std::invocable<> auto&& preinitializer, const OwnerPropertyRef& property, bool loadUserDefaults = this_task::isInteractive()) {
+        // Start a second phase of object initialization.
+        setIsBeingInitialized(true);
+        try {
+            // Execute the pre-initializer function.
+            preinitializer();
+            // Let the derived class initialize the type's parameters based on the type's name.
+            initializeTypeInternal(nameOrNumericId(), property, loadUserDefaults);
+            // Complete object initialization.
+            completeObjectInitialization();
+        }
+        catch(...) {
+            // Rollback object initialization on error.
+            setIsBeingInitialized(false);
+            throw;
+        }
+    }
+
+    /// Returns the name of this type, or a dynamically generated string representing the
+    /// numeric ID if the type has no assigned name.
+    QString nameOrNumericId() const {
+        if(!name().isEmpty())
+            return name();
+        else
+            return generateDefaultTypeName(numericId());
+    }
+
+    /// Returns an automatically generated name for a type based on its numeric ID.
+    static QString generateDefaultTypeName(int id) {
+        return tr("Type %1").arg(id);
+    }
+
+    /// Returns the title of this object. Same as nameOrNumericId().
+    virtual QString objectTitle() const override { return nameOrNumericId(); }
+
+    /// Returns a description of a 3d shape that visually represents this element type the same way it
+    /// appears in the viewports. It is used by the color legend to display the real shapes of the types
+    /// instead of generic flat color boxes.
+    /// \param visElement The visual element of the PropertyContainer owning the property this type belongs to.
+    ///                   May be null if the container has no visual element.
+    /// The base implementation returns an empty descriptor, indicating that this element type has no 3d
+    /// representation and the caller should fall back to a flat color box.
+    virtual ElementTypeSymbol symbolGeometry(const DataVis* visElement) const { return {}; }
+
+    /// Returns the default color for a named element type.
+    static Color getDefaultColor(const OwnerPropertyRef& property, const QString& typeName, int numericTypeId, bool loadUserDefaults = this_task::isInteractive());
+
+    /// Changes the default color for a named element type.
+    static void setDefaultColor(const OwnerPropertyRef& property, const QString& typeName, const Color& color);
+
+    /// Returns the QSettings path for storing or accessing the user-defined
+    /// default values of some ElementType parameter.
+    static QString getElementSettingsKey(const OwnerPropertyRef& property, const QString& parameterName, const QString& elementTypeName);
+
+protected:
+
+    /// Initializes the element type's parameters to default values based on the type's name or numeric ID.
+    virtual void initializeTypeInternal(const QString& typeName, const OwnerPropertyRef& property, bool loadUserDefaults);
+
+    /// Is called when the value of a property of this object has changed.
+    virtual void propertyChanged(const PropertyFieldDescriptor* field) override;
+
+    /// Loads the class' contents from the given stream.
+    virtual void loadFromStream(ObjectLoadStream& stream) override;
+
+private:
+
+    /// Stores the unique numeric identifier of the type.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(int{0}, numericId, setNumericId);
+
+    /// The human-readable name assigned to this type.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(QString{}, name, setName);
+    DECLARE_SNAPSHOT_PROPERTY_FIELD(name);
+
+    /// Stores the visualization color of the type.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD_FLAGS((Color{1,1,1}), color, setColor, PROPERTY_FIELD_MEMORIZE);
+    DECLARE_SNAPSHOT_PROPERTY_FIELD(color);
+
+    /// Stores whether this type is "enabled" or "disabled".
+    /// This makes only sense in some sorts of types. For example, structure identification modifiers
+    /// use this field to determine which structural types they should look for.
+    DECLARE_MODIFIABLE_PROPERTY_FIELD(bool{true}, enabled, setEnabled);
+    DECLARE_SNAPSHOT_PROPERTY_FIELD(enabled);
+
+    /// Stores a reference to the property object this element type belongs to.
+    DECLARE_PROPERTY_FIELD(OwnerPropertyRef{}, ownerProperty);
+};
+
+}   // End of namespace

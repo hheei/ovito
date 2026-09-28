@@ -1,0 +1,946 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include <ovito/particles/Particles.h>
+#include <ovito/particles/util/NearestNeighborFinder.h>
+#include <ovito/particles/objects/Bonds.h>
+#include <ovito/stdobj/simcell/SimulationCell.h>
+#include <ovito/mesh/surface/SurfaceMeshBuilder.h>
+#include <ovito/core/utilities/concurrent/ParallelFor.h>
+#include <ovito/core/utilities/units/UnitsManager.h>
+#include <ovito/core/dataset/pipeline/ModificationNode.h>
+#include "VoronoiAnalysisModifier.h"
+
+#include <voro++.hh>
+
+namespace Ovito {
+
+IMPLEMENT_CREATABLE_OVITO_CLASS(VoronoiAnalysisModifier);
+OVITO_CLASSINFO(VoronoiAnalysisModifier, "DisplayName", "Voronoi analysis");
+OVITO_CLASSINFO(VoronoiAnalysisModifier, "Description", "Determine nearest particle neighbors, atomic volume and Voronoi indices.");
+OVITO_CLASSINFO(VoronoiAnalysisModifier, "ModifierCategory", "Analysis");
+DEFINE_PROPERTY_FIELD(VoronoiAnalysisModifier, onlySelected);
+DEFINE_PROPERTY_FIELD(VoronoiAnalysisModifier, useRadii);
+DEFINE_PROPERTY_FIELD(VoronoiAnalysisModifier, computeIndices);
+DEFINE_PROPERTY_FIELD(VoronoiAnalysisModifier, computeBonds);
+DEFINE_PROPERTY_FIELD(VoronoiAnalysisModifier, computePolyhedra);
+DEFINE_PROPERTY_FIELD(VoronoiAnalysisModifier, edgeThreshold);
+DEFINE_PROPERTY_FIELD(VoronoiAnalysisModifier, faceThreshold);
+DEFINE_PROPERTY_FIELD(VoronoiAnalysisModifier, relativeFaceThreshold);
+DEFINE_REFERENCE_FIELD(VoronoiAnalysisModifier, bondsVis);
+DEFINE_REFERENCE_FIELD(VoronoiAnalysisModifier, polyhedraVis);
+SET_PROPERTY_FIELD_LABEL(VoronoiAnalysisModifier, onlySelected, "Use only selected particles");
+SET_PROPERTY_FIELD_LABEL(VoronoiAnalysisModifier, useRadii, "Use particle radii (polydisperse Voronoi tessellation)");
+SET_PROPERTY_FIELD_LABEL(VoronoiAnalysisModifier, computeIndices, "Voronoi indices");
+SET_PROPERTY_FIELD_LABEL(VoronoiAnalysisModifier, computeBonds, "Neighbor bonds");
+SET_PROPERTY_FIELD_LABEL(VoronoiAnalysisModifier, computePolyhedra, "Voronoi polyhedra");
+SET_PROPERTY_FIELD_LABEL(VoronoiAnalysisModifier, edgeThreshold, "Edge length threshold");
+SET_PROPERTY_FIELD_LABEL(VoronoiAnalysisModifier, faceThreshold, "Absolute face area threshold");
+SET_PROPERTY_FIELD_LABEL(VoronoiAnalysisModifier, relativeFaceThreshold, "Relative face area threshold");
+SET_PROPERTY_FIELD_UNITS_AND_MINIMUM(VoronoiAnalysisModifier, edgeThreshold, WorldParameterUnit, 0);
+SET_PROPERTY_FIELD_UNITS_AND_MINIMUM(VoronoiAnalysisModifier, faceThreshold, FloatParameterUnit, 0);
+SET_PROPERTY_FIELD_UNITS_AND_RANGE(VoronoiAnalysisModifier, relativeFaceThreshold, PercentParameterUnit, 0, 1);
+
+#if 0
+/**
+ * A custom "wall" implementation that restricts voronoi cells to a regular polyhedron.
+ * See https://math.lbl.gov/voro++/examples/irregular/
+ */
+class FiniteSizeParticleWall : public voro::wall
+{
+public:
+    FiniteSizeParticleWall(FloatType radius) {
+        radius *= 2;
+        v.init(-radius, radius, -radius, radius, -radius, radius);
+        // Create an approximate sphere by making plane cuts in directions computed using the "Fibonacci sphere algorithm".
+        int faceCount = 64;
+        FloatType phi = Ovito::pi * (FloatType(3) - sqrt(FloatType(5)));  // golden angle in radians
+        for(int i = 0; i < faceCount; i++) {
+            FloatType y = FloatType(1) - (i / FloatType(faceCount - 1)) * 2; // y goes from 1 to -1
+            FloatType r = sqrt(FloatType(1) - y * y); // radius at y
+            FloatType theta = phi * i; // golden angle increment
+            Vector3 normal = Vector3(cos(theta)*r, y, sin(theta)*r).resized(radius);
+            v.nplane(normal.x(), normal.y(), normal.z(), -1);
+        }
+    }
+    virtual bool point_inside(double x, double y, double z) override { return true; }
+    virtual bool cut_cell(voro::voronoicell& c, double x, double y, double z) override {
+        return true;
+    }
+    virtual bool cut_cell(voro::voronoicell_neighbor& c, double x, double y, double z) override {
+        c=v;
+        return true;
+    }
+private:
+    voro::voronoicell_neighbor v;
+};
+#endif
+
+/******************************************************************************
+* Constructor.
+******************************************************************************/
+void VoronoiAnalysisModifier::initializeObject(ObjectInitializationFlags flags)
+{
+    Modifier::initializeObject(flags);
+
+    if(!flags.testFlag(ObjectInitializationFlag::DontInitializeObject)) {
+        // Create the vis element for rendering the bonds generated by the modifier.
+        setBondsVis(OORef<BondsVis>::create(flags));
+
+        // Create the vis element for rendering the Voronoi polyhedra generated by the modifier.
+        setPolyhedraVis(OORef<SurfaceMeshVis>::create(flags));
+        polyhedraVis()->setShowCap(false);
+        polyhedraVis()->setSmoothShading(false);
+        polyhedraVis()->setSurfaceTransparency(FloatType(0.25));
+        polyhedraVis()->setHighlightEdges(true);
+        polyhedraVis()->setObjectTitle(tr("Voronoi polyhedra"));
+    }
+}
+
+/******************************************************************************
+* Replaces any references the modifier has to the given visual element with a new compatible object.
+******************************************************************************/
+void VoronoiAnalysisModifier::replaceVisualElement(DataVis* visElement, const std::function<OORef<DataVis>(const QString&)>& getReplacement)
+{
+    if(polyhedraVis() == visElement)
+        setPolyhedraVis(static_object_cast<SurfaceMeshVis>(getReplacement(tr("Voronoi polyhedra"))));
+}
+
+/******************************************************************************
+* Asks the modifier whether it can be applied to the given input data.
+******************************************************************************/
+bool VoronoiAnalysisModifier::OOMetaClass::isApplicableTo(const DataCollection& input) const
+{
+    return input.containsObject<Particles>();
+}
+
+/******************************************************************************
+ * Is called by the pipeline system before a new modifier evaluation begins.
+ ******************************************************************************/
+void VoronoiAnalysisModifier::preevaluateModifier(const ModifierEvaluationRequest& request, PipelineEvaluationResult::EvaluationTypes& evaluationTypes, TimeInterval& validityInterval) const
+{
+    // Indicate that we will do different computations depending on whether the pipeline is evaluated in interactive mode or not.
+    if(request.interactiveMode())
+        evaluationTypes = PipelineEvaluationResult::EvaluationType::Interactive;
+    else
+        evaluationTypes = PipelineEvaluationResult::EvaluationType::Noninteractive;
+}
+
+/******************************************************************************
+* Modifies the input data.
+******************************************************************************/
+Future<PipelineFlowState> VoronoiAnalysisModifier::evaluateModifier(const ModifierEvaluationRequest& request, PipelineFlowState&& state)
+{
+    // Get the current particle positions.
+    Particles* particles = state.expectMutableObject<Particles>();
+    particles->verifyIntegrity();
+
+    // In interactive mode, fetch and return outdated results from the pipeline cache if available.
+    if(request.interactiveMode()) {
+        if(PipelineFlowState cachedState = request.modificationNode()->getCachedPipelineNodeOutput(request.time(), true)) {
+            if(const Particles* cachedParticles = cachedState.getObject<Particles>()) {
+                particles->tryToAdoptProperties(cachedParticles, {
+                    cachedParticles->getProperty(Particles::CoordinationProperty),
+                    cachedParticles->getProperty(QStringLiteral("Atomic Volume")),
+                    cachedParticles->getProperty(QStringLiteral("Cavity Radius")),
+                    computeIndices() ? cachedParticles->getProperty(QStringLiteral("Max Face Order")) : nullptr,
+                    computeIndices() ? cachedParticles->getProperty(QStringLiteral("Voronoi Index")) : nullptr,
+                }, {particles});
+            }
+            if(computePolyhedra()) {
+                if(const SurfaceMesh* cachedSurface = cachedState.getObjectBy<SurfaceMesh>(request.modificationNode(), QStringLiteral("voronoi-polyhedra"))) {
+                    state.addObject(cachedSurface);
+                }
+            }
+            // Adopt all global attributes computed by the modifier from the cached state.
+            state.adoptAttributesFrom(cachedState, request.modificationNode());
+        }
+        return std::move(state);
+    }
+
+    const Property* posProperty = particles->expectProperty(Particles::PositionProperty);
+
+    // Get simulation cell.
+    const SimulationCell* inputCell = state.getObject<SimulationCell>();
+    if(!inputCell)
+        throw Exception(tr("The Voronoi analysis modifier requires a simulation cell to be defined."));
+    if(inputCell->is2D())
+        throw Exception(tr("The Voronoi modifier does not support 2d simulation cells."));
+
+    // Get selection particle property.
+    const Property* selectionProperty = onlySelected() ? particles->expectProperty(Particles::SelectionProperty) : nullptr;
+
+    // Get particle radii.
+    ConstPropertyPtr radii;
+    if(useRadii())
+        radii = particles->inputParticleRadii();
+
+    // The Voro++ library uses 32-bit integers. It cannot handle more than 2^31 input points.
+    if(particles->elementCount() > (size_t)std::numeric_limits<int>::max())
+        throw Exception(tr("Voronoi analysis modifier is limited to a maximum of %1 particles in the current program version.").arg(std::numeric_limits<int>::max()));
+
+    SurfaceMesh* polyhedraMesh = nullptr;
+    if(computePolyhedra()) {
+        // Output the surface mesh representing the computed Voronoi polyhedra.
+        polyhedraMesh = state.createObjectWithVis<SurfaceMesh>(QStringLiteral("voronoi-polyhedra"), request.modificationNode(), polyhedraVis(), tr("Voronoi polyhedra"));
+        polyhedraMesh->setDomain(inputCell);
+    }
+
+    // Create engine object. Pass all relevant modifier parameters to the engine as well as the input data.
+    auto engine = std::make_unique<VoronoiAnalysisEngine>(
+            request.modificationNode(),
+            particles->elementCount(),
+            posProperty,
+            selectionProperty,
+            particles->getProperty(Particles::IdentifierProperty),
+            std::move(radii),
+            inputCell,
+            polyhedraMesh,
+            computeIndices(),
+            computeBonds(),
+            edgeThreshold(),
+            faceThreshold(),
+            relativeFaceThreshold(),
+            bondsVis());
+
+    // Perform the calculation in a separate thread.
+    return asyncLaunch([
+            state = std::move(state),
+            engine = std::move(engine)]() mutable
+    {
+        engine->perform();
+        engine->applyResults(state);
+        return std::move(state);
+    });
+}
+
+/******************************************************************************
+* Performs the actual computation. This method is executed in a worker thread.
+******************************************************************************/
+void VoronoiAnalysisModifier::VoronoiAnalysisEngine::perform()
+{
+    TaskProgress progress(this_task::ui());
+    progress.setText(tr("Performing Voronoi analysis"));
+    progress.beginSubSteps(_polyhedraMesh ? 2 : 1);
+
+    // Compute total simulation cell volume.
+    _simulationBoxVolume = simCell().volume3D();
+
+    // Stores the starting vertex index and the vertex count for each Voronoi polyhedron.
+    std::vector<std::pair<SurfaceMesh::vertex_index, SurfaceMesh::size_type>> polyhedraVertices;
+
+    // Output mesh face property storing the index of the neighboring Voronoi cell for each face.
+    Property* adjacentCellProperty = nullptr;
+    // Output mesh face property storing the bond index corresponding to each Voronoi face.
+    Property* faceBondIndexProperty = nullptr;
+    // Output mesh face property storing the individual area of each Voronoi face.
+    Property* faceAreaProperty = nullptr;
+    // Output mesh face property storing the number of edges of each Voronoi face.
+    Property* faceOrderProperty = nullptr;
+    /// Output mesh region property storing the volume of each Voronoi cell.
+    BufferWriteAccess<FloatType, access_mode::discard_write> cellVolumeProperty;
+    /// Output mesh region property storing the number of faces of each Voronoi cell.
+    BufferWriteAccess<int32_t, access_mode::discard_write> cellCoordinationProperty;
+    /// Output mesh region property storing the total surface area of each Voronoi cell.
+    BufferWriteAccess<FloatType, access_mode::discard_write> cellFaceAreaProperty;
+
+    SurfaceMeshBuilder polyhedraMesh(_polyhedraMesh);
+    std::optional<SurfaceMeshBuilder::VertexGrower> vertexGrower;
+    std::optional<SurfaceMeshBuilder::FaceGrower> faceGrower;
+    if(_polyhedraMesh) {
+
+        // Create the "Region" mesh face property.
+        polyhedraMesh.createFaceProperty(DataBuffer::Uninitialized, SurfaceMeshFaces::RegionProperty);
+
+        // Create the "Adjacent Cell" face property, which stores the index of the neighboring Voronoi cell.
+        adjacentCellProperty = polyhedraMesh.createFaceProperty(DataBuffer::Uninitialized, QStringLiteral("Adjacent Cell"), Property::Int32);
+
+        // Create the "Bond Index" face property, which stores the which bond belongs to which Voronoi face.
+        if(_computeBonds)
+            faceBondIndexProperty = polyhedraMesh.createFaceProperty(DataBuffer::Uninitialized, QStringLiteral("Bond Index"), Property::Int64);
+
+        // Create the "Area" face property, which stores the surface area of each Voronoi face.
+        faceAreaProperty = polyhedraMesh.createFaceProperty(DataBuffer::Uninitialized, QStringLiteral("Area"), Property::FloatDefault);
+
+        // Create the "Voronoi Order" face property, which stores the order (number of edges) of each Voronoi face.
+        faceOrderProperty = polyhedraMesh.createFaceProperty(DataBuffer::Uninitialized, QStringLiteral("Voronoi Order"), Property::Int32);
+
+        // Create as many mesh regions as there are input particles.
+        polyhedraMesh.mutableRegions()->setElementCount(_positions->size());
+        polyhedraVertices.resize(polyhedraMesh.regionCount());
+
+        // Create the "Particle Identifier" region property, which indicates the ID of the particles that are at the center of each Voronoi polyhedron.
+        BufferWriteAccess<IdentifierIntType, access_mode::discard_write> centerParticleProperty = polyhedraMesh.createRegionProperty(DataBuffer::Uninitialized, QStringLiteral("Particle Identifier"), DataBuffer::IntIdentifier);
+        if(_particleIdentifiers) {
+            OVITO_ASSERT(centerParticleProperty.size() == _particleIdentifiers->size());
+            std::ranges::copy(BufferReadAccess<IdentifierIntType>(_particleIdentifiers), centerParticleProperty.begin());
+        }
+        else {
+            boost::algorithm::iota_n(centerParticleProperty.begin(), IdentifierIntType{1}, centerParticleProperty.size());
+        }
+
+        // Create the "Volume" region property, which stores the volume of each Voronoi cell.
+        cellVolumeProperty = polyhedraMesh.createRegionProperty(DataBuffer::Uninitialized, SurfaceMeshRegions::VolumeProperty);
+
+        // Create the "Coordination" region property, which stores the number of faces of each Voronoi cell.
+        cellCoordinationProperty = polyhedraMesh.createRegionProperty(DataBuffer::Uninitialized, QStringLiteral("Coordination"), Property::Int32);
+
+        // Create the "Surface Area" region property, which stores the face area of each Voronoi cell.
+        cellFaceAreaProperty = polyhedraMesh.createRegionProperty(DataBuffer::Uninitialized, SurfaceMeshRegions::SurfaceAreaProperty);
+
+        vertexGrower.emplace(polyhedraMesh);
+        faceGrower.emplace(polyhedraMesh);
+    }
+
+    // For generating the "Voronoi Order" bond property.
+    PropertyFactory<int32_t> bondVoronoiOrder;
+    if(_computeBonds) {
+        bondVoronoiOrder = PropertyFactory<int32_t>(Bonds::OOClass(), 0, QStringLiteral("Voronoi Order"));
+    }
+
+    if(_positions->size() == 0 || _simulationBoxVolume == 0) {
+        if(maxFaceOrders()) {
+            _voronoiIndices = Particles::OOClass().createUserProperty(DataBuffer::Initialized, _positions->size(), Property::Int32, 3, QStringLiteral("Voronoi Index"));
+            // Re-use the output particle property as an output mesh region property.
+            if(_polyhedraMesh) {
+                polyhedraMesh.addRegionProperty(voronoiIndices());
+                polyhedraMesh.addRegionProperty(maxFaceOrders());
+            }
+        }
+        _bondVoronoiOrder = bondVoronoiOrder.take();
+        // Nothing else to do if there are no particles.
+        return;
+    }
+
+    // The squared edge length threshold.
+    // Apply additional pre-factor of 4, because Voronoi cell vertex coordinates are all scaled by factor of 2.
+    const FloatType sqEdgeThreshold = _edgeThreshold * _edgeThreshold * 4;
+
+    // Prepare output data arrays.
+    BufferWriteAccess<FloatType, access_mode::write> atomicVolumesArray(atomicVolumes());
+    BufferWriteAccess<FloatType, access_mode::write> cavityRadiiArray(cavityRadii());
+    BufferWriteAccess<int32_t, access_mode::write> coordinationNumbersArray(coordinationNumbers());
+    BufferWriteAccess<int32_t, access_mode::read_write> maxFaceOrdersArray(maxFaceOrders());
+
+    // Prepare input data array.
+    BufferReadAccess<SelectionIntType> selectionArray(_selection);
+    BufferReadAccess<Point3> positionsArray(_positions);
+
+    auto processCell = [&](voro::voronoicell_neighbor& v, size_t index,
+        std::vector<int>& voronoiBuffer, std::vector<size_t>& voronoiBufferIndex, QMutex* bondMutex)
+    {
+        // Compute cell volume.
+        double vol = v.volume();
+        atomicVolumesArray[index] = (FloatType)vol;
+
+        // Compute cell max radius.
+        double maxRad = 0.5 * std::sqrt(v.max_radius_squared());
+        cavityRadiiArray[index] = (FloatType)maxRad;
+
+        // Accumulate total volume of Voronoi cells.
+        // Loop is for lock-free write access to shared max counter.
+        double prevVolumeSum = voronoiVolumeSum();
+        while(!voronoiVolumeSum().compare_exchange_weak(prevVolumeSum, prevVolumeSum + vol));
+
+        // Compute total surface area of Voronoi cell when relative area threshold is used to
+        // filter out small faces.
+        double faceAreaThreshold = _faceThreshold;
+        if(_relativeFaceThreshold > 0)
+            faceAreaThreshold = std::max(v.surface_area() * _relativeFaceThreshold, faceAreaThreshold);
+
+        int localMaxFaceOrder = 0;
+        int localVoronoiIndex[FaceOrderStorageLimit] = {0};
+        int coordNumber = 0;
+        FloatType cellFaceArea = 0;
+
+        // Create Voronoi cell mesh vertices.
+        SurfaceMesh::vertex_index meshVertexBaseIndex;
+        SurfaceMesh::region_index meshRegionIndex = index;
+        if(_polyhedraMesh) {
+            const Point3& center = positionsArray[index];
+            QMutexLocker locker(bondMutex);
+            cellVolumeProperty[meshRegionIndex] = vol;
+            meshVertexBaseIndex = polyhedraMesh.vertexCount();
+            const double* ptsp = v.pts;
+            for(int i = 0; i < v.p; i++, ptsp += 3) {
+                vertexGrower->createVertex(Point3(center.x() + 0.5*ptsp[0], center.y() + 0.5*ptsp[1], center.z() + 0.5*ptsp[2]));
+            }
+            // Store the base vertex index and the vertex count in the lookup map.
+            polyhedraVertices[meshRegionIndex].first = meshVertexBaseIndex;
+            polyhedraVertices[meshRegionIndex].second = v.p;
+            OVITO_ASSERT(v.p != 0);
+        }
+
+        // Iterate over the Voronoi faces and their edges.
+        for(int i = 1; i < v.p; i++) {
+            for(int j = 0; j < v.nu[i]; j++) {
+                int k = v.ed[i][j];
+                if(k >= 0) {
+                    int neighbor_id = v.ne[i][j];
+                    int faceOrder = 0;
+                    FloatType area = 0;
+
+                    // Create Voronoi cell mesh face.
+                    SurfaceMesh::face_index meshFace;
+                    if(_polyhedraMesh) {
+                        QMutexLocker locker(bondMutex);
+                        meshFace = faceGrower->createFace(meshRegionIndex);
+                        DataBuffer::BufferInitialization firstAccessMode = (meshFace == 0) ? DataBuffer::Uninitialized : DataBuffer::Initialized;
+                        BufferWriteAccess<int32_t, access_mode::write>{adjacentCellProperty, firstAccessMode}[meshFace] = neighbor_id;
+                        if(_computeBonds)
+                            BufferWriteAccess<int64_t, access_mode::write>{faceBondIndexProperty, firstAccessMode}[meshFace] = -1;
+                        polyhedraMesh.mutableTopology()->createEdge(meshVertexBaseIndex + i, meshVertexBaseIndex + k, meshFace);
+                    }
+
+                    // Compute length of first face edge.
+                    Vector3 d(v.pts[3*k] - v.pts[3*i], v.pts[3*k+1] - v.pts[3*i+1], v.pts[3*k+2] - v.pts[3*i+2]);
+                    if(d.squaredLength() >= sqEdgeThreshold)
+                        faceOrder++;
+                    v.ed[i][j] = -1 - k;
+                    int l = v.cycle_up(v.ed[i][v.nu[i]+j], k);
+                    Vector3 normal = Vector3::Zero();
+                    Vector3 face_vertex0(v.pts[3*i], v.pts[3*i+1], v.pts[3*i+2]); // Coordinates of one vertex of the current face.
+                    do {
+                        int m = v.ed[k][l];
+                        if(_polyhedraMesh) {
+                            QMutexLocker locker(bondMutex);
+                            polyhedraMesh.mutableTopology()->createEdge(meshVertexBaseIndex + k, meshVertexBaseIndex + m, meshFace);
+                        }
+                        // Compute length of current edge.
+                        if(sqEdgeThreshold != 0) {
+                            Vector3 u(v.pts[3*m] - v.pts[3*k], v.pts[3*m+1] - v.pts[3*k+1], v.pts[3*m+2] - v.pts[3*k+2]);
+                            if(u.squaredLength() >= sqEdgeThreshold)
+                                faceOrder++;
+                        }
+                        else faceOrder++;
+                        if(faceAreaThreshold != 0 || _polyhedraMesh || _computeBonds) {
+                            Vector3 w(v.pts[3*m] - v.pts[3*i], v.pts[3*m+1] - v.pts[3*i+1], v.pts[3*m+2] - v.pts[3*i+2]);
+                            Vector3 n = d.cross(w);
+                            normal += n;
+                            area += n.length() / 8;
+                            d = w;
+                        }
+                        v.ed[k][l] = -1 - m;
+                        l = v.cycle_up(v.ed[k][v.nu[k]+l], m);
+                        k = m;
+                    }
+                    while(k != i);
+                    cellFaceArea += area;
+
+                    if(_polyhedraMesh) {
+                        QMutexLocker locker(bondMutex);
+                        DataBuffer::BufferInitialization firstAccessMode = (meshFace == 0) ? DataBuffer::Uninitialized : DataBuffer::Initialized;
+                        BufferWriteAccess<FloatType, access_mode::write>{faceAreaProperty, firstAccessMode}[meshFace] = area;
+                        BufferWriteAccess<int32_t, access_mode::write>{faceOrderProperty, firstAccessMode}[meshFace] = faceOrder;
+                    }
+
+                    if((faceAreaThreshold == 0 || area > faceAreaThreshold) && faceOrder >= 3) {
+                        coordNumber++;
+                        if(faceOrder > localMaxFaceOrder)
+                            localMaxFaceOrder = faceOrder;
+                        int faceOrderIndex = faceOrder - 1;
+                        if(maxFaceOrders() && faceOrderIndex < FaceOrderStorageLimit)
+                            localVoronoiIndex[faceOrderIndex]++;
+                        if(_computeBonds && neighbor_id >= 0 && normal != Vector3::Zero()) {
+                            OVITO_ASSERT(neighbor_id < _positions->size());
+                            FloatType dot = face_vertex0.dot(normal);
+                            normal *= std::abs(dot) / normal.squaredLength();
+                            Vector3 delta = positionsArray[index] - positionsArray[neighbor_id];
+                            Vector3 diff = delta - normal;
+                            Vector3I pbcShift = Vector3I::Zero();
+                            for(size_t dim = 0; dim < 3; dim++) {
+                                if(simCell().hasPbc(dim)) {
+                                    pbcShift[dim] = (int)std::round(simCell().reciprocalCellMatrix().prodrow(diff, dim));
+                                }
+                            }
+#ifdef OVITO_DEBUG
+                            // Verify the computed pbc shift vector. The corrected neighbor vector should now align with the face normal vector.
+                            delta -= simCell().reducedToAbsolute(pbcShift.toDataType<FloatType>());
+                            OVITO_ASSERT(std::abs(delta.dot(normal) / delta.length() / normal.length()) >
+                                         1.0 - Ovito::epsilon);
+#endif
+                            Bond bond = { index, (size_t)neighbor_id, pbcShift };
+                            if(!bond.isOdd()) {
+                                QMutexLocker locker(bondMutex);
+                                if(_polyhedraMesh)
+                                    BufferWriteAccess<int64_t, access_mode::write>{faceBondIndexProperty}[meshFace] = bonds().size();
+                                bonds().push_back(bond);
+                                bondVoronoiOrder.push_back(faceOrder);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Store computed result.
+        coordinationNumbersArray[index] = coordNumber;
+        if(maxFaceOrdersArray) {
+            maxFaceOrdersArray[index] = localMaxFaceOrder;
+            voronoiBufferIndex.push_back(index);
+            voronoiBuffer.insert(voronoiBuffer.end(), localVoronoiIndex, localVoronoiIndex + std::min(localMaxFaceOrder, FaceOrderStorageLimit));
+        }
+        if(_polyhedraMesh) {
+            cellFaceAreaProperty[meshRegionIndex] = cellFaceArea;
+            cellCoordinationProperty[meshRegionIndex] = coordNumber;
+        }
+
+        // Keep track of the maximum number of edges per face.
+        // Loop is for lock-free write access to shared max counter.
+        int prevMaxFaceOrder = maxFaceOrder();
+        while(localMaxFaceOrder > prevMaxFaceOrder && !maxFaceOrder().compare_exchange_weak(prevMaxFaceOrder, localMaxFaceOrder));
+    };
+
+    std::vector<int> voronoiBuffer;
+    std::vector<size_t> voronoiBufferIndex;
+
+    // Decide whether to use Voro++ container class or our own implementation.
+    if(simCell().isAxisAligned()) {
+        // Use Voro++ container.
+        double ax = simCell().cellMatrix()(0,3);
+        double ay = simCell().cellMatrix()(1,3);
+        double az = simCell().cellMatrix()(2,3);
+        double bx = ax + simCell().cellMatrix()(0,0);
+        double by = ay + simCell().cellMatrix()(1,1);
+        double bz = az + simCell().cellMatrix()(2,2);
+        if(ax > bx) std::swap(ax,bx);
+        if(ay > by) std::swap(ay,by);
+        if(az > bz) std::swap(az,bz);
+        double volumePerCell = (bx - ax) * (by - ay) * (bz - az) * voro::optimal_particles / _positions->size();
+        double cellSize = pow(volumePerCell, 1.0/3.0);
+        int nx = (int)std::ceil((bx - ax) / cellSize);
+        int ny = (int)std::ceil((by - ay) / cellSize);
+        int nz = (int)std::ceil((bz - az) / cellSize);
+
+        size_t count = 0;
+        if(!_radii) {
+            // All particles have a uniform size.
+            voro::container voroContainer(ax, bx, ay, by, az, bz, nx, ny, nz,
+                    simCell().hasPbc(0), simCell().hasPbc(1), simCell().hasPbc(2), (int)std::ceil(voro::optimal_particles));
+
+            // Insert particles into Voro++ container.
+            for(size_t index = 0; index < positionsArray.size(); index++) {
+                // Skip unselected particles (if requested).
+                if(selectionArray && selectionArray[index] == 0)
+                    continue;
+                const Point3& p = positionsArray[index];
+                voroContainer.put(index, p.x(), p.y(), p.z());
+                count++;
+            }
+            if(!count) return;
+
+            progress.setMaximum(count);
+
+            voro::c_loop_all cl(voroContainer);
+            voro::voronoicell_neighbor v;
+            if(cl.start()) {
+                do {
+                    progress.incrementValue();
+                    if(!voroContainer.compute_cell(v,cl))
+                        continue;
+                    processCell(v, cl.pid(), voronoiBuffer, voronoiBufferIndex, nullptr);
+                    count--;
+                }
+                while(cl.inc());
+            }
+            if(count)
+                throw Exception(tr("Voro++ failed to compute Voronoi cell for one or more particles. "
+                    "The input point set may represent a pathological case, which cannot be processed due to numerical precision issues. "
+                    "You can try displacing all particles by a small amount first using the Affine Transformation modifier to work around this issue. "
+                    "Also make sure all particles are positioned strictly inside the simulation box if it is non-periodic."));
+        }
+        else {
+            // Particles have non-uniform sizes -> Compute polydisperse Voronoi tessellation.
+            voro::container_poly voroContainer(ax, bx, ay, by, az, bz, nx, ny, nz,
+                    simCell().hasPbc(0), simCell().hasPbc(1), simCell().hasPbc(2),
+                    (int)std::ceil(voro::optimal_particles));
+
+            // Insert particles into Voro++ container.
+            BufferReadAccess<GraphicsFloatType> radiusArray(_radii);
+            for(size_t index = 0; index < positionsArray.size(); index++) {
+                // Skip unselected particles (if requested).
+                if(selectionArray && selectionArray[index] == 0)
+                    continue;
+                const Point3& p = positionsArray[index];
+                voroContainer.put(index, p.x(), p.y(), p.z(), radiusArray[index]);
+                count++;
+            }
+
+            if(!count)
+                return;
+            progress.setMaximum(count);
+
+            voro::c_loop_all cl(voroContainer);
+            voro::voronoicell_neighbor v;
+            if(cl.start()) {
+                do {
+                    progress.incrementValue();
+                    if(!voroContainer.compute_cell(v,cl))
+                        continue;
+                    processCell(v, cl.pid(), voronoiBuffer, voronoiBufferIndex, nullptr);
+                    count--;
+                }
+                while(cl.inc());
+            }
+        }
+        if(count)
+            throw Exception(tr("Voro++ failed to compute Voronoi cell for one or more particles. "
+                "The input point set may represent a pathological case that cannot be processed due to numerical precision issues. "
+                "You can try displacing all particles by a small amount first using the Affine Transformation modifier to work around this issue. "
+                "Also make sure all particles are positioned strictly inside the simulation box if it is non-periodic."));
+    }
+    else {
+        // Special code path for non-orthogonal simulation cells:
+
+        // Prepare the nearest neighbor finder.
+        NearestNeighborFinder nearestNeighborFinder(16, positions(), simCell(), selection());
+
+        // This is the size we use to initialize Voronoi cells. Must be larger than the simulation box.
+        double boxDiameter = sqrt(
+                  simCell().cellMatrix().column(0).squaredLength()
+                + simCell().cellMatrix().column(1).squaredLength()
+                + simCell().cellMatrix().column(2).squaredLength());
+
+        // The normal vectors of the three cell planes.
+        std::array<Vector3,3> planeNormals;
+        planeNormals[0] = simCell().cellNormalVector(0);
+        planeNormals[1] = simCell().cellNormalVector(1);
+        planeNormals[2] = simCell().cellNormalVector(2);
+
+        Point3 corner1 = simCell().cellOrigin();
+        Point3 corner2 = corner1 + simCell().cellMatrix().column(0) + simCell().cellMatrix().column(1) + simCell().cellMatrix().column(2);
+
+        QMutex bondMutex;
+        QMutex indexMutex;
+        BufferReadAccess<GraphicsFloatType> radiusArray(_radii);
+
+        // Perform analysis, particle-wise parallel.
+        parallelForInnerOuter(_positions->size(), 4096, progress, [&](auto&& iterate) {
+            std::vector<int> localVoronoiBuffer;
+            std::vector<size_t> localVoronoiBufferIndex;
+            iterate([&](size_t index) {
+
+                // Skip unselected particles (if requested).
+                if(selectionArray && selectionArray[index] == 0)
+                    return;
+
+                // Build Voronoi cell.
+                voro::voronoicell_neighbor v;
+
+                // Initialize the Voronoi cell to be a cube larger than the simulation cell, centered at the origin.
+                v.init(-boxDiameter, boxDiameter, -boxDiameter, boxDiameter, -boxDiameter, boxDiameter);
+
+                // Cut Voronoi cell at simulation cell boundaries in non-periodic directions.
+                bool skipParticle = false;
+                for(size_t dim = 0; dim < 3; dim++) {
+                    if(!simCell().hasPbc(dim)) {
+                        double r;
+                        r = 2 * planeNormals[dim].dot(corner2 - positionsArray[index]);
+                        if(r <= 0) skipParticle = true;
+                        v.nplane(planeNormals[dim].x() * r, planeNormals[dim].y() * r, planeNormals[dim].z() * r, r*r, -1);
+                        r = 2 * planeNormals[dim].dot(positionsArray[index] - corner1);
+                        if(r <= 0) skipParticle = true;
+                        v.nplane(-planeNormals[dim].x() * r, -planeNormals[dim].y() * r, -planeNormals[dim].z() * r, r*r, -1);
+                    }
+                }
+                // Skip particles that are located outside of non-periodic box boundaries.
+                if(skipParticle)
+                    return;
+
+                // This function will be called for every neighbor particle.
+                int nvisits = 0;
+                auto visitFunc = [&](const NearestNeighborFinder::Neighbor& n, FloatType& mrs) {
+                    // Skip unselected particles (if requested).
+                    OVITO_ASSERT(!selectionArray || selectionArray[n.index]);
+                    FloatType rs = n.distanceSq;
+                    if(radiusArray)
+                        rs += radiusArray[index]*radiusArray[index] - radiusArray[n.index]*radiusArray[n.index];
+                    v.nplane(n.delta.x(), n.delta.y(), n.delta.z(), rs, n.index);
+                    if(nvisits == 0) {
+                        mrs = v.max_radius_squared();
+                        nvisits = 100;
+                    }
+                    nvisits--;
+                };
+
+                // Visit all neighbors of the current particles.
+                nearestNeighborFinder.visitNeighbors(nearestNeighborFinder.particlePos(index), visitFunc);
+
+                processCell(v, index, localVoronoiBuffer, localVoronoiBufferIndex, &bondMutex);
+            });
+            if(!localVoronoiBufferIndex.empty()) {
+                QMutexLocker locker(&indexMutex);
+                voronoiBufferIndex.insert(voronoiBufferIndex.end(), localVoronoiBufferIndex.cbegin(), localVoronoiBufferIndex.cend());
+                voronoiBuffer.insert(voronoiBuffer.end(), localVoronoiBuffer.cbegin(), localVoronoiBuffer.cend());
+            }
+        });
+    }
+
+    if(maxFaceOrders()) {
+        size_t componentCount = qBound(1, _maxFaceOrder.load(), FaceOrderStorageLimit);
+        _voronoiIndices = Particles::OOClass().createUserProperty(DataBuffer::Initialized, _positions->size(), Property::Int32, componentCount, QStringLiteral("Voronoi Index"));
+        BufferWriteAccess<int32_t*, access_mode::write> voronoiIndicesArray(_voronoiIndices);
+        auto indexData = voronoiBuffer.cbegin();
+        for(size_t particleIndex : voronoiBufferIndex) {
+            size_t c = std::min(maxFaceOrdersArray[particleIndex], FaceOrderStorageLimit);
+            for(size_t i = 0; i < c; i++) {
+                voronoiIndicesArray.set(particleIndex, i, *indexData++);
+            }
+        }
+        OVITO_ASSERT(indexData == voronoiBuffer.cend());
+        maxFaceOrdersArray.reset();
+        voronoiIndicesArray.reset();
+        this_task::throwIfCanceled();
+
+        // Re-use the output particle property as an output mesh region property.
+        if(_polyhedraMesh) {
+            polyhedraMesh.addRegionProperty(voronoiIndices());
+            polyhedraMesh.addRegionProperty(maxFaceOrders());
+        }
+    }
+
+    // Store "Voronoi Order" bond property.
+    _bondVoronoiOrder = bondVoronoiOrder.take();
+
+    // Finalize the polyhedral mesh.
+    if(_polyhedraMesh) {
+        progress.nextSubStep();
+        progress.beginSubSteps({1,12,1,1,1});
+
+        // First, connect adjacent faces from the same Voronoi cell.
+        polyhedraMesh.connectOppositeHalfedges();
+
+        // The polyhedral cells should now be closed manifolds.
+        OVITO_ASSERT(polyhedraMesh.topology()->isClosed());
+        progress.nextSubStep();
+        progress.setMaximum(polyhedraMesh.faceCount());
+
+        // Merge mesh vertices that are shared by adjacent Voronoi polyhedra.
+
+        // Initialize disjoint set data structure to keep track which vertices have been merged with which.
+        std::vector<SurfaceMesh::vertex_index> parents(polyhedraMesh.vertexCount());
+        std::vector<SurfaceMesh::vertex_index> ranks(polyhedraMesh.vertexCount(), 0);
+        boost::algorithm::iota(parents, (SurfaceMesh::vertex_index)0);
+
+        // Iterate over all Voronoi faces.
+        BufferReadAccess<int32_t> adjacentCellArray(adjacentCellProperty);
+        for(SurfaceMesh::face_index face = 0; face < polyhedraMesh.faceCount(); face++) {
+            progress.setValueIntermittent(face);
+            SurfaceMesh::region_index region = faceGrower->faceRegion(face);
+
+            // We know for each Voronoi face which Voronoi polyhedron is on the other side.
+            SurfaceMesh::region_index adjacentRegion = adjacentCellArray[face];
+            // Skip faces that are at the outer surface.
+            if(adjacentRegion < 0) continue;
+            // Skip faces that belong to a periodic polyhedron.
+            if(adjacentRegion == region) continue;
+
+            // Iterate over all vertices of the current Voronoi face.
+            SurfaceMesh::edge_index ffe = polyhedraMesh.firstFaceEdge(face);
+            SurfaceMesh::edge_index edge = ffe;
+            do {
+                // Get the coordinates of the current vertex.
+                SurfaceMesh::vertex_index vertex = polyhedraMesh.vertex2(edge);
+                const Point3& vertex_pos = vertexGrower->vertexPosition(vertex);
+
+                // Iterate over all vertices of the adjacent Voronoi cell.
+                FloatType longest_dist = 0;
+                FloatType shortest_dist = std::numeric_limits<FloatType>::max();
+                SurfaceMesh::vertex_index closest_vertex = SurfaceMesh::InvalidIndex;
+                for(SurfaceMesh::vertex_index other_vertex = polyhedraVertices[adjacentRegion].first, end_vertex = other_vertex + polyhedraVertices[adjacentRegion].second; other_vertex != end_vertex; ++other_vertex) {
+
+                    // Check if vertex has an adjacent face leading back to the current Voronoi cell.
+                    bool isCandidateVertex = false;
+                    for(SurfaceMesh::edge_index adj_edge = polyhedraMesh.firstVertexEdge(other_vertex); adj_edge != SurfaceMesh::InvalidIndex; adj_edge = polyhedraMesh.nextVertexEdge(adj_edge)) {
+                        if(adjacentCellArray[polyhedraMesh.adjacentFace(adj_edge)] == region) {
+                            isCandidateVertex = true;
+                            break;
+                        }
+                    }
+                    if(!isCandidateVertex) continue;
+
+                    // Compute distance of other vertex to current vertex.
+                    FloatType squared_dist = polyhedraMesh.wrapVector(vertexGrower->vertexPosition(other_vertex) - vertex_pos).squaredLength();
+
+                    // Determine the closest vertex and longest distance (as a measure of the cell size).
+                    if(squared_dist > longest_dist) longest_dist = squared_dist;
+                    if(squared_dist < shortest_dist) {
+                        shortest_dist = squared_dist;
+                        closest_vertex = other_vertex;
+                    }
+                }
+                OVITO_ASSERT(closest_vertex != SurfaceMesh::InvalidIndex || polyhedraVertices[adjacentRegion].second == 0);
+
+                // Determine a threshold distance for testing whether the two vertices should be merged.
+                FloatType distance_threshold = sqrt(longest_dist) * FloatType(1e-9);
+                if(shortest_dist <= distance_threshold) {
+                    // Merge the two vertices.
+
+                    // Find root and make root as parent (path compression)
+                    SurfaceMesh::vertex_index parentA = parents[vertex];
+                    while(parentA != parents[parentA]) {
+                        parentA = parents[parentA];
+                    }
+                    parents[vertex] = parentA;
+                    SurfaceMesh::vertex_index parentB = parents[closest_vertex];
+                    while(parentB != parents[parentB]) {
+                        parentB = parents[parentB];
+                    }
+                    parents[closest_vertex] = parentB;
+                    if(parentA != parentB) {
+
+                        // Attach smaller rank tree under root of high rank tree (Union by Rank)
+                        if(ranks[parentA] < ranks[parentB]) {
+                            parents[parentA] = parentB;
+                        }
+                        else {
+                            parents[parentB] = parentA;
+
+                            // If ranks are same, then make one as root and increment its rank by one.
+                            if(ranks[parentA] == ranks[parentB])
+                                ranks[parentA]++;
+                        }
+                    }
+                }
+
+                edge = polyhedraMesh.nextFaceEdge(edge);
+            }
+            while(edge != ffe);
+        }
+        progress.nextSubStep();
+
+        // Transfer edges from vertices that are going to be deleted to remaining vertices.
+        for(SurfaceMesh::edge_index edge = 0; edge < polyhedraMesh.edgeCount(); edge++) {
+            SurfaceMesh::vertex_index new_vertex = parents[polyhedraMesh.vertex2(edge)];
+            // Find root of the vertex and compress path.
+            while(new_vertex != parents[new_vertex])
+                new_vertex = parents[new_vertex];
+            polyhedraMesh.transferFaceBoundaryToVertex(edge, new_vertex);
+            this_task::throwIfCanceled();
+        }
+        progress.nextSubStep();
+
+        // Delete unused vertices.
+        for(SurfaceMesh::vertex_index vertex = polyhedraMesh.vertexCount() - 1; vertex >= 0; vertex--) {
+            if(parents[vertex] != vertex) {
+                vertexGrower->deleteVertex(vertex);
+                this_task::throwIfCanceled();
+            }
+        }
+        progress.nextSubStep();
+        progress.setMaximum(polyhedraMesh.faceCount());
+
+        BufferWriteAccess<int64_t, access_mode::read_write> faceBondIndices(faceBondIndexProperty);
+
+        // Connect pairs of internal Voronoi faces.
+        for(SurfaceMesh::face_index face = 0; face < polyhedraMesh.faceCount(); face++) {
+            if(polyhedraMesh.hasOppositeFace(face))
+                continue;
+            progress.setValueIntermittent(face);
+
+            // We know for each Voronoi face which Voronoi polyhedron is on the other side.
+            SurfaceMesh::region_index adjacentRegion = adjacentCellArray[face];
+            // Skip faces that belong to the outer surface.
+            if(adjacentRegion < 0) continue;
+            // Periodic polyhedra pose a problem.
+            if(adjacentRegion == faceGrower->faceRegion(face)) {
+                throw Exception(tr("Cannot generate polyhedron mesh for this input, because at least one Voronoi cell is touching a periodic image of itself. To avoid this error you can try to use the Replicate modifier or turn off periodic boundary conditions for the simulation cell."));
+            }
+
+            SurfaceMesh::edge_index first_edge = polyhedraMesh.firstFaceEdge(face);
+            SurfaceMesh::vertex_index vertex1 = polyhedraMesh.vertex1(first_edge);
+
+            // Iterate over all edges/faces adjacent to one of the vertices.
+            for(SurfaceMesh::edge_index edge = polyhedraMesh.firstVertexEdge(vertex1); edge != SurfaceMesh::InvalidIndex; edge = polyhedraMesh.nextVertexEdge(edge)) {
+                SurfaceMesh::face_index adjacentFace = polyhedraMesh.adjacentFace(edge);
+                if(faceGrower->faceRegion(adjacentFace) != adjacentRegion)
+                    continue;
+                if(polyhedraMesh.areOppositeFaces(face, adjacentFace)) {
+                    OVITO_ASSERT(!polyhedraMesh.hasOppositeFace(adjacentFace));
+                    polyhedraMesh.linkOppositeFaces(face, adjacentFace);
+                    if(faceBondIndices) {
+                        if(faceBondIndices[face] != int64_t{-1})
+                            faceBondIndices[adjacentFace] = faceBondIndices[face];
+                        else if(faceBondIndices[adjacentFace] != int64_t{-1})
+                            faceBondIndices[face] = faceBondIndices[adjacentFace];
+                    }
+                    break;
+                }
+            }
+            OVITO_ASSERT(polyhedraMesh.hasOppositeFace(face) || polyhedraVertices[adjacentRegion].second == 0);
+        }
+        vertexGrower.reset();
+        faceGrower.reset();
+
+        progress.endSubSteps();
+
+#ifdef OVITO_DEBUG
+        polyhedraMesh.mesh()->verifyMeshIntegrity();
+#endif
+    }
+
+    progress.endSubSteps();
+}
+
+/******************************************************************************
+* Injects the computed results of the engine into the data pipeline.
+******************************************************************************/
+void VoronoiAnalysisModifier::VoronoiAnalysisEngine::applyResults(PipelineFlowState& state)
+{
+    Particles* particles = state.expectMutableObject<Particles>();
+
+    particles->createProperty(coordinationNumbers());
+    particles->createProperty(atomicVolumes());
+    particles->createProperty(cavityRadii());
+
+    if(voronoiIndices())
+        particles->createProperty(voronoiIndices());
+    if(maxFaceOrders())
+        particles->createProperty(maxFaceOrders());
+
+    if(voronoiIndices() || maxFaceOrders()) {
+        state.setStatus(PipelineStatus(PipelineStatus::Success,
+            tr("Maximum face order: %1").arg(maxFaceOrder().load())));
+    }
+
+    // Check computed Voronoi cell volume sum.
+    if(particles->elementCount() != 0 && std::abs(voronoiVolumeSum() - _simulationBoxVolume) > 1e-8 * particles->elementCount() * _simulationBoxVolume) {
+        state.setStatus(PipelineStatus(PipelineStatus::Warning,
+                tr("The volume sum of all Voronoi cells does not match the simulation box volume. "
+                        "This may be a result of particles being located outside of the simulation box boundaries. "
+                        "See user manual for more information.\n"
+                        "Simulation box volume: %1\n"
+                        "Voronoi cell volume sum: %2").arg(_simulationBoxVolume).arg(voronoiVolumeSum().load())));
+    }
+
+    if(_computeBonds) {
+        // Insert output object into the pipeline.
+        std::vector<PropertyPtr> bondProperties;
+        if(_bondVoronoiOrder)
+            bondProperties.push_back(_bondVoronoiOrder);
+        particles->addBonds(bonds(), _bondsVis, bondProperties);
+    }
+
+    state.addAttribute(QStringLiteral("Voronoi.max_face_order"), QVariant::fromValue(maxFaceOrder().load()), createdByNode());
+}
+
+}   // End of namespace

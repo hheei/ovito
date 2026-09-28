@@ -1,0 +1,212 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+//
+// Standard precompiled header file included by all source files in this module
+//
+
+#ifndef __OVITO_CORE_
+#define __OVITO_CORE_
+
+// Prevent <windows.h> from defining the min()/max() function-like macros, which would
+// otherwise collide with std::min()/std::max().
+// Q_OS_WIN is not defined this early.
+#ifdef _WIN32
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #undef min
+    #undef max
+#endif
+
+/******************************************************************************
+* Standard Template Library (STL)
+******************************************************************************/
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cinttypes>
+#include <clocale>
+#include <cmath>
+#include <coroutine>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <forward_list>
+#include <functional>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <shared_mutex>
+#include <numbers>
+#include <numeric>
+#include <optional>
+#include <queue>
+#include <random>
+#include <ranges>
+#include <string_view>
+#include <set>
+#include <span>
+#include <stack>
+#include <thread>
+#include <tuple>
+#include <type_traits>
+#include <concepts>
+#include <typeinfo>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+#include <version>
+#include <typeindex>
+
+/******************************************************************************
+* Qt framework
+******************************************************************************/
+#define QT_EXPLICIT_QFILE_CONSTRUCTION_FROM_PATH    // Force QFile(const QString&) class constructor to be explicit.
+#include <QBrush>
+#include <QBuffer>
+#include <QCache>
+#include <QColor>
+#include <QCommandLineParser>
+#include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDateTime>
+#include <QDir>
+#include <QElapsedTimer>
+#include <QFileInfo>
+#include <QFont>
+#include <QGenericMatrix>
+#include <QGuiApplication>
+#include <QImage>
+#include <QMap>
+#include <QMatrix4x4>
+#include <QMetaClassInfo>
+#include <QMutex>
+#include <QStringBuilder>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPair>
+#include <QPen>
+#include <QPointer>
+#include <QProcess>
+#include <QRegularExpression>
+#include <QResource>
+#include <QRunnable>
+#include <QStringList>
+#include <QtDebug>
+#include <QTemporaryFile>
+#include <QTemporaryDir>
+#include <QtGlobal>
+#include <QThread>
+#include <QTimer>
+#include <QtMath>
+#include <QUrl>
+#include <QVariant>
+#include <QVector2D>
+#include <QVector3D>
+#include <QVector4D>
+#include <QLoggingCategory>
+#include <QQueue>
+#include <QWindow>
+#include <QOffscreenSurface>
+#include <rhi/qrhi.h>
+#ifndef OVITO_DISABLE_THREADING
+    #include <QThreadPool>
+    #include <QWaitCondition>
+#endif
+#ifndef OVITO_DISABLE_QSETTINGS
+    #include <QSettings>
+#endif
+#ifndef OVITO_DISABLE_THREADING
+    #include <QException>
+#endif
+#ifndef Q_OS_WASM
+    #include <QNetworkAccessManager>
+#endif
+
+/******************************************************************************
+* Boost library
+******************************************************************************/
+#include <boost/algorithm/algorithm.hpp>
+#include <boost/algorithm/cxx11/all_of.hpp>
+#include <boost/algorithm/cxx11/any_of.hpp>
+#include <boost/algorithm/cxx11/iota.hpp>
+#include <boost/algorithm/cxx11/none_of.hpp>
+#include <boost/algorithm/cxx11/one_of.hpp>
+#include <boost/any/unique_any.hpp>
+#include <boost/container/flat_map.hpp>
+#include <boost/container/flat_set.hpp>
+#include <boost/container/small_vector.hpp>
+#include <boost/dynamic_bitset.hpp>
+#include <boost/iterator/counting_iterator.hpp>
+#include <boost/iterator/transform_iterator.hpp>
+#include <boost/random/uniform_int_distribution.hpp>
+#include <boost/random/uniform_real_distribution.hpp>
+#include <boost/range/adaptor/strided.hpp>
+#include <boost/range/irange.hpp>
+
+/******************************************************************************
+* SYCL
+******************************************************************************/
+#if defined(OVITO_USE_SYCL) && !defined(Q_MOC_RUN)
+    #ifdef OVITO_USE_SYCL_ACPP
+        #include <CL/sycl.hpp>
+        using namespace cl;
+    #else
+        #include <sycl/sycl.hpp>
+    #endif
+#endif
+
+/******************************************************************************
+* Forward declaration of classes.
+******************************************************************************/
+#include "ForwardDecl.h"
+
+/******************************************************************************
+* Our own basic headers
+******************************************************************************/
+#include <ovito/core/utilities/Debugging.h>
+#include <ovito/core/utilities/DataTypes.h>
+#include <ovito/core/utilities/Exception.h>
+#include <ovito/core/utilities/linalg/LinAlg.h>
+#include <ovito/core/utilities/Color.h>
+#include <ovito/core/utilities/Enumerate.h>
+#include <ovito/core/utilities/NumberFormatting.h>
+#include <ovito/core/utilities/concurrent/Future.h>
+#include <ovito/core/utilities/concurrent/ScopedFuture.h>
+#include <ovito/core/utilities/concurrent/SharedFuture.h>
+#include <ovito/core/utilities/concurrent/WeakSharedFuture.h>
+#include <ovito/core/utilities/concurrent/SharedAsyncValue.h>
+#include <ovito/core/utilities/concurrent/StopToken.h>
+#include <ovito/core/utilities/concurrent/Promise.h>
+#include <ovito/core/utilities/concurrent/CoroutinePromise.h>
+#include <ovito/core/utilities/concurrent/MainThreadOperation.h>
+#include <ovito/core/oo/OvitoObject.h>
+#include <ovito/core/oo/RefTarget.h>
+#include <ovito/core/utilities/concurrent/Launch.h>
+#include <ovito/core/utilities/concurrent/TaskScope.h>
+#include <ovito/core/utilities/concurrent/TaskProgress.h>
+#include <ovito/core/app/Application.h>
+
+#endif // __OVITO_CORE_

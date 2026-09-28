@@ -1,0 +1,356 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/core/Core.h>
+#include <ovito/core/oo/NativePropertyFieldDescriptor.h>
+#include <ovito/core/oo/PropertyField.h>
+#include "RefMaker.h"
+#include "DependentsList.h"
+
+namespace Ovito {
+
+/**
+ * \brief Base class for objects that are referenced by RefMaker objects.
+ */
+class OVITO_CORE_EXPORT RefTarget : public RefMaker
+{
+public:
+
+    /// Data structure loaded from an OVITO state file describing a single property field
+    /// of a RefMaker-derived class that was serialized.
+    struct SerializedPropertyField
+    {
+        /// Function pointer to a custom deserialization handler for a property field.
+        using CustomDeserializationFunctionPtr = void (*)(const SerializedPropertyField& field, ObjectLoadStream& stream, RefMaker& owner);
+
+        /// The identifier of the property field.
+        QByteArray identifier;
+
+        /// The RefMaker-derived class that owns the property field.
+        /// Can be null if the class no longer exists in this version of OVITO.
+        const RefMakerClass* definingClass = nullptr;
+
+        /// The stored flags of the property field (see PropertyFieldFlag).
+        int flags;
+
+        /// Indicates whether this is a reference field or a property field.
+        bool isReferenceField;
+
+        /// If this is a reference field, this is its RefTarget-derived class.
+        /// Can be null if the class no longer exists in this version of OVITO.
+        OvitoClassPtr targetClass = nullptr;
+
+        /// The property field of the defining class that matches the stored field.
+        /// Can be null if the property field no longer exists in this version of OVITO.
+        const PropertyFieldDescriptor* field = nullptr;
+    };
+
+    /// Give this class its own metaclass.
+    class RefTargetClass : public RefMaker::OOMetaClass
+    {
+    public:
+        /// Inherit constructor from base class.
+        using RefMaker::OOMetaClass::OOMetaClass;
+
+        /// Virtual customization function, which lets sub-classes override the deserialization mechanism for a serialized property field.
+        virtual SerializedPropertyField::CustomDeserializationFunctionPtr overrideFieldDeserialization(LoadStream& stream, const SerializedPropertyField& field) const { return nullptr; }
+    };
+    OVITO_CLASS_META(RefTarget, RefTargetClass)
+
+protected:
+
+    // Specifies the default flags for all reference fields of RefTarget-derived classes.
+    // Note: This overrides (shadows) the value of RefMaker::PROPERTY_FIELD_STANDARD_FLAGS.
+    static constexpr auto PROPERTY_FIELD_STANDARD_FLAGS = PROPERTY_FIELD_NO_FLAGS;
+
+    enum {
+        /// End-of-list value indicating the next available event type that can be used by sub-classes for custom notifications.
+        NEXT_AVAILABLE_EVENT_ID = ReferenceEvent::Type::NEXT_AVAILABLE_EVENT_ID
+    };
+
+    //////////////////////////////// from OvitoObject //////////////////////////////////////
+
+    /// This method is called after the reference counter of this object has reached zero
+    /// and before the object is being deleted.
+    virtual void aboutToBeDeleted() override;
+
+    //////////////////////////// Reference event handling ////////////////////////////////
+
+    /// \brief Sends an event to all dependents of this RefTarget.
+    /// \param event The notification event to be sent to all dependents of this RefTarget.
+    virtual void notifyDependentsImpl(const ReferenceEvent& event) noexcept;
+
+    /// \brief Is called when the value of a reference field of this RefMaker changes.
+    /// \param field Specifies the reference field of this RefMaker that has been changed.
+    /// \param oldTarget The old target that was referenced by the ReferenceField. This can be \c NULL.
+    /// \param newTarget The new target that is now referenced by the ReferenceField. This can be \c NULL.
+    ///
+    /// This method can by overridden by derived classes that want to be informed when
+    /// any of their reference fields are changed.
+    ///
+    /// \note When this method is overridden in sub-classes then the base implementation of this method
+    ///       should always be called from the new implementation to allow the base classes to handle
+    ///       messages for their specific reference fields.
+    ///
+    /// The RefTarget implementation of this virtual method generates a ReferenceEvent::ReferenceChanged notification event
+    virtual void referenceReplaced(const PropertyFieldDescriptor* field, RefTarget* oldTarget, RefTarget* newTarget, int listIndex) override {
+        notifyDependentsImpl(ReferenceFieldEvent(ReferenceEvent::ReferenceChanged, this, field, oldTarget, newTarget, listIndex));
+        RefMaker::referenceReplaced(field, oldTarget, newTarget, listIndex);
+    }
+
+    /// \brief Is called when a RefTarget has been added to a VectorReferenceField of this RefMaker.
+    /// \param field Specifies the reference field of this RefMaker to which a new entry has been added.
+    ///              This is always a VectorReferenceField.
+    /// \param newTarget The new target added to the list of referenced objects.
+    /// \param listIndex The index into the VectorReferenceField at which the new entry has been inserted.
+    ///
+    /// This method can by overridden by derived classes that want to be informed when
+    /// a reference has been added to one of its vector reference fields.
+    ///
+    /// \note When this method is overridden in sub-classes then the base implementation of this method
+    ///       should always be called from the new implementation to allow the base classes to handle
+    ///       messages for their specific reference fields.
+    ///
+    /// The RefTarget implementation of this virtual method generates a ReferenceEvent::ReferenceAdded notification event
+    virtual void referenceInserted(const PropertyFieldDescriptor* field, RefTarget* newTarget, int listIndex) override {
+        notifyDependentsImpl(ReferenceFieldEvent(ReferenceEvent::ReferenceAdded, this, field, nullptr, newTarget, listIndex));
+        RefMaker::referenceInserted(field, newTarget, listIndex);
+    }
+
+    /// \brief Is called when a RefTarget has been removed from a VectorReferenceField of this RefMaker.
+    /// \param field Specifies the reference field of this RefMaker from which an entry has been removed.
+    ///              This is always a VectorReferenceField.
+    /// \param oldTarget The old target that was reference before it has been removed from the vector reference field.
+    /// \param listIndex The index into the VectorReferenceField at which the old entry was stored.
+    ///
+    /// This method can by overridden by derived classes that want to be informed when
+    /// a reference has been removed from one of its vector reference fields.
+    ///
+    /// \note When this method is overridden in sub-classes then the base implementation of this method
+    ///       should always be called from the new implementation to allow the base classes to handle
+    ///       messages for their specific reference fields.
+    ///
+    /// The RefTarget implementation of this virtual method generates a ReferenceEvent::ReferenceRemoved notification event
+    virtual void referenceRemoved(const PropertyFieldDescriptor* field, RefTarget* oldTarget, int listIndex) override {
+        notifyDependentsImpl(ReferenceFieldEvent(ReferenceEvent::ReferenceRemoved, this, field, oldTarget, nullptr, listIndex));
+        RefMaker::referenceRemoved(field, oldTarget, listIndex);
+    }
+
+    /// \brief Handles a notification event from a RefTarget referenced by this object.
+    /// \param source Specifies the RefTarget that delivered the event.
+    /// \param event The notification event.
+    /// \return If \c true then the message is passed on to all dependents of this object.
+    virtual bool handleReferenceEvent(RefTarget* source, const ReferenceEvent& event) override;
+
+    //////////////////////////////// Object cloning //////////////////////////////////////
+
+    /// \brief Creates a copy of this RefTarget object.
+    /// \param deepCopy If \c true, then all objects referenced by this RefTarget should also be copied.
+    ///                 If \c false, then the new object clone should just take over the references of the original object
+    ///                 and no copying of sub-objects takes place.
+    /// \param cloneHelper Copying of sub-objects should be done using the passed CloneHelper instance.
+    ///                    It makes sure that only one copy per object is made through the whole object graph.
+    ///
+    /// The default implementation of this method takes care of instance creation. It creates
+    /// a new instance of the original object class.
+    ///
+    /// Sub-classes should override this method and must always call the base class' version of this method
+    /// to create the new instance. The returned smart pointer can safely be cast to the class type of the original
+    /// object.
+    ///
+    /// Every sub-class that has reference fields or other internal data fields should override this
+    /// method and copy or transfer the members to the new clone.
+    ///
+    /// \sa CloneHelper::cloneObject()
+    virtual OORef<RefTarget> clone(bool deepCopy, CloneHelper& cloneHelper) const;
+
+    //////////////////////////////// Serialization //////////////////////////////////////
+
+    /// \brief Asks the object to register internal object references that will be saved to a data stream.
+    /// \param stream The destination data stream.
+    ///
+    /// Subclasses that perform custom serialization of internal object references should override this method
+    /// to register all internal references with the given ObjectSaveStream instance.
+    ///
+    /// The default implementation of this method registers all sub-objects stored in reference parameter fields of this object.
+    virtual void registerObjectReferencesForSerialization(ObjectSaveStream& stream, const RefTarget* deltaReferenceObject) const;
+
+    /// \brief Saves the internal state of this object to an output stream.
+    /// \param stream The destination data stream.
+    /// \param excludeRecomputableData Controls whether the object should not store data that can be recomputed at runtime.
+    ///
+    /// Subclasses can override this method to write their internal state
+    /// to a file. The derived class must call the base implementation saveToStream() first
+    /// before it writes its own data to the stream.
+    ///
+    /// The default implementation of this method does nothing.
+    /// \sa loadFromStream()
+    virtual void saveToStream(ObjectSaveStream& stream, bool excludeRecomputableData) const;
+
+    /// \brief Loads the internal state of this class from an input stream.
+    /// \param stream The source data stream.
+    /// \throw Exception when a parsing error has occurred.
+    ///
+    /// Subclasses can override this method to read their saved internal state
+    /// from the input stream. The derived class must call the base implementation of loadFromStream() first
+    /// before reading its own data from the stream.
+    ///
+    /// The default implementation of this method does nothing.
+    ///
+    /// \note The OvitoObject is not in a fully initialized state when the loadFromStream() method is called.
+    ///       In particular the developer cannot assume that all other objects stored in the data stream and
+    ///       referenced by this object have already been restored at the time loadFromStream() is invoked.
+    ///       The loadFromStreamComplete() method will be called after all objects stored in a file have been completely
+    ///       loaded and their data has been restored. If you have to perform some post-deserialization
+    ///       tasks that require other referenced objects to be in place and fully loaded, then this should
+    ///       be done by overriding loadFromStreamComplete().
+    ///
+    /// \sa saveToStream()
+    virtual void loadFromStream(ObjectLoadStream& stream);
+
+    /// \brief This method is called once for this object after it has been
+    ///        completely deserialized from a data stream.
+    ///
+    /// It is safe to access sub-objects from this method.
+    /// The default implementation of this method does nothing.
+    virtual void loadFromStreamComplete(ObjectLoadStream& stream) {}
+
+public:
+
+    /// Initialization function.
+    inline void initializeObject(ObjectInitializationFlags flags) {
+        RefMaker::initializeObject();
+    }
+
+#ifdef OVITO_DEBUG
+    /// Destructor.
+    ~RefTarget();
+#endif
+
+    //////////////////////////////// Notification events ////////////////////////////////////
+
+    /// \brief Sends an event to all dependents of this RefTarget.
+    /// \param eventType The event type passed to the ReferenceEvent constructor.
+    inline void notifyDependents(int eventType) const noexcept {
+        OVITO_ASSERT(eventType != ReferenceEvent::TargetChanged);
+        OVITO_ASSERT(eventType != ReferenceEvent::ReferenceChanged);
+        OVITO_ASSERT(eventType != ReferenceEvent::ReferenceAdded);
+        OVITO_ASSERT(eventType != ReferenceEvent::ReferenceRemoved);
+        OVITO_ASSERT(eventType != ReferenceEvent::CheckIsReferencedBy);
+        OVITO_ASSERT(eventType != ReferenceEvent::RequestGoToAnimationTime);
+        const_cast<RefTarget*>(this)->notifyDependentsImpl(ReferenceEvent(eventType, const_cast<RefTarget*>(this)));
+    }
+
+    /// \brief Sends a ReferenceEvent::TargetChanged event to all dependents of this RefTarget.
+    inline void notifyTargetChanged(const PropertyFieldDescriptor* field = nullptr) const noexcept {
+        const_cast<RefTarget*>(this)->notifyDependentsImpl(TargetChangedEvent(const_cast<RefTarget*>(this), field));
+    }
+
+    /// \brief Notifies the dependents that this object's state has changed outside of the given animation time interval
+    ///        but remained the same within the interval.
+    inline void notifyTargetChangedOutsideInterval(const TimeInterval& interval, const PropertyFieldDescriptor* field = nullptr) const noexcept {
+        const_cast<RefTarget*>(this)->notifyDependentsImpl(TargetChangedEvent(const_cast<RefTarget*>(this), field, interval));
+    }
+
+    ////////////////////////////////// Dependency graph ///////////////////////////////////////
+
+    /// \brief Checks whether this object is directly or indirectly referenced by some other object.
+    /// \param obj The object that might hold a reference to \c this object.
+    /// \param onlyStrongReferences If true, ignores reference fields that have been marked as weak and don't propagate messages.
+    /// \return \c true if \a obj has a direct or indirect reference to this object;
+    ///         \c false if \a obj does not depend on this object.
+    virtual bool isReferencedBy(const RefMaker* obj, bool onlyStrongReferences = true) const override;
+
+    /// \brief Visits all immediate dependents that reference this target object
+    ///        and invokes the given function for every dependent encountered.
+    template<class Callable>
+    inline void visitDependents(Callable&& fn) const {
+        const_cast<DependentsList&>(_dependents).visit(std::forward<Callable>(fn));
+    }
+
+    /// Returns whether this RefTarget currently has at least one dependent.
+    bool hasDependents() const {
+        return !_dependents.empty();
+    }
+
+    /// \brief Asks this object to delete itself. This happens by requesting all dependents of the object to delete their reference to it.
+    ///
+    /// If undo recording is active, the object instance is kept alive such that
+    /// the deletion can be undone.
+    virtual void requestObjectDeletion();
+
+    /// \brief Returns the title of this object.
+    /// \return A string that is used as label or title for this object in the user interface.
+    ///
+    /// The default implementation returns OvitoClass::objectTitle().
+    /// Sub-classes can override this method to return a title that depends on the internal state of the object.
+    virtual QString objectTitle() const;
+
+    /// \brief Returns whether this object is currently opened in a parameter editor in the UI.
+    bool isBeingEdited() const;
+
+    /// \brief Called when the object is opened in a new parameter editor in the UI.
+    virtual void editingStarted(UserInterface& ui) {}
+
+    /// \brief Called when the object is now longer opened in a parameter editor in the UI.
+    virtual void editingStopped(UserInterface& ui) {}
+
+    /// \brief Rescales the times of all animation keys from the old animation interval to the new interval.
+    /// \param oldAnimationInterval The old animation interval, which should be mapped to the new animation interval.
+    /// \param newAnimationInterval The new animation interval.
+    ///
+    /// For keyed controllers this will rescale the key times of all keys from the
+    /// old animation interval to the new interval using a linear mapping.
+    ///
+    /// Keys that lie outside of the old animation interval will also be scaled using linear extrapolation.
+    ///
+    /// The default implementation does nothing.
+    virtual void rescaleTime(const TimeInterval& oldAnimationInterval, const TimeInterval& newAnimationInterval) {}
+
+private:
+
+    /// Registers a RefMaker as a dependent of this RefTarget, subscribing it to notifications.
+    inline void registerDependent(const RefMaker* dependent) const noexcept { const_cast<RefTarget*>(this)->_dependents.insert(const_cast<RefMaker*>(dependent)); }
+
+    /// Unregisters a RefMaker, which will no longer receive notifications from this RefTarget.
+    inline void unregisterDependent(const RefMaker* dependent) const noexcept { const_cast<RefTarget*>(this)->_dependents.remove(const_cast<RefMaker*>(dependent)); }
+
+    /// The list of RefMakers that currently hold a reference to this target.
+	DependentsList _dependents;
+
+    friend class RefMaker;
+    friend class CloneHelper;
+    template<typename T> friend class SingleReferenceFieldBase;
+    template<typename T> friend class VectorReferenceFieldBase;
+
+    // These classes need to access the protected serialization functions.
+    friend class ObjectSaveStream;
+    friend class ObjectLoadStream;
+};
+
+}   // End of namespace
+
+#include <ovito/core/utilities/io/ObjectSaveStream.h>
+#include <ovito/core/utilities/io/ObjectLoadStream.h>

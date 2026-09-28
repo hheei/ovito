@@ -1,0 +1,372 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/particles/Particles.h>
+#include <ovito/stdobj/simcell/SimulationCell.h>
+#include <ovito/stdobj/properties/Property.h>
+#include <ovito/core/utilities/BoundedPriorityQueue.h>
+#include <ovito/core/utilities/MemoryPool.h>
+
+namespace Ovito {
+
+/**
+ * \brief This utility class finds the *k* nearest neighbors of a particle or around some point in space.
+ *        *k* is a positive integer.
+ *
+ * OVITO provides two facilities for finding the neighbors of particles: The CutoffNeighborFinder class, which
+ * finds all neighbors within a certain cutoff radius, and the NearestNeighborFinder class, which finds
+ * the *k* nearest neighbor of a particle, where *k* is some positive integer. Note that the cutoff-based neighbor finder
+ * can return an unknown number of neighbor particles, while the nearest neighbor finder will return exactly
+ * the requested number of nearest neighbors (ordered by increasing distance from the central particle).
+ * Whether CutoffNeighborFinder or NearestNeighborFinder is the right choice depends on the application.
+ *
+ * After the NearestNeighborFinder has been initialized, one can find the nearest neighbors of some central
+ * particle by constructing an instance of the NearestNeighborFinder::Query class. This is a light-weight class generates
+ * the sorted list of nearest neighbors of a particle.
+ *
+ * The NearestNeighborFinder class takes into account periodic boundary conditions. With periodic boundary conditions,
+ * a particle can be appear multiple times in the neighbor list of another particle. Note, however, that a different neighbor *vector* is
+ * reported for each periodic image of a neighbor.
+ */
+class OVITO_PARTICLES_EXPORT NearestNeighborFinder
+{
+    Q_DISABLE_COPY_MOVE(NearestNeighborFinder)
+
+private:
+
+    /// Transient per-particle record used only while the binary tree is being built.
+    struct NeighborListAtom {
+        /// The next atom in the linked list used for binning.
+        NeighborListAtom* nextInBin;
+        /// The wrapped position of the particle.
+        Point3 pos;
+    };
+
+    /// Compact, cache-friendly per-atom record used during neighbor queries.
+    /// Once the tree has been built, the atoms of each leaf node are copied into a single
+    /// contiguous array (_sortedAtoms), grouped by leaf node, so the inner query loop streams
+    /// them linearly instead of chasing the scattered build-time linked list.
+    struct SortedAtom {
+        /// The wrapped position of the particle.
+        Point3 pos;
+        /// The index of the particle in the original input order.
+        size_t index;
+    };
+
+    struct OVITO_PARTICLES_EXPORT TreeNode
+    {
+        /// Constructor.
+        TreeNode() : atoms(nullptr), numAtoms(0) {}
+
+        /// Returns true this is a leaf node.
+        bool isLeaf() const { return splitDim == -1; }
+
+        /// Converts the min/max corner vertices of this node and all its children to absolute coordinates.
+        void convertToAbsoluteCoordinates(const AffineTransformation& cellMatrix) {
+            bounds.minc = cellMatrix * bounds.minc;
+            bounds.maxc = cellMatrix * bounds.maxc;
+            if(!isLeaf()) {
+                children[0]->convertToAbsoluteCoordinates(cellMatrix);
+                children[1]->convertToAbsoluteCoordinates(cellMatrix);
+            }
+        }
+
+        /// The splitting direction (or -1 if this is a leaf node).
+        int splitDim = -1;
+        union {
+            struct {
+                /// The two child nodes (if this is not a leaf node).
+                TreeNode* children[2];
+                /// The position of the split plane.
+                FloatType splitPos;
+            };
+            struct {
+                union {
+                    /// The linked list of atoms while the tree is being built (leaf node only).
+                    NeighborListAtom* atoms;
+                    /// Pointer into the contiguous, leaf-grouped _sortedAtoms array after the tree
+                    /// has been finalized (leaf node only).
+                    const SortedAtom* sortedAtoms;
+                };
+                /// Number of atoms in this leaf node.
+                int numAtoms;
+            };
+        };
+        /// The bounding box of the node.
+        Box3 bounds;
+    };
+
+public:
+
+    /// Constructor that builds the binary search tree.
+    /// \param posProperty The positions of the particles.
+    /// \param cellData The simulation cell data.
+    /// \param selectionProperty Determines which particles are included in the neighbor search (optional).
+    /// \throw Exception on error.
+    NearestNeighborFinder(int numNeighbors, BufferReadAccess<Point3> posProperty, const SimulationCellData& cellData, BufferReadAccess<SelectionIntType> selectionProperty);
+
+    /// Returns the maximum number of neighbors this class will find.
+    int maxNeighbors() const { return _numNeighbors; }
+
+    /// Returns the number of input particles in the system for which the NearestNeighborFinder was created.
+    size_t particleCount() const { return _particleCount; }
+
+    /// Returns the (wrapped) coordinates of the i-th input particle.
+    /// \note Only valid for particles that were actually inserted into the tree. When the finder was
+    ///       constructed with a selection, this means \a index must refer to a selected particle.
+    const Point3& particlePos(size_t index) const {
+        OVITO_ASSERT(index < _particleCount);
+        size_t sortedIndex = _originalToSorted[index];
+        OVITO_ASSERT(sortedIndex < _sortedAtoms.size());
+        return _sortedAtoms[sortedIndex].pos;
+    }
+
+    /// Returns the index of the particle closest to the given point.
+    size_t findClosestParticle(const Point3& query_point, FloatType& closestDistanceSq, bool includeSelf = true) const {
+        size_t closestIndex = std::numeric_limits<size_t>::max();
+        closestDistanceSq = FLOATTYPE_MAX;
+        auto visitor = [&closestIndex, &closestDistanceSq](const Neighbor& n, FloatType& mrs) {
+            if(n.distanceSq < closestDistanceSq) {
+                mrs = closestDistanceSq = n.distanceSq;
+                closestIndex = n.index;
+            }
+        };
+        visitNeighbors(query_point, visitor, includeSelf);
+        return closestIndex;
+    }
+
+    /// Information associated with each neighbor of the current center particle.
+    struct Neighbor
+    {
+        Vector3 delta;
+        FloatType distanceSq;
+        size_t index;
+
+        /// For ordering the neighbors by distance.
+        bool operator<(const Neighbor& other) const { return distanceSq < other.distanceSq; }
+    };
+
+    /// Iterator over the nearest neighbors of a central particle.
+    template<int MAX_NEIGHBORS_LIMIT>
+    class Query
+    {
+    public:
+
+        /// Constructor.
+        Query(const NearestNeighborFinder& finder) : t(finder), queue(finder._numNeighbors), inverseCellMatrix(finder._simCell.reciprocalCellMatrix()) {}
+
+        /// Builds the sorted list of neighbors around the given particle.
+        void findNeighbors(size_t particleIndex) {
+            findNeighbors(t.particlePos(particleIndex), false);
+        }
+
+        /// Builds the sorted list of neighbors around the given point.
+        void findNeighbors(const Point3& query_point, bool includeSelf) {
+            queue.clear();
+            for(const Vector3& pbcShift : t._pbcImages) {
+                q = query_point - pbcShift;
+                if(!queue.full() || queue.top().distanceSq > t.minimumDistance(t._root, q)) {
+                    qr = inverseCellMatrix * q;
+                    visitNode(t._root, includeSelf);
+                }
+            }
+            queue.sort();
+        }
+
+        /// Returns the neighbor list.
+        const BoundedPriorityQueue<Neighbor, std::less<Neighbor>, MAX_NEIGHBORS_LIMIT>& results() const { return queue; }
+
+        /// Applies a transformation to the neighbor vectors and resorts the neighbor list based on distance.
+        void applyDeformation(const Matrix3& tm) {
+            for(Neighbor& n : queue) {
+                n.delta = tm * n.delta;
+                n.distanceSq = n.delta.squaredLength();
+            }
+            queue.sort();
+        }
+
+        /// Returns a reference to the underlying NearestNeighborFinder object.
+        const NearestNeighborFinder& finder() const { return t; }
+
+    private:
+
+        /// Inserts all particles of the given leaf node into the priority queue.
+        void visitNode(TreeNode* node, bool includeSelf) {
+            if(node->isLeaf()) {
+                // Stream the leaf's atoms linearly from the contiguous array.
+                const SortedAtom* atomEnd = node->sortedAtoms + node->numAtoms;
+                for(const SortedAtom* atom = node->sortedAtoms; atom != atomEnd; ++atom) {
+                    Neighbor n;
+                    n.delta = atom->pos - q;
+                    n.distanceSq = n.delta.squaredLength();
+                    if(includeSelf || n.distanceSq != 0) {
+                        n.index = atom->index;
+                        queue.insert(n);
+                    }
+                }
+            }
+            else {
+                TreeNode* cnear;
+                TreeNode* cfar;
+                if(qr[node->splitDim] < node->splitPos) {
+                    cnear = node->children[0];
+                    cfar  = node->children[1];
+                }
+                else {
+                    cnear = node->children[1];
+                    cfar  = node->children[0];
+                }
+                visitNode(cnear, includeSelf);
+                if(!queue.full() || queue.top().distanceSq > t.minimumDistance(cfar, q))
+                    visitNode(cfar, includeSelf);
+            }
+        }
+
+    protected:
+        const NearestNeighborFinder& t;
+        Point3 q, qr;
+        BoundedPriorityQueue<Neighbor, std::less<Neighbor>, MAX_NEIGHBORS_LIMIT> queue;
+        const AffineTransformation inverseCellMatrix;
+    };
+
+    template<class Visitor>
+    void visitNeighbors(const Point3& query_point, Visitor& v, bool includeSelf = false) const {
+        FloatType mrs = FLOATTYPE_MAX;
+        for(const Vector3& pbcShift : _pbcImages) {
+            Point3 q = query_point - pbcShift;
+            if(mrs > minimumDistance(_root, q)) {
+                visitNode(_root, q, _simCell.absoluteToReduced(q), v, mrs, includeSelf);
+            }
+        }
+    }
+
+private:
+
+    /// Inserts a particle into the binary tree.
+    void insertParticle(NeighborListAtom* atom, const Point3& p, TreeNode* node, int depth);
+
+    /// Splits a leaf node into two new leaf nodes and redistributes the atoms to the child nodes.
+    void splitLeafNode(TreeNode* node, int splitDim);
+
+    /// Determines in which direction to split the given leaf node.
+    int determineSplitDirection(TreeNode* node);
+
+    /// Copies the atoms of all leaf nodes into the contiguous _sortedAtoms array, grouped by leaf node,
+    /// and replaces each leaf's build-time linked list with a range into that array. Also fills the
+    /// _originalToSorted lookup table. \a atomsBase is the start of the transient build-time atom array,
+    /// used to recover each atom's original input index.
+    void flattenTree(TreeNode* node, const NeighborListAtom* atomsBase, size_t& cursor);
+
+    /// Computes the minimum distance from the query point to the bounding box of the given node.
+    FloatType minimumDistance(TreeNode* node, const Point3& query_point) const {
+        Vector3 p1 = node->bounds.minc - query_point;
+        Vector3 p2 = query_point - node->bounds.maxc;
+        FloatType minDistance = 0;
+        for(size_t dim = 0; dim < 3; dim++) {
+            FloatType t_min = _planeNormals[dim].dot(p1);
+            if(t_min > minDistance) minDistance = t_min;
+            FloatType t_max = _planeNormals[dim].dot(p2);
+            if(t_max > minDistance) minDistance = t_max;
+        }
+        return minDistance * minDistance;
+    }
+
+    template<class Visitor>
+    void visitNode(TreeNode* node, const Point3& q, const Point3& qr, Visitor& v, FloatType& mrs, bool includeSelf) const {
+        if(node->isLeaf()) {
+            const SortedAtom* atomEnd = node->sortedAtoms + node->numAtoms;
+            for(const SortedAtom* atom = node->sortedAtoms; atom != atomEnd; ++atom) {
+                Neighbor n;
+                n.delta = atom->pos - q;
+                n.distanceSq = n.delta.squaredLength();
+                if(includeSelf || n.distanceSq != 0) {
+                    n.index = atom->index;
+                    v(n, mrs);
+                }
+            }
+        }
+        else {
+            TreeNode* cnear;
+            TreeNode* cfar;
+            if(qr[node->splitDim] < node->splitPos) {
+                cnear = node->children[0];
+                cfar  = node->children[1];
+            }
+            else {
+                cnear = node->children[1];
+                cfar  = node->children[0];
+            }
+            visitNode(cnear, q, qr, v, mrs, includeSelf);
+            if(mrs > minimumDistance(cfar, q))
+                visitNode(cfar, q, qr, v, mrs, includeSelf);
+        }
+    }
+
+private:
+
+    /// The atoms of all leaf nodes, laid out contiguously and grouped by leaf node for cache-efficient
+    /// queries. This is the only per-atom storage retained after construction.
+    std::vector<SortedAtom> _sortedAtoms;
+
+    /// Maps an original input particle index to the corresponding entry in _sortedAtoms.
+    /// Used by particlePos(). Sized to the total input particle count; entries for particles that were
+    /// not inserted into the tree (e.g. unselected ones) are left at the invalid-marker value.
+    std::vector<size_t> _originalToSorted;
+
+    /// The total number of input particles the finder was constructed for (selected and unselected).
+    size_t _particleCount = 0;
+
+    /// Simulation cell.
+    SimulationCellData _simCell;
+
+    /// The squared lengths of the simulation cell vectors.
+    FloatType _cellVectorLengthsSquared[3];
+
+    /// The normal vectors of the three cell planes.
+    Vector3 _planeNormals[3];
+
+    /// Used to allocate instances of TreeNode.
+    MemoryPool<TreeNode> _nodePool;
+
+    /// The root node of the binary tree.
+    TreeNode* _root;
+
+    /// The number of neighbors to finds for each atom.
+    int _numNeighbors;
+
+    /// The maximum number of particles per leaf node.
+    int _bucketSize;
+
+    /// List of pbc image shift vectors.
+    std::vector<Vector3> _pbcImages;
+
+    /// The number of leaf nodes in the tree.
+    int _numLeafNodes = 0;
+
+    /// The maximum depth of this binary tree.
+    int _maxTreeDepth = 1;
+};
+
+}   // End of namespace

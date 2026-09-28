@@ -1,0 +1,20 @@
+<!DOCTYPE RCC><RCC version="1.0">
+
+<qresource prefix="/gui">
+
+	<file>mainwin/command_panel/about_panel.html</file>
+	<file>mainwin/command_panel/about_panel_no_updates.html</file>
+
+	<file>mainwin/process-stop-16.png</file>
+	<file>mainwin/process-stop-16@2x.png</file>
+	<file>mainwin/process-stop-22.png</file>
+
+	<file>mainwin/settings/vertical_axis_x.png</file>
+	<file>mainwin/settings/vertical_axis_y.png</file>
+	<file>mainwin/settings/vertical_axis_z.png</file>
+
+	<file>mainwin/inspector/waiting.gif</file>
+
+</qresource>
+
+</RCC>

@@ -1,0 +1,451 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/core/Core.h>
+#include <ovito/core/dataset/animation/TimeInterval.h>
+#include <ovito/core/oo/RefMaker.h>
+#include <ovito/core/dataset/pipeline/PipelineStatus.h>
+#include <ovito/core/dataset/data/DataObject.h>
+#include <ovito/core/dataset/data/DataObjectReference.h>
+#include <ovito/core/oo/CloneHelper.h>
+
+namespace Ovito {
+
+/**
+ * \brief This data structure holds the list of data objects that flows down a data pipeline.
+ */
+class OVITO_CORE_EXPORT DataCollection : public DataObject
+{
+    OVITO_CLASS(DataCollection)
+
+public:
+
+    /// Discards all content of this data collection.
+    void clear() { _objects.clear(this, PROPERTY_FIELD(objects)); }
+
+    /// Tests if the given object is part of this collection (only at the root-level).
+    bool contains(const DataObject* obj) const;
+
+    /// Adds an additional root-level data object to this collection.
+    /// The object must not already be part of the collection.
+    void addObject(DataOORef<const DataObject> obj);
+
+    /// Inserts an additional root-level data object into this collection.
+    /// The object must not already be part of the collection.
+    void insertObject(qsizetype index, DataOORef<const DataObject> obj);
+
+    /// Removes a root-level data object from this collection. The object must exist in the collection.
+    void removeObject(const DataObject* obj) { replaceObject(obj, nullptr); }
+
+    /// Removes a root-level data object from this collection.
+    void removeObjectByIndex(qsizetype index);
+
+    /// Replaces a root-level data object in this collection with a different one.
+    /// If the new object is a nullptr, the old object is simply removed from the collection.
+    bool replaceObject(const DataObject* oldObj, const DataObject* newObj);
+
+    /// Returns the i-th object from the data collection.
+    const DataObject* getObject(qsizetype index) const {
+        OVITO_ASSERT(index >= 0 && index < _objects.size());
+        return objects()[index].get();
+    }
+
+    /// Calls the given visitor function for each root-level data object in this collection.
+    template<typename DataObjectClass, typename Visitor>
+    void visitObjectsOfType(Visitor&& visitor) const {
+        // Note: using index-based access, because the visitor may modify the collection.
+        for(qsizetype i = 0; i < objects().size(); i++) {
+            if(const DataObjectClass* obj = dynamic_object_cast<DataObjectClass>(getObject(i))) {
+                visitor(obj);
+            }
+        }
+    }
+
+    /// Finds the first root-level object of the given class type in this collection.
+    /// Return nullptr if not found.
+    const DataObject* getObject(const DataObject::OOMetaClass& objectClass) const;
+
+    /// Finds the first root-level object of the given class type in this collection.
+    /// Return nullptr if not found.
+    template<class DataObjectClass>
+    const DataObjectClass* getObject() const {
+        return static_object_cast<DataObjectClass>(getObject(DataObjectClass::OOClass()));
+    }
+
+    /// Finds the first root-level object of the given type in this collection.
+    /// If it exists, makes the data object mutable; otherwise, returns nullptr.
+    template<class DataObjectClass>
+    DataObjectClass* getMutableObject() {
+        if(const DataObjectClass* obj = getObject<DataObjectClass>())
+            return makeMutable<DataObjectClass>(obj);
+        return nullptr;
+    }
+
+    /// Determines whether at least one root-level object of the given class type exists in this collection.
+    template<class DataObjectClass>
+    bool containsObject() const {
+        return getObject(DataObjectClass::OOClass()) != nullptr;
+    }
+
+    /// Throws an exception if the input does not contain a data object of the given type.
+    const DataObject* expectObject(const DataObject::OOMetaClass& objectClass) const;
+
+    /// Throws an exception if the input does not contain a data object of the given type.
+    template<class DataObjectClass>
+    const DataObjectClass* expectObject() const {
+        return static_object_cast<DataObjectClass>(expectObject(DataObjectClass::OOClass()));
+    }
+
+    /// Throws an exception if the input does not contain a data object of the given type.
+    DataObject* expectMutableObject(const DataObject::OOMetaClass& objectClass) {
+        return makeMutable(expectObject(objectClass));
+    }
+
+    /// Throws an exception if the input does not contain a data object of the given type.
+    template<class DataObjectClass>
+    DataObjectClass* expectMutableObject() {
+        return static_object_cast<DataObjectClass>(expectMutableObject(DataObjectClass::OOClass()));
+    }
+
+    /// Finds an object of the given type in the list of data objects stored in this collection
+    /// or among any of their sub-objects.
+    bool containsObjectRecursive(const DataObject::OOMetaClass& objectClass) const {
+        for(const DataObject* obj : objects()) {
+            if(containsObjectRecursiveImpl(obj, objectClass))
+                return true;
+        }
+        return false;
+    }
+
+    /// Finds all objects of the given type in this collection (also searching among sub-objects).
+    /// Returns them as a list of object paths.
+    std::vector<ConstDataObjectPath> getObjectsRecursive(const DataObject::OOMetaClass& objectClass) const {
+        std::vector<ConstDataObjectPath> result;
+        ConstDataObjectPath path(1);
+        for(const DataObject* obj : objects()) {
+            OVITO_ASSERT(path.size() == 1);
+            path[0] = obj;
+            getObjectsRecursiveImpl(path, objectClass, result);
+        }
+        return result;
+    }
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    ConstDataObjectPath getObject(const DataObject::OOMetaClass& objectClass, const QStringView pathString) const;
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    ConstDataObjectPath getObject(const DataObjectReference& dataRef) const {
+        OVITO_ASSERT(dataRef);
+        return getObject(*dataRef.dataClass(), dataRef.dataPath());
+    }
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    template<class DataObjectClass>
+    ConstDataObjectPath getObject(const QStringView pathString) const { return getObject(DataObjectClass::OOClass(), pathString); }
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    template<class DataObjectClass>
+    ConstDataObjectPath getObject(const TypedDataObjectReference<DataObjectClass>& dataRef) const {
+        OVITO_ASSERT(dataRef);
+        OVITO_ASSERT(dataRef.dataClass()->isDerivedFrom(DataObjectClass::OOClass()));
+        return getObject(*dataRef.dataClass(), dataRef.dataPath());
+    }
+
+    /// Throws an exception if the input does not contain any a data object of the given type and under the given hierarchy path.
+    ConstDataObjectPath expectObject(const DataObject::OOMetaClass& objectClass, const QStringView pathString) const;
+
+    /// Throws an exception if the input does not contain any a data object of the given type and under the given hierarchy path.
+    ConstDataObjectPath expectObject(const DataObjectReference& dataRef) const {
+        OVITO_ASSERT(dataRef);
+        return expectObject(*dataRef.dataClass(), dataRef.dataPath());
+    }
+
+    /// Throws an exception if the input does not contain any a data object of the given type and under the given hierarchy path.
+    template<class DataObjectClass>
+    ConstDataObjectPath expectObject(const QStringView pathString) const { return expectObject(DataObjectClass::OOClass(), pathString); }
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    template<class DataObjectClass>
+    ConstDataObjectPath expectObject(const TypedDataObjectReference<DataObjectClass>& dataRef) const {
+        OVITO_ASSERT(dataRef);
+        OVITO_ASSERT(dataRef.dataClass()->isDerivedFrom(DataObjectClass::OOClass()));
+        return expectObject(*dataRef.dataClass(), dataRef.dataPath());
+    }
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    const DataObject* getLeafObject(const DataObject::OOMetaClass& objectClass, const QStringView pathString) const;
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    const DataObject* getLeafObject(const DataObjectReference& dataRef) const {
+        OVITO_ASSERT(dataRef);
+        return getLeafObject(*dataRef.dataClass(), dataRef.dataPath());
+    }
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    template<class DataObjectClass>
+    const DataObjectClass* getLeafObject(const TypedDataObjectReference<DataObjectClass>& dataRef) const {
+        OVITO_ASSERT(dataRef);
+        OVITO_ASSERT(dataRef.dataClass()->isDerivedFrom(DataObjectClass::OOClass()));
+        return static_object_cast<DataObjectClass>(getLeafObject(*dataRef.dataClass(), dataRef.dataPath()));
+    }
+
+    /// Throws an exception if the input does not contain a data object of the given type.
+    const DataObject* expectLeafObject(const DataObject::OOMetaClass& objectClass, const QStringView pathString) const;
+
+    /// Throws an exception if the input does not contain a data object of the given type.
+    const DataObject* expectLeafObject(const DataObjectReference& dataRef) const {
+        OVITO_ASSERT(dataRef);
+        return expectLeafObject(*dataRef.dataClass(), dataRef.dataPath());
+    }
+
+    /// Throws an exception if the input does not contain a data object of the given type.
+    template<class DataObjectClass>
+    const DataObjectClass* expectLeafObject(const TypedDataObjectReference<DataObjectClass>& dataRef) const {
+        OVITO_ASSERT(dataRef);
+        OVITO_ASSERT(dataRef.dataClass()->isDerivedFrom(DataObjectClass::OOClass()));
+        return static_object_cast<DataObjectClass>(expectLeafObject(*dataRef.dataClass(), dataRef.dataPath()));
+    }
+
+    /// Finds an object of the given type and with the given identifier in the list of data objects stored in this collection.
+    const DataObject* getObjectBy(const DataObject::OOMetaClass& objectClass, const PipelineNode* dataSource, const QStringView identifier) const;
+
+    /// Finds an object of the given type and with the given identifier in the list of data objects stored in this collection.
+    template<class DataObjectClass>
+    const DataObjectClass* getObjectBy(const PipelineNode* dataSource, const QStringView identifier) const {
+        return static_object_cast<DataObjectClass>(getObjectBy(DataObjectClass::OOClass(), dataSource, identifier));
+    }
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    /// Duplicates it, and all its parent objects, if needed so that it can be safely modified without unwanted side effects.
+    DataObjectPath getMutableObject(const DataObject::OOMetaClass& objectClass, const QStringView pathString);
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    /// Duplicates it, and all its parent objects, if needed so that it can be safely modified without unwanted side effects.
+    DataObjectPath getMutableObject(const DataObjectReference& dataRef) {
+        OVITO_ASSERT(dataRef);
+        return getMutableObject(*dataRef.dataClass(), dataRef.dataPath());
+    }
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    /// Duplicates it, and all its parent objects, if needed so that it can be safely modified without unwanted side effects.
+    template<class DataObjectClass>
+    DataObjectPath getMutableObject(const TypedDataObjectReference<DataObjectClass>& dataRef) {
+        OVITO_ASSERT(dataRef);
+        OVITO_ASSERT(dataRef.dataClass()->isDerivedFrom(DataObjectClass::OOClass()));
+        return getMutableObject(*dataRef.dataClass(), dataRef.dataPath());
+    }
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    DataObject* getMutableLeafObject(const DataObject::OOMetaClass& objectClass, const QStringView pathString);
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    DataObject* getMutableLeafObject(const DataObjectReference& dataRef) {
+        OVITO_ASSERT(dataRef);
+        return getMutableLeafObject(*dataRef.dataClass(), dataRef.dataPath());
+    }
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    template<class DataObjectClass>
+    DataObjectClass* getMutableLeafObject(const DataObject::OOMetaClass& objectClass, const QStringView pathString) {
+        OVITO_ASSERT(objectClass.isDerivedFrom(DataObjectClass::OOClass()));
+        return static_object_cast<DataObjectClass>(getMutableLeafObject(objectClass, pathString));
+    }
+
+    /// Finds an object of the given type and under the hierarchy path in this collection.
+    template<class DataObjectClass>
+    DataObjectClass* getMutableLeafObject(const TypedDataObjectReference<DataObjectClass>& dataRef) {
+        OVITO_ASSERT(dataRef);
+        return getMutableLeafObject<DataObjectClass>(*dataRef.dataClass(), dataRef.dataPath());
+    }
+
+    /// Throws an exception if the input does not contain a data object of the given type and under the given hierarchy path.
+    DataObjectPath expectMutableObject(const DataObject::OOMetaClass& objectClass, const QStringView pathString);
+
+    /// Throws an exception if the input does not contain a data object of the given type and under the given hierarchy path.
+    DataObjectPath expectMutableObject(const DataObjectReference& dataRef) {
+        OVITO_ASSERT(dataRef);
+        return expectMutableObject(*dataRef.dataClass(), dataRef.dataPath());
+    }
+
+    /// Throws an exception if the input does not contain a data object of the given type and under the given hierarchy path.
+    DataObject* expectMutableLeafObject(const DataObject::OOMetaClass& objectClass, const QStringView pathString);
+
+    /// Throws an exception if the input does not contain a data object of the given type and under the given hierarchy path.
+    DataObject* expectMutableLeafObject(const DataObjectReference& dataRef) {
+        OVITO_ASSERT(dataRef);
+        return expectMutableLeafObject(*dataRef.dataClass(), dataRef.dataPath());
+    }
+
+    /// Throws an exception if the input does not contain a data object of the given type and under the given hierarchy path.
+    template<class DataObjectClass>
+    DataObjectClass* expectMutableLeafObject(const DataObject::OOMetaClass& objectClass, const QStringView pathString) {
+        OVITO_ASSERT(objectClass.isDerivedFrom(DataObjectClass::OOClass()));
+        return static_object_cast<DataObjectClass>(expectMutableLeafObject(objectClass, pathString));
+    }
+
+    /// Throws an exception if the input does not contain a data object of the given type and under the given hierarchy path.
+    template<class DataObjectClass>
+    DataObjectClass* expectMutableLeafObject(const TypedDataObjectReference<DataObjectClass>& dataRef) {
+        OVITO_ASSERT(dataRef);
+        return expectMutableLeafObject<DataObjectClass>(*dataRef.dataClass(), dataRef.dataPath());
+    }
+
+    /// Ensures that a DataObject from this collection is not shared with others and is safe to modify.
+    DataObject* makeMutable(const DataObject* obj);
+
+    /// Ensures that a DataObject from this collection is not shared with others and is safe to modify.
+    template<class DataObjectClass>
+    DataObjectClass* makeMutable(const DataObjectClass* obj) {
+        return static_object_cast<DataObjectClass>(makeMutable(static_cast<const DataObject*>(obj)));
+    }
+
+    /// Ensures that a DataObject from this collection is not shared with others and is safe to modify.
+    DataObjectPath makeMutable(const ConstDataObjectPath& path);
+
+    /// Ensures that a DataObject from this collection is not shared with others and is safe to modify.
+    DataObjectPath makeMutable(const ConstDataObjectPath& path, CloneHelper& cloneHelper);
+
+    /// Returns true if this state object has no valid contents.
+    bool isEmpty() const { return objects().empty(); }
+
+    /// Returns the source frame number associated with this pipeline state.
+    /// If the data does not originate from a pipeline with a FileSource, returns -1.
+    int sourceFrame() const;
+
+    /// Instantiates a new data object, passes the given parameters to its class constructor,
+    /// assigns the given data source object, and finally inserts the data object into this collection.
+    template<class DataObjectType, typename... Args>
+    DataObjectType* createObject(OOWeakRef<const PipelineNode> createdByNode, Args&&... args) {
+        DataOORef<DataObjectType> obj = DataOORef<DataObjectType>::create(std::forward<Args>(args)...);
+        obj->setCreatedByNode(std::move(createdByNode));
+        DataObjectType* ptr = obj.get();
+        addObject(std::move(obj));
+        return ptr;
+    }
+
+    /// Instantiates a new data object, passes the given parameters to its class constructor,
+    /// assign a unique identifier to the object, assigns the given data source object, and
+    /// finally inserts the data object into this collection.
+    template<class DataObjectType, typename... Args>
+    DataObjectType* createObject(const QStringView baseName, OOWeakRef<const PipelineNode> createdByNode, Args&&... args) {
+        DataObjectType* obj = createObject<DataObjectType, Args...>(std::move(createdByNode), std::forward<Args>(args)...);
+        OVITO_ASSERT(!baseName.isEmpty());
+        obj->setIdentifier(generateUniqueIdentifier<DataObjectType>(baseName));
+        return obj;
+    }
+
+    /// Instantiates a new data object, passes the given parameters to its class constructor,
+    /// assign a unique identifier to the object, assigns the given data source object and visual element, and
+    /// finally inserts the data object into this collection.
+    template<class DataObjectType, typename... Args>
+    DataObjectType* createObjectWithVis(const QStringView baseName, OOWeakRef<const PipelineNode> createdByNode, DataVis* visElement, Args&&... args) {
+        DataObjectType* obj = createObject<DataObjectType>(baseName, std::move(createdByNode), ObjectInitializationFlag::DontCreateVisElement, std::forward<Args>(args)...);
+        obj->setVisElement(visElement);
+        return obj;
+    }
+
+    /// Instantiates a new data object, passes the given parameters to its class constructor,
+    /// assigns the pipeline creator node and visual element, and
+    /// finally inserts the data object into this data collection.
+    template<class DataObjectType, typename... Args>
+    DataObjectType* createObjectWithVis(OOWeakRef<const PipelineNode> createdByNode, DataVis* visElement, Args&&... args) {
+        DataObjectType* obj = createObject<DataObjectType>(std::move(createdByNode), ObjectInitializationFlag::DontCreateVisElement, std::forward<Args>(args)...);
+        obj->setVisElement(visElement);
+        return obj;
+    }
+
+    /// Adds a data object to this collection while making sure the object gets a unique identifier.
+    template<class DataObjectType>
+    void addObjectWithUniqueId(DataOORef<const DataObjectType> obj) {
+        OVITO_ASSERT(obj);
+        OVITO_ASSERT(!obj->identifier().isEmpty());
+        QString uniqueId = generateUniqueIdentifier<DataObjectType>(obj->identifier());
+        if(uniqueId == obj->identifier()) {
+            addObject(std::move(obj));
+        }
+        else {
+            DataOORef<DataObjectType> clone = DataOORef<DataObjectType>::makeCopy(obj);
+            clone->setIdentifier(std::move(uniqueId));
+            addObject(std::move(clone));
+        }
+    }
+
+    /// Builds a list of the global attributes stored in this pipeline state.
+    QVariantMap buildAttributesMap() const;
+
+    /// Looks up the value for the given global attribute.
+    /// Returns a given default value if the attribute is not defined in this pipeline state.
+    QVariant getAttributeValue(const QStringView attrName, const QVariant& defaultValue = QVariant()) const;
+
+    /// Looks up the value for the global attribute with the given base name and creator.
+    /// Returns a given default value if the attribute is not defined in this pipeline state.
+    QVariant getAttributeValue(const PipelineNode* createdByNode, const QStringView attrBaseName, const QVariant& defaultValue = QVariant()) const;
+
+    /// Inserts a new global attribute into the pipeline state.
+    AttributeDataObject* addAttribute(const QStringView key, QVariant value, OOWeakRef<const PipelineNode> createdByNode);
+
+    /// Inserts a new global attribute into the pipeline state overwriting any existing attribute with the same name.
+    AttributeDataObject* setAttribute(const QStringView key, QVariant value, OOWeakRef<const PipelineNode> createdByNode);
+
+    /// Copies all global attribute created by the given pipeline node over to this data collection.
+    void adoptAttributesFrom(const DataCollection& other, const OOWeakRef<const PipelineNode>& createdByNode);
+
+    /// Returns a new unique data object identifier that does not collide with the
+    /// identifiers of any existing data object of the given type in the same data
+    /// collection.
+    QString generateUniqueIdentifier(const QStringView baseName, const OvitoClass& dataObjectClass) const;
+
+    /// Returns a new unique data object identifier that does not collide with the
+    /// identifiers of any existing data object of the given type in the same data
+    /// collection.
+    template<class DataObjectClass>
+    QString generateUniqueIdentifier(const QStringView baseName) const {
+        return generateUniqueIdentifier(baseName, DataObjectClass::OOClass());
+    }
+
+private:
+
+    /// Part of the implementation of containsObjectRecursive().
+    static bool containsObjectRecursiveImpl(const DataObject* dataObj, const DataObject::OOMetaClass& objectClass);
+
+    /// Part of the implementation of getObjectsRecursive().
+    static void getObjectsRecursiveImpl(ConstDataObjectPath& path, const DataObject::OOMetaClass& objectClass, std::vector<ConstDataObjectPath>& results);
+
+    /// Implementation detail of getObject().
+    static bool getObjectImpl(const DataObject::OOMetaClass& objectClass, const QStringView pathString, ConstDataObjectPath& path);
+
+    /// Implementation detail of getLeafObject().
+    static const DataObject* getLeafObjectImpl(const DataObject::OOMetaClass& objectClass, const QStringView pathString, const DataObject* parent);
+
+private:
+
+    /// The list of root-level data objects in the collection.
+    DECLARE_MODIFIABLE_VECTOR_REFERENCE_FIELD(DataOORef<const DataObject>, objects, setObjects);
+};
+
+}   // End of namespace
+
+Q_DECLARE_METATYPE(Ovito::ConstDataObjectPath);
+Q_DECLARE_METATYPE(Ovito::DataObjectPath);

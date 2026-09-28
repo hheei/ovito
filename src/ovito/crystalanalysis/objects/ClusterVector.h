@@ -1,0 +1,122 @@
+////////////////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2026 OVITO GmbH, Germany
+//
+//  This file is part of OVITO (Open Visualization Tool).
+//
+//  OVITO is free software; you can redistribute it and/or modify it either under the
+//  terms of the GNU General Public License version 3 as published by the Free Software
+//  Foundation (the "GPL") or, at your option, under the terms of the MIT License.
+//  If you do not alter this notice, a recipient may use your version of this
+//  file under either the GPL or the MIT License.
+//
+//  You should have received a copy of the GPL along with this program in a
+//  file LICENSE.GPL.txt.  You should have received a copy of the MIT License along
+//  with this program in a file LICENSE.MIT.txt
+//
+//  This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND,
+//  either express or implied. See the GPL or the MIT License for the specific language
+//  governing rights and limitations.
+//
+////////////////////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+
+#include <ovito/crystalanalysis/CrystalAnalysis.h>
+#include "Cluster.h"
+#include "ClusterGraph.h"
+
+namespace Ovito {
+
+/// Two lattice space vectors are considered equal if they don't differ by more than this value.
+#define CA_LATTICE_VECTOR_EPSILON                   1e-3f
+
+/// Two world-space vectors are considered equal if they don't differ by more than this value.
+#define CA_ATOM_VECTOR_EPSILON                      1e-4f
+
+/**
+ * A Cartesian vector in the stress-free reference configuration of a cluster.
+ *
+ * Each reference configuration vector is associated with a cluster,
+ * which determines the local frame of reference the vector is expressed in.
+ *
+ * The only exception is the vector (0,0,0), which doesn't need to be associated
+ * with a specific frame of reference.
+ */
+class OVITO_CRYSTALANALYSIS_EXPORT ClusterVector
+{
+public:
+
+    using VecType = Ovito::Vector3F;  ///< Type alias for a 3D vector.
+
+    /// Default constructur, initializes the vector to the null vector (0,0,0).
+    ClusterVector() = default;
+
+    /// Initializes the vector to the null vector (0,0,0).
+    /// All three components are set to zero. Optionally, a cluster may be associated with the vector,
+    /// which determines the frame of reference.
+    ClusterVector(VecType::Zero NULL_VECTOR, Cluster* cluster = nullptr) : _vec(NULL_VECTOR), _cluster(cluster) {}
+
+    /// Initializes the cluster vector to the given Cartesian vector, which is expressed in the frame of
+    /// reference of the given cluster.
+    explicit ClusterVector(const VecType& vec, Cluster* cluster) : _vec(vec), _cluster(cluster) {}
+
+    /// Returns the XYZ components of the vector expressed in the local coordinate system of the associated cluster.
+    const VecType& localVec() const { return _vec; }
+
+    /// Returns a reference to the XYZ components of the vector expressed in the local coordinate system of the associated cluster.
+    VecType& localVec() { return _vec; }
+
+    /// Returns the cluster that provides the local frame of reference this reference configuration vector is expressed in.
+    Cluster* cluster() const { return _cluster; }
+
+    /// Returns the inverse of the vector.
+    ClusterVector operator-() const {
+        return ClusterVector(-localVec(), cluster());
+    }
+
+    /// Transforms the cluster vector to a spatial vector using the orientation matrix of the cluster.
+    Vector3 toSpatialVector() const {
+        OVITO_ASSERT(cluster() != nullptr);
+        return (cluster()->orientation * localVec()).toDataType<FloatType>();
+    }
+
+    /// Translates this lattice vector to the frame of reference of another cluster.
+    /// Returns true if operation was successful.
+    /// Returns false if the transformation could not be computed because the two clusters are not connected.
+    bool transformToCluster(Cluster* otherCluster, ClusterGraph& graph) {
+        OVITO_ASSERT(otherCluster != nullptr);
+        OVITO_ASSERT(this->cluster() != nullptr);
+        if(this->cluster() == otherCluster)
+            return true;
+        ClusterTransition* t = graph.determineClusterTransition(this->cluster(), otherCluster);
+        if(!t)
+            return false;
+        this->_vec = t->tm * this->localVec();
+        this->_cluster = otherCluster;
+        return true;
+    }
+
+    /// Equal comparison operator.
+    bool operator==(const ClusterVector& other) const { return _vec == other._vec && _cluster == other._cluster; }
+
+    /// Not-equal comparison operator.
+    bool operator!=(const ClusterVector& other) const { return !(*this == other); }
+
+    /// Prints a cluster vector to an output stream.
+    friend inline std::ostream& operator<<(std::ostream& stream, const ClusterVector& v) {
+        return stream << v.localVec() << "[cluster " << v.cluster()->id << "]";
+    }
+
+private:
+
+    /// The XYZ components of the vector in the local lattice coordinate system.
+    VecType _vec = VecType::Zero();
+
+    /// The cluster which serves as the frame of reference for this vector.
+    /// This may be NULL if the vector's components are (0,0,0).
+    Cluster* _cluster = nullptr;
+};
+
+}   // End of namespace
