@@ -4,7 +4,9 @@
 >
 > **Guiding Principle**: Validate high risks first, interaction parity before redesign
 >
-> **Status**: Proposed Roadmap; Phase 0 audit (partially) and Phase 1 rendering spike executed, see
+> **Status**: Proposed Roadmap; Phase 0 audit (partially), Phase 1 rendering spike and Phase 2 deliverables 1–4
+> executed — the frontend selection (`--gui=qml`), the shared `gui/base` workbench base class and the layout-derived
+> workbench shell with undoable splitter drags are in the tree and verified on Linux/OpenGL, see
 > [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) and [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md)
 >
 > **Design Contract**: [UI_DESIGN.md](UI_DESIGN.md)

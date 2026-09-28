@@ -119,6 +119,20 @@ To *see* what such a run rendered, grab the X11 display with ffmpeg instead of a
 DISPLAY=:99 ffmpeg -y -f x11grab -video_size 1280x800 -i :99 -frames:v 1 /tmp/workbench.png
 ```
 
+The full recipe for a verified screenshot of the Qt Quick workbench (used for the evidence files in this directory):
+
+```bash
+Xvfb :77 -screen 0 1400x900x24 &                  # a private display, so the grab cannot catch another window
+sleep 2
+DISPLAY=:77 QT_QPA_PLATFORM=xcb ./build-native/bin/ovito-qml-spike --qml-window-size 1280x800 \
+    --qml-startup-delay 1500 --qml-frame-stats 1500 --qml-layout-check --qml-pick 300,300 \
+    --qml-hold-ms 8000 /tmp/lattice_512.xyz > /tmp/evidence.log 2>&1 &
+until grep -q VERIFICATION_DONE /tmp/evidence.log; do sleep 1; done
+sleep 1
+ffmpeg -loglevel error -f x11grab -video_size 1400x900 -i :77 -frames:v 1 -y evidence.png
+pkill -x Xvfb
+```
+
 Traps encountered here, in order of how much time they cost:
 
 * **A startup error in app mode opens a modal dialog.** `GuiApplication::reportError()` displays an application-modal
@@ -134,8 +148,13 @@ Traps encountered here, in order of how much time they cost:
   there is no `xdotool`/`xte` installed to dismiss them. What can be verified is that the classic window starts, that
   `--nogui` works, and that the classic import path compiles and runs the shared `WorkbenchUI::importFiles()` code (the
   dialog that appears *is* the `inspectImporterFiles()` hook being reached).
-* The spike's `QQuickWindow::grabWindow()` (section 9) remains the reliable way to capture the *viewport* pixels; the
-  ffmpeg grab captures the whole X11 screen including window decorations.
+* **`QQuickWindow::grabWindow()` cannot be used to screenshot the Qt Quick workbench.** With the `QQuickRhiItem`
+  viewports in the window, the grab repeated its own renderer's synchronize/render steps and came back empty, blank or
+  stale (the first scene-graph frame instead of the current one), and in roughly half of the runs it *crashed* inside
+  `QCoreApplicationPrivate::notify_helper` — i.e. while Qt dispatched an event to a QML item whose graphics node was
+  being re-created by the grab. The in-process capture option of the spike was therefore removed. Screenshots are taken
+  from the X server instead: start the window on a *private* Xvfb display, let the spike hold it open with
+  `--qml-hold-ms` (it prints `VERIFICATION_DONE` when the checks are done), and grab that display with ffmpeg.
 
 ## 3. Classic frontend in a headless environment
 
@@ -497,6 +516,12 @@ silent-empty-scene trap of §3.1: it must be ≥ 1.
   viewport item can shrink to a few hundred logical pixels, and a probe at `300,300` then measures `0 of 0 positions`
   and looks like a picking failure. The spike clamps its grid into the item and prints the position it used plus the item
   size, so a probe taken before and after a resize is comparable.
+* **Never destroy a viewport item from inside the code that creates it.** `QmlViewportController::createViewportItem()`
+  is called from QML while the scene rebuilds its pane delegates, and the pane that asked for the item may be destroyed
+  a moment later. Replacing an item with `delete` there crashed the process while the item was handling a mouse event;
+  both replacement paths now use `deleteLater()`, and every pane delegate owns its own item. Corollary for tests: after
+  a click or a drag that changes the layout, look up the viewport item again instead of reusing a pointer captured before
+  the interaction — the spike did that and crashed in the same way.
 * **Two probes at the same position must agree.** The picking buffer is rendered asynchronously, so a probe taken right
   after a change answers from the previous buffer; if the probes before and after the picking pass disagree (19/25 versus
   13/25 was the symptom), that is a defect in the buffer bookkeeping, not a measurement artefact - it is how the missing
@@ -511,5 +536,6 @@ silent-empty-scene trap of §3.1: it must be ≥ 1.
 5. Lifecycle: `--qml-lifecycle-cycles N`, `--qml-hide-show`, `--qml-resize WxH`.
 6. Frame rate: `--qml-frame-stats MS` (state vsync and the render loop; only compare equal configurations).
 7. Non-Linux validation: run the same commands on the macOS host (§5) — and **close the windows afterwards** (§5.3).
-8. Windows/D3D12 and further macOS coverage: push the work to a `feature/**` branch and read the CI smoke-test
-   artifacts and logs (§6).
+8. Screenshots: `--qml-hold-ms` + a private `Xvfb` display + `ffmpeg -f x11grab` (§2.2); never `grabWindow()` (§9).
+9. Windows/D3D12 and further macOS coverage: push the work to a `feature/**` branch and read the CI smoke-test logs
+   (§6). The CI smoke test verifies numerically (frame statistics, picking, layout) and uploads no screenshot.

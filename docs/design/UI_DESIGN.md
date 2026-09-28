@@ -10,8 +10,9 @@
 > the Linux/OpenGL, Linux/Vulkan and macOS/Metal backends, with a measured performance baseline against the classic
 > frontend (see [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md) and [UI_TEST_ENV.md](UI_TEST_ENV.md)); the Windows/D3D12 target
 > and a hardware-driver Vulkan run remain unverified. The frontend selection (`--gui=qml`) and the shared `gui/base`
-> workbench base class are implemented; the workbench shell, the import UI and the remaining Phase 2 deliverables are
-> scoped in [UI_PLAN.md](UI_PLAN.md)
+> workbench base class are implemented, and the workbench shell derives its panes from the viewport layout tree, with
+> draggable splitters, undoable pane resizing and maximizing (Phase 2 deliverables 1–4, verified on Linux/OpenGL). The
+> import UI and the remaining Phase 2 deliverables are scoped in [UI_PLAN.md](UI_PLAN.md)
 >
 > **Execution Plan**: [UI_PLAN.md](UI_PLAN.md)
 
