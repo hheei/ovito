@@ -274,7 +274,10 @@ jobs:
           # netcdf-c[netcdf-4] pulls the HDF5 high-level library it needs. Naming "core" first disables its
           # default features dap and nczarr, which would otherwise build curl for remote access OVITO
           # does not use.
-          vcpkg install boost-headers:x64-windows "hdf5[hl]:x64-windows" "netcdf-c[core,netcdf-4]:x64-windows"
+          # Same set of third-party libraries the Linux and macOS jobs get from their package managers:
+          # Boost headers (geogram), HDF5 with its high-level library and NetCDF-C (the particle file
+          # formats) and SQLite3 (the particles plugin).
+          vcpkg install boost-headers:x64-windows "hdf5[hl]:x64-windows" "netcdf-c[core,netcdf-4]:x64-windows" sqlite3:x64-windows
           # vcpkg installs into the vcpkg root, which is a machine-level environment variable of the runner image
           # and therefore not part of the Actions env context. Export the paths explicitly for the later steps.
           $root = if($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:\vcpkg" }

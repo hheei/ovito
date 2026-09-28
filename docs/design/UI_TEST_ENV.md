@@ -291,15 +291,30 @@ check fails, so the step is an assertion instead of a log to grep. The screensho
 Prerequisites that the runner images do **not** provide and that the workflow installs, each of which fails the job loudly
 if missing:
 
+> **Find this list locally instead of one CI round trip per missing package.** Configure the same option set on the
+development machine and read its package lines: `cmake -S . -B /tmp/cfgprobe -G Ninja -DOVITO_BUILD_APP=ON
+-DOVITO_BUILD_QML_FRONTEND=ON -DCMAKE_PREFIX_PATH=<Qt> > /tmp/cfgprobe.log` then `grep -E "^-- Found |^-- Could NOT find"
+/tmp/cfgprobe.log`. What is *required* here is required on every platform (only `XKB`/`OpenGL` are Linux-specific, and
+`FFMPEG`/`WrapVulkanHeaders` are optional); what the runner lacks is exactly what its package manager does not install.
+Three Windows dependency failures in a row (`Boost`, then `HDF5`, then `SQLite3`, then the zlib runtime library) came
+from skipping this step.
+
 * **Boost headers** on Windows (`vcpkg install boost-headers:x64-windows`, passed as `-DBOOST_ROOT=...`): geogram requires
   them, and the failure surfaces during configure as `Could NOT find Boost (missing: Boost_INCLUDE_DIR)`.
-* **HDF5 + NetCDF-C** on Windows (`vcpkg install "hdf5[hl]:x64-windows" "netcdf-c[netcdf-4]:x64-windows"` plus
+* **HDF5 + NetCDF-C** on Windows (`vcpkg install "hdf5[hl]:x64-windows" "netcdf-c[core,netcdf-4]:x64-windows"` plus
   `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`): the Particles plugin's `netcdf_integration` module
   needs them, and only `OVITO_REDISTRIBUTABLE_PACKAGE`/`OVITO_BUILD_PYPI` builds take them from the bundled submodules.
   Without them configure fails with `Could NOT find HDF5 (missing: HDF5_LIBRARIES HDF5_INCLUDE_DIRS HDF5_HL_LIBRARIES C HL)`.
   The Linux jobs get the equivalent from `libhdf5-dev`/`libnetcdf-dev`, the macOS job from `brew`, and the Windows runner
-  image provides neither. `netcdf-c[netcdf-4]` is enough: requesting the default features would pull `dap`/`nczarr` and build
-  curl for remote access that OVITO does not use.
+  image provides neither. Spell the port as `netcdf-c[core,netcdf-4]`: `netcdf-c[netcdf-4]` alone *adds* the feature to the
+  default features, which pull `dap`/`nczarr` and build curl for remote access that OVITO does not use.
+* **A matching zlib runtime library on Windows**: OVITO deploys the runtime DLLs of its dependencies into the build tree,
+  and it used to assume that zlib's DLL is `bin/zlib.dll` next to `lib/zlib.lib` (the conda layout). A vcpkg tree names the
+  import library `z.lib` (upstream zlib sets the shared target's `OUTPUT_NAME` to `z`) and the DLL `z.dll`, so configure
+  failed with `Did not find any library files that match the file path .../bin/zlib.dll`. It now derives the DLL name from
+  the import library `ZLIB::ZLIB` points at and prints the runtime libraries that are actually present when it finds none.
+* **SQLite3** on Windows (`vcpkg install sqlite3:x64-windows`): the particles plugin links it, and configure fails with
+  `Could NOT find SQLite3 (missing: SQLite3_INCLUDE_DIR SQLite3_LIBRARY)`. The Linux and macOS images ship it.
 * **`dxc` on Windows**: `qsb` precompiles the HLSL shaders to DXIL, and OVITO turns a missing `dxc` into a `FATAL_ERROR`
   at configure time. The Windows SDK ships `dxc.exe` under `Windows Kits\10\bin\<version>\x64`; the workflow adds that
   directory to `GITHUB_PATH` and falls back to the `Microsoft.Direct3D.DXC` NuGet package.
