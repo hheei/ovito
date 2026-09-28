@@ -232,7 +232,7 @@ The `buddy` host has a `Windows 11.pvm` virtual machine, but it is not a usable 
 * Parallels Desktop on Apple Silicon exposes **DirectX 11.1** at most — there is no D3D12 support in the guest.
 * The guest is Windows 11 **ARM64**, while OVITO's Windows target is **AMD64/x86_64**.
 
-So a D3D12 smoke test needs an x86_64 Windows runner. Qt Quick's D3D12 backend supports the **WARP** software adapter
+So a D3D12 smoke test needs an x86_64 Windows runner; section 6 describes the CI job that provides one. Qt Quick's D3D12 backend supports the **WARP** software adapter
 (`QSG_RHI_PREFER_SOFTWARE_RENDERER=1`), and OVITO's render thread creates its D3D12 device with default
 `QRhiD3D12InitParams`, which falls back to the DXGI default adapter (WARP on a GPU-less machine) — i.e. a CPU-only CI runner
 can exercise the D3D12 code paths, the same way lavapipe covers Vulkan on Linux. Prerequisites for such a job: a Qt 6.10
@@ -243,7 +243,40 @@ way (section 3.1) — that trap applies to every platform.
 
 ---
 
-## 6. Temporary benchmark instrumentation (never commit)
+## 6. Continuous integration as a test host (all four target platforms)
+
+The GitHub workflow `.github/workflows/ci.yml` builds and smoke tests the Qt Quick frontend on the four target platforms,
+which is the only way to cover **Windows/D3D12** and a second macOS/Metal host without owning that hardware. Each job
+configures with `-DOVITO_BUILD_QML_FRONTEND=ON`, builds `OvitoQmlSpike` and runs it against a generated 512-atom lattice
+with `--qml-pick`, `--qml-lifecycle-cycles`, `--qml-hide-show` and `--qml-frame-stats`; the spike exits non-zero when a
+check fails, so the step is an assertion instead of a log to grep. The screenshots are uploaded as build artifacts.
+
+| Job | Qt Quick backend | OVITO picking backend | Display |
+|-----|------------------|------------------------|---------|
+| Linux x86_64 | OpenGL (llvmpipe) | Vulkan (lavapipe via `VK_DRIVER_FILES`) | `xvfb-run` + `QT_QPA_PLATFORM=xcb` |
+| Linux ARM64 | OpenGL (llvmpipe) | Vulkan (lavapipe) | same |
+| macOS ARM64 | Metal | Metal | the runner's own session |
+| Windows AMD64 | **D3D12 on WARP** (`QSG_RHI_BACKEND=d3d12`, `QSG_RHI_PREFER_SOFTWARE_RENDERER=1`) | D3D12 on WARP (D3D11 fallback) | the runner's own session |
+
+Prerequisites that the runner images do **not** provide and that the workflow installs, each of which fails the job loudly
+if missing:
+
+* **Boost headers** on Windows (`vcpkg install boost-headers:x64-windows`, passed as `-DBOOST_ROOT=...`): geogram requires
+  them, and the failure surfaces during configure as `Could NOT find Boost (missing: Boost_INCLUDE_DIR)`.
+* **`dxc` on Windows**: `qsb` precompiles the HLSL shaders to DXIL, and OVITO turns a missing `dxc` into a `FATAL_ERROR`
+  at configure time. The Windows SDK ships `dxc.exe` under `Windows Kits\10\bin\<version>\x64`; the workflow adds that
+  directory to `GITHUB_PATH` and falls back to the `Microsoft.Direct3D.DXC` NuGet package.
+* **lavapipe on Linux**: OVITO's offscreen picking `RenderThread` uses Vulkan on Linux and needs a usable ICD on a GPU-less
+  runner (`mesa-vulkan-drivers`, `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json`). This works because an offscreen
+  instance needs no surface — the classic frontend, which presents to X11, cannot use lavapipe this way (section 3).
+
+Note that a *compiler version* difference between a CI runner and the development machine can fail the build for reasons
+unrelated to the frontend: the macOS job was failing on `static_assert(false, ...)` in `DataBuffer.h` because Apple clang 15
+predates the C++23 resolution of CWG 2518. When a build works locally but fails in CI, compare the compiler versions first.
+
+---
+
+## 7. Temporary benchmark instrumentation (never commit)
 
 The classic frontend and the render thread expose no frame-time counters, and on macOS vsync makes "how many frames per
 second" the only externally visible number. For the Phase 1 comparison a temporary patch was applied locally (and
@@ -291,7 +324,7 @@ silent-empty-scene trap of §3.1: it must be ≥ 1.
 
 ---
 
-## 7. Measuring frame rates of the Qt Quick frontend
+## 8. Measuring frame rates of the Qt Quick frontend
 
 * The spike drives its own frame loop: `--qml-frame-stats <ms>` counts `QQuickWindow::frameSwapped` signals while asking
   OVITO for a new frame graph on every presented frame (like animation playback does). The requests are issued through a
@@ -308,7 +341,7 @@ silent-empty-scene trap of §3.1: it must be ≥ 1.
 
 ---
 
-## 8. QML viewport (Qt Quick frontend) specifics
+## 9. QML viewport (Qt Quick frontend) specifics
 
 * **Bundle rpath on macOS**: an app-bundle executable resolves plugins through `@executable_path/../PlugIns/`, *not* through
   `@executable_path/../${OVITO_RELATIVE_PLUGINS_DIRECTORY}` — that variable is bundle-*root* relative (it already contains
@@ -329,7 +362,7 @@ silent-empty-scene trap of §3.1: it must be ≥ 1.
   13/25 was the symptom), that is a defect in the buffer bookkeeping, not a measurement artefact - it is how the missing
   buffer-size check of `QuickViewportWindow::pick()` was found.
 
-## 9. Quick checklist
+## 10. Quick checklist
 
 1. Build the frontend: `cmake --preset native -DOVITO_BUILD_QML_FRONTEND=ON && cmake --build --preset native -j 16`.
 2. Assertions: build `build-asserts` (§4) and run the same checks there; release builds hide lifecycle defects.
@@ -338,3 +371,5 @@ silent-empty-scene trap of §3.1: it must be ≥ 1.
 5. Lifecycle: `--qml-lifecycle-cycles N`, `--qml-hide-show`, `--qml-resize WxH`.
 6. Frame rate: `--qml-frame-stats MS` (state vsync and the render loop; only compare equal configurations).
 7. Non-Linux validation: run the same commands on the macOS host (§5) — and **close the windows afterwards** (§5.3).
+8. Windows/D3D12 and further macOS coverage: push the work to a `feature/**` branch and read the CI smoke-test
+   artifacts and logs (§6).

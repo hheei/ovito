@@ -290,7 +290,7 @@ playback does), four viewports, vsync disabled, software OpenGL unless noted:
 
 **Comparison with the classic frontend (macOS/Metal, same machine, same data sets).** The classic frontend exposes no
 frame-time counter, so a temporary instrumentation patch was applied locally and reverted afterwards (the exact diff is
-recorded in [UI_TEST_ENV.md](UI_TEST_ENV.md) section 6, which also explains why an unattended classic run is otherwise
+recorded in [UI_TEST_ENV.md](UI_TEST_ENV.md) section 7, which also explains why an unattended classic run is otherwise
 likely to measure an *empty* scene):
 
 | Frontend | Data set | Rendered surface | Frame rate |
