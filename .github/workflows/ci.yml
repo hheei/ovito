@@ -268,12 +268,6 @@ jobs:
           path: C:\Users\runneradmin\AppData\Local\vcpkg\archives
           key: vcpkg-x64-windows-boost-hdf5-netcdf-v1
 
-      - name: Report the vcpkg runtime layout (diagnostic)
-        shell: pwsh
-        run: |
-          $root = if($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:\vcpkg" }
-          Get-ChildItem "$root/installed/x64-windows/bin" -Filter "*.dll" | Select-Object -ExpandProperty Name
-
       - name: Install the Boost headers and the HDF5/NetCDF libraries
         shell: pwsh
         run: |
@@ -289,6 +283,12 @@ jobs:
 
       # Qt pre-compiles the HLSL shaders to DXIL with dxc, which must be on the PATH - and whose absence is a
       # fatal error at configure time (see src/ovito/core/CMakeLists.txt).
+      - name: Report the vcpkg runtime layout (diagnostic)
+        shell: pwsh
+        run: |
+          $root = if($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:\vcpkg" }
+          Get-ChildItem "$root/installed/x64-windows/bin" -Filter "*.dll" | Select-Object -ExpandProperty Name
+
       - name: Install the DirectX shader compiler (dxc)
         shell: pwsh
         run: |
