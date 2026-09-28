@@ -166,6 +166,13 @@ std::optional<ViewportWindow::PickResult> QuickViewportWindow::pick(const QPoint
     if(!_pickingBuffer.isValid())
         return std::nullopt;
 
+    // A picking buffer only describes the viewport contents it was rendered from. If the viewport has been
+    // resized since (a window resize or a layout pass), the buffer belongs to a different geometry and the
+    // position would be looked up in the wrong place, so no result is returned until the pass for the current
+    // size has been rendered.
+    if(_pickingBuffer.bufferSize() != viewportWindowDeviceSize())
+        return std::nullopt;
+
     // Convert the cursor position from logical to picking buffer (device pixel) coordinates.
     return _pickingBuffer.pick(pos * devicePixelRatio(), pickRadius);
 }
@@ -215,10 +222,10 @@ Future<ObjectPickingBuffer> QuickViewportWindow::renderPickingBuffer()
     if(!isVisible() || !viewport() || !sceneRenderer() || !hasUserInterface())
         co_return ObjectPickingBuffer();
 
-    // The picking pass must be rendered at the resolution of the interactive frame, because the object
-    // under a given pixel is determined by the projection and the viewport size.
-    const QSize bufferSize = viewportWindowDeviceSize();
-    if(bufferSize.isEmpty())
+    // The picking pass is rendered at the resolution of the interactive frame, because the object under a
+    // given pixel is determined by the projection and the viewport size. An empty size means that the item
+    // has not been laid out yet.
+    if(viewportWindowDeviceSize().isEmpty())
         co_return ObjectPickingBuffer();
 
     // Associate this task with the user interface and mark it as interactive. The picking pass is rendered
@@ -234,14 +241,23 @@ Future<ObjectPickingBuffer> QuickViewportWindow::renderPickingBuffer()
     if(!frameGraph)
         co_return ObjectPickingBuffer();
 
+    // The frame graph carries the projection computed from the viewport geometry at the time it was generated.
+    // If that geometry changed while the frame graph was being built (a window resize or a layout pass), the
+    // projection does not belong to the size the picking buffer is rendered at, and every pick result derived
+    // from the buffer would be shifted. Discard such a pass; the next pick request starts a new one.
+    const QSize currentSize = viewportWindowDeviceSize();
+    if(currentSize.isEmpty() ||
+       std::abs(frameGraph->projectionParams().aspectRatio - FloatType(currentSize.height()) / currentSize.width()) > FloatType(1e-6))
+        co_return ObjectPickingBuffer();
+
     std::shared_ptr<RenderThread> renderThread = ui().renderThread();
     if(!renderThread)
         co_return ObjectPickingBuffer();
 
     // (Re-)create the offscreen render target that receives the picking buffers when the size changed.
-    if(!_pickingTarget || _pickingTargetSize != bufferSize) {
-        _pickingTarget.emplace(renderThread->createOffscreenTarget(bufferSize, /*forPickingOnly=*/true));
-        _pickingTargetSize = bufferSize;
+    if(!_pickingTarget || _pickingTargetSize != currentSize) {
+        _pickingTarget.emplace(renderThread->createOffscreenTarget(currentSize, /*forPickingOnly=*/true));
+        _pickingTargetSize = currentSize;
     }
 
     auto rendererConfig = sceneRenderer()->createConfiguration(*frameGraph);

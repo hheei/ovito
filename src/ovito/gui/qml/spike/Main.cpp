@@ -80,16 +80,25 @@ struct PickProbe
 {
     int tested = 0;
     int hits = 0;
+    QPoint center;       ///< The probe location the grid was actually centered on.
+    QSizeF itemSize;     ///< The item size the probe was clipped to.
     std::optional<ViewportWindow::PickResult> example;
 };
 
-/// Picks at a grid of positions around the given location of a viewport item.
+/// Picks at a grid of positions around the given location of a viewport item. The grid is moved into the item
+/// when the requested location lies outside of it, so that a probe always covers the viewport - including after
+/// the item geometry changed.
 PickProbe probePicking(QuickViewportWindow* viewportWindow, const QSizeF& itemSize, const QPoint& center, int extent = 8, int spacing = 4)
 {
     PickProbe probe;
+    const int marginX = qMin(int(extent), int(itemSize.width()) / 2);
+    const int marginY = qMin(int(extent), int(itemSize.height()) / 2);
+    probe.center = QPoint(qBound(marginX, center.x(), int(itemSize.width()) - marginX),
+                          qBound(marginY, center.y(), int(itemSize.height()) - marginY));
+    probe.itemSize = itemSize;
     for(int dy = -extent; dy <= extent; dy += spacing) {
         for(int dx = -extent; dx <= extent; dx += spacing) {
-            const QPointF pos = QPointF(center) + QPointF(dx, dy);
+            const QPointF pos = QPointF(probe.center) + QPointF(dx, dy);
             if(pos.x() < 0 || pos.y() < 0 || pos.x() >= itemSize.width() || pos.y() >= itemSize.height())
                 continue;
             probe.tested++;
@@ -106,15 +115,19 @@ PickProbe probePicking(QuickViewportWindow* viewportWindow, const QSizeF& itemSi
 /// Prints the outcome of a picking probe.
 void reportPicking(const PickProbe& probe, const QString& what)
 {
+    // The center and the item size are part of the report: a probe that hit fewer positions than an earlier one
+    // is only comparable when both covered the same viewport geometry.
     if(probe.example) {
         const SceneNode* node = probe.example->sceneNode();
-        qInfo() << "PICK_TEST" << what << ":" << probe.hits << "of" << probe.tested << "positions hit;"
+        qInfo() << "PICK_TEST" << what << ":" << probe.hits << "of" << probe.tested << "positions hit"
+                << "at" << probe.center << "in item" << probe.itemSize << ";"
                 << "example: node" << (node ? node->objectTitle() : QStringLiteral("<none>"))
                 << "subobject" << probe.example->subobjectId()
                 << "hit location" << probe.example->hitLocation().x() << probe.example->hitLocation().y() << probe.example->hitLocation().z();
     }
     else {
-        qInfo() << "PICK_TEST" << what << ":" << probe.hits << "of" << probe.tested << "positions hit";
+        qInfo() << "PICK_TEST" << what << ":" << probe.hits << "of" << probe.tested << "positions hit"
+                << "at" << probe.center << "in item" << probe.itemSize;
     }
 }
 
@@ -196,22 +209,23 @@ void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void(
             << "test position" << itemPos;
 
     // First pass: the picking buffer has not been rendered yet, so this starts the picking pass.
-    reportPicking(probePicking(viewportWindow, itemSize, itemPos), QStringLiteral("before picking pass"));
+    reportPicking(probePicking(viewportWindow, item->size(), itemPos), QStringLiteral("before picking pass"));
 
-    // Measure how long the asynchronously rendered picking buffer takes to become available.
+    // Measure how long the asynchronously rendered picking buffer takes to become available. The item geometry is
+    // re-read for every probe so that a layout pass happening in between cannot distort the measurement.
     const QDateTime probeStart = QDateTime::currentDateTime();
     pollUntil(ui, 25, 5000,
-        [viewportWindow, itemSize, itemPos]() {
-            return probePicking(viewportWindow, itemSize, itemPos).hits > 0;
+        [viewportWindow, item, itemPos]() {
+            return probePicking(viewportWindow, item->size(), itemPos).hits > 0;
         },
-        [ui, item, viewportWindow, itemSize, itemPos, probeStart, continuation](bool satisfied) {
+        [ui, item, viewportWindow, itemPos, probeStart, continuation](bool satisfied) {
             if(satisfied)
                 qInfo() << "PICK_TEST first successful pick after" << probeStart.msecsTo(QDateTime::currentDateTime()) << "ms";
             else
                 qWarning() << "PICK_TEST the picking buffer did not become available within 5 s";
 
             // Second pass: the picking pass has been rendered in the background in the meantime.
-            reportPicking(probePicking(viewportWindow, itemSize, itemPos), QStringLiteral("after picking pass"));
+            reportPicking(probePicking(viewportWindow, item->size(), itemPos), QStringLiteral("after picking pass"));
 
             // Negative control: a corner of the viewport shows only the empty background.
             if(std::optional<ViewportWindow::PickResult> backgroundPick = viewportWindow->pick(QPointF(2, 2))) {
