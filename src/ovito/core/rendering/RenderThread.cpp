@@ -82,13 +82,14 @@ bool hasSystemVulkanDriver()
 } // End of anonymous namespace
 #endif
 
+#if QT_CONFIG(vulkan) && defined(Q_OS_LINUX)
+
 /******************************************************************************
 * Requests the Vulkan API version OVITO's instances are created with.
 *
-* A QVulkanInstance requests no particular API version by default, so the loader hands out the oldest one (1.0). That
-* is both wrong (the validation layers report VUID-VkApplicationInfo-apiVersion for the resulting all-zero struct) and
-* unusable on drivers whose 1.0 support is nominal, where vkCreateInstance() then fails with
-* VK_ERROR_INCOMPATIBLE_DRIVER - which is how the software rasterizer behaves. Ask for the newest version the loader
+* A QVulkanInstance requests no particular API version by default, so the loader hands out the oldest one and the
+* validation layers report VUID-VkApplicationInfo-apiVersion for the resulting all-zero VkApplicationInfo (observed
+* with Radv and with the software rasterizer, neither of which fails for it). Ask for the newest version the loader
 * offers, capped at the version the shaders and QRhi are built for.
 ******************************************************************************/
 static void configureVulkanApiVersion(QVulkanInstance& instance)
@@ -102,6 +103,8 @@ static void configureVulkanApiVersion(QVulkanInstance& instance)
         version = maximumVersion;
     instance.setApiVersion(version);
 }
+
+#endif
 
 /******************************************************************************
 * Makes OVITO's bundled software Vulkan driver available, but only on systems
