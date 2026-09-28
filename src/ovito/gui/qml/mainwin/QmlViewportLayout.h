@@ -286,8 +286,11 @@ private:
     /// Rebuilds the panes and handles from the viewport configuration of the current dataset.
     void updateLayout();
 
-    /// Discards all pane and handle objects, e.g. because the current dataset has changed.
-    void discardPanesAndSplitters();
+    /// Retires the pane objects so that they can be replaced by new ones.
+    void retirePanes();
+
+    /// Retires the handle objects so that they can be replaced by new ones.
+    void retireSplitters();
 
     /// Returns the weights of the children of the given layout cell, using an even subdivision if the layout cell
     /// holds no weights (a layout that was created programmatically may have children without weights).

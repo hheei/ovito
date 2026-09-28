@@ -287,11 +287,19 @@ void QmlViewportLayout::updateLayout()
                 return geometry.cell == splitter->cell() && geometry.childIndex == splitter->childIndex();
             });
 
-    if(panesStructureChanged || splittersStructureChanged) {
-        // The layout structure has changed (a new dataset, a different viewport layout, or a viewport that was inserted
-        // or deleted). Objects that are no longer part of the layout are discarded together with their QML delegates.
-        discardPanesAndSplitters();
-    }
+    // The objects of a kind of structure that changed are retired: the QML delegates of the previous list still
+    // hold references to them and the scene processes the model change only after this update returns. Deleting
+    // the objects here would leave those delegates with dangling pointers, which shows up as "Cannot read property
+    // ... of null" errors and, once the scene uses such an object, as a crash. They are therefore retired for one
+    // update and destroyed afterwards, when the delegates that displayed them are certainly gone.
+    //
+    // Note that only the kind of object that is replaced can be discarded: the panes of a maximized layout, for
+    // instance, are the same as before while the handles are gone, and discarding the panes as well would leave
+    // the list empty although the geometries are still there - the delegates would lose their viewport items.
+    if(panesStructureChanged)
+        retirePanes();
+    if(splittersStructureChanged)
+        retireSplitters();
 
     // The number of viewports in the layout and their order define the viewport indices the QML scene passes to
     // QmlViewportController::createViewportItem().
@@ -355,19 +363,21 @@ void QmlViewportLayout::updateLayout()
 }
 
 /******************************************************************************
-* Discards all pane and handle objects.
+* Retires the pane objects so that they can be replaced.
 ******************************************************************************/
-void QmlViewportLayout::discardPanesAndSplitters()
+void QmlViewportLayout::retirePanes()
 {
-    // The objects are not destroyed right away: the QML delegates of the previous list still hold references to them
-    // and the scene processes the model change only after this update returns. Deleting the objects here would leave
-    // those delegates with dangling pointers, which shows up as "Cannot read property ... of null" errors and, once
-    // the scene uses such an object, as a crash. They are therefore retired for one update and destroyed afterwards,
-    // when the delegates that displayed them are certainly gone.
     for(QmlViewportPane* pane : _retiredPanes)
         pane->deleteLater();
     _retiredPanes = std::move(_panes);
     _panes.clear();
+}
+
+/******************************************************************************
+* Retires the handle objects so that they can be replaced.
+******************************************************************************/
+void QmlViewportLayout::retireSplitters()
+{
     for(QmlViewportSplitter* splitter : _retiredSplitters)
         splitter->deleteLater();
     _retiredSplitters = std::move(_splitters);
