@@ -28,7 +28,8 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends \
             ninja-build build-essential \
             libboost-dev libnetcdf-dev libhdf5-dev \
-            libgl1-mesa-dev libvulkan-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libgl1-mesa-dev libgl1-mesa-dri libvulkan-dev mesa-vulkan-drivers xvfb \
+            libxkbcommon-dev libxkbcommon-x11-0 \
             libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
             libxcb-render-util0 libxcb-shape0 libxcb-sync1 libxcb-xfixes0 \
             libxcb-xinerama0 libxcb-xkb1
@@ -47,7 +48,8 @@ jobs:
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DOVITO_BUILD_CPP_TESTS=ON \
-            -DOVITO_BUILD_APP=ON
+            -DOVITO_BUILD_APP=ON \
+            -DOVITO_BUILD_QML_FRONTEND=ON
 
       - name: Build
         run: |
@@ -59,6 +61,41 @@ jobs:
           LD_LIBRARY_PATH: ${{ env.Qt6_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
         run: |
           ctest --test-dir build --output-on-failure -V
+
+      # The Qt Quick viewport needs a QRhi, which the offscreen QPA plugin cannot provide, so the smoke test
+      # renders into an Xvfb display with the software rasterizer. Picking runs through OVITO's own offscreen
+      # RenderThread, which uses Vulkan on Linux and therefore needs a usable ICD (lavapipe here, since the
+      # runners have no GPU). See docs/design/UI_TEST_ENV.md.
+      - name: Smoke test the Qt Quick frontend
+        env:
+          QT_QPA_PLATFORM: xcb
+          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
+          LD_LIBRARY_PATH: ${{ env.Qt6_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
+        run: |
+          python3 - <<'PY'
+          import os, pathlib
+          a, n = 3.6, 8
+          lines = [f"{n**3}", "512 atoms, simple cubic lattice a=3.6"]
+          lines += [f"Ar {i*a} {j*a} {k*a}" for i in range(n) for j in range(n) for k in range(n)]
+          pathlib.Path(os.environ["RUNNER_TEMP"], "lattice_512.xyz").write_text("\n".join(lines) + "\n")
+          PY
+          mkdir -p artifacts
+          xvfb-run -a --server-args='-screen 0 1280x800x24' \
+            build/bin/ovito-qml-spike \
+              --qml-window-size 1280x800 \
+              --qml-frame-stats 2000 \
+              --qml-lifecycle-cycles 2 \
+              --qml-hide-show \
+              --qml-pick 300,300 \
+              --qml-capture artifacts/qml-smoke-linux-x64.png --qml-capture-delay 4000 \
+              "$RUNNER_TEMP/lattice_512.xyz"
+
+      - name: Upload the Qt Quick smoke test screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: qml-smoke-linux-x64
+          path: artifacts/qml-smoke-linux-x64.png
+          if-no-files-found: error
 
   # ---------------------------------------------------------------------------
   # Linux ARM64
@@ -77,7 +114,8 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends \
             ninja-build build-essential \
             libboost-dev libnetcdf-dev libhdf5-dev \
-            libgl1-mesa-dev libvulkan-dev libxkbcommon-dev libxkbcommon-x11-0
+            libgl1-mesa-dev libgl1-mesa-dri libvulkan-dev mesa-vulkan-drivers xvfb \
+            libxkbcommon-dev libxkbcommon-x11-0
 
       - name: Install Qt 6.10.2
         uses: jurplel/install-qt-action@v4
@@ -92,7 +130,8 @@ jobs:
         run: |
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DOVITO_BUILD_CPP_TESTS=ON
+            -DOVITO_BUILD_CPP_TESTS=ON \
+            -DOVITO_BUILD_QML_FRONTEND=ON
 
       - name: Build
         run: |
@@ -105,12 +144,33 @@ jobs:
         run: |
           ctest --test-dir build --output-on-failure
 
+      - name: Smoke test the Qt Quick frontend
+        env:
+          QT_QPA_PLATFORM: xcb
+          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
+          LD_LIBRARY_PATH: ${{ env.Qt6_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
+        run: |
+          python3 - <<'PY'
+          import os, pathlib
+          a, n = 3.6, 8
+          lines = [f"{n**3}", "512 atoms, simple cubic lattice a=3.6"]
+          lines += [f"Ar {i*a} {j*a} {k*a}" for i in range(n) for j in range(n) for k in range(n)]
+          pathlib.Path(os.environ["RUNNER_TEMP"], "lattice_512.xyz").write_text("\n".join(lines) + "\n")
+          PY
+          xvfb-run -a --server-args='-screen 0 1280x800x24' \
+            build/bin/ovito-qml-spike \
+              --qml-window-size 1280x800 \
+              --qml-lifecycle-cycles 2 \
+              --qml-pick 300,300 \
+              --qml-capture-delay 4000 \
+              "$RUNNER_TEMP/lattice_512.xyz"
+
   # ---------------------------------------------------------------------------
   # macOS (Apple Silicon ARM64)
   # ---------------------------------------------------------------------------
   build-macos-arm64:
     name: macOS ARM64
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -137,7 +197,8 @@ jobs:
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}" \
-            -DOVITO_BUILD_CPP_TESTS=ON
+            -DOVITO_BUILD_CPP_TESTS=ON \
+            -DOVITO_BUILD_QML_FRONTEND=ON
 
       - name: Build
         run: |
@@ -148,6 +209,26 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           ctest --test-dir build --output-on-failure
+
+      # Qt (both the scene graph and OVITO's offscreen picking) uses Metal here, which the runner provides
+      # without a physical display.
+      - name: Smoke test the Qt Quick frontend
+        env:
+          DYLD_LIBRARY_PATH: ${{ env.Qt6_DIR }}/lib
+        run: |
+          python3 - <<'PY'
+          import os, pathlib
+          a, n = 3.6, 8
+          lines = [f"{n**3}", "512 atoms, simple cubic lattice a=3.6"]
+          lines += [f"Ar {i*a} {j*a} {k*a}" for i in range(n) for j in range(n) for k in range(n)]
+          pathlib.Path(os.environ["RUNNER_TEMP"], "lattice_512.xyz").write_text("\n".join(lines) + "\n")
+          PY
+          build/Ovito.app/Contents/MacOS/ovito-qml-spike \
+            --qml-window-size 1280x800 \
+            --qml-lifecycle-cycles 2 \
+            --qml-pick 300,300 \
+            --qml-capture-delay 4000 \
+            "$RUNNER_TEMP/lattice_512.xyz"
 
   # ---------------------------------------------------------------------------
   # Windows AMD64
@@ -164,6 +245,27 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
+      # geogram (Delaunay plugin) needs the Boost headers, which the runner image does not provide.
+      - name: Install the Boost headers
+        shell: pwsh
+        run: |
+          vcpkg install boost-headers:x64-windows
+
+      # Qt pre-compiles the HLSL shaders to DXIL with dxc, which must be on the PATH - and whose absence is a
+      # fatal error at configure time (see src/ovito/core/CMakeLists.txt).
+      - name: Install the DirectX shader compiler (dxc)
+        shell: pwsh
+        run: |
+          $dxc = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Filter dxc.exe -Recurse -ErrorAction SilentlyContinue |
+                 Where-Object { $_.DirectoryName -like "*\x64" } | Select-Object -Last 1
+          if(-not $dxc) {
+            nuget install Microsoft.Direct3D.DXC -OutputDirectory C:\dxc
+            $dxc = Get-ChildItem C:\dxc -Filter dxc.exe -Recurse | Select-Object -First 1
+          }
+          if(-not $dxc) { throw "dxc.exe not found" }
+          Write-Host "Using $($dxc.FullName)"
+          $dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append
+
       - name: Install Qt 6.10.2
         uses: jurplel/install-qt-action@v4
         with:
@@ -178,7 +280,9 @@ jobs:
           cmake -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}" `
-            -DOVITO_BUILD_CPP_TESTS=ON
+            -DBOOST_ROOT="${{ env.VCPKG_INSTALLATION_ROOT }}/installed/x64-windows" `
+            -DOVITO_BUILD_CPP_TESTS=ON `
+            -DOVITO_BUILD_QML_FRONTEND=ON
 
       - name: Build
         run: |
@@ -187,5 +291,42 @@ jobs:
       - name: Test (CTest)
         env:
           QT_QPA_PLATFORM: offscreen
+          PATH: ${{ github.workspace }}\build\lib\ovito\plugins;${{ env.PATH }}
         run: |
           ctest --test-dir build --output-on-failure
+
+      # The runners have no GPU, but Direct3D 12 is available through the WARP software adapter, which the Qt
+      # Quick scene graph uses when QSG_RHI_PREFER_SOFTWARE_RENDERER is set. OVITO's own offscreen picking
+      # RenderThread also prefers D3D12 and falls back to D3D11, both of which WARP provides. This is the only
+      # D3D12 validation of the Qt Quick frontend that is possible without Windows hardware.
+      - name: Smoke test the Qt Quick frontend (Direct3D 12 via WARP)
+        shell: pwsh
+        env:
+          QSG_RHI_BACKEND: d3d12
+          QSG_RHI_PREFER_SOFTWARE_RENDERER: '1'
+        run: |
+          $dataset = Join-Path $env:RUNNER_TEMP "lattice_512.xyz"
+          $lines = @("512", "512 atoms, simple cubic lattice a=3.6")
+          foreach($i in 0..7) { foreach($j in 0..7) { foreach($k in 0..7) {
+            $lines += "Ar $($i*3.6) $($j*3.6) $($k*3.6)" } } }
+          $lines | Out-File -FilePath $dataset -Encoding ascii
+
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $env:PATH = "${{ github.workspace }}\build\lib\ovito\plugins;$env:PATH"
+          & "${{ github.workspace }}\build\bin\ovito-qml-spike.exe" `
+              --qml-window-size 1280x800 `
+              --qml-frame-stats 2000 `
+              --qml-lifecycle-cycles 2 `
+              --qml-pick 300,300 `
+              --qml-capture "artifacts/qml-smoke-windows-d3d12.png" --qml-capture-delay 4000 `
+              $dataset
+          if($LASTEXITCODE -ne 0) {
+            throw "The Qt Quick smoke test failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Upload the Qt Quick smoke test screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: qml-smoke-windows-d3d12
+          path: artifacts/qml-smoke-windows-d3d12.png
+          if-no-files-found: error
