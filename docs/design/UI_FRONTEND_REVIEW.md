@@ -162,7 +162,8 @@ of a `ViewportModeCommand` for the eight widget-based consumers, and the QML wor
 the same objects (verified by the spike's `--qml-command-check`). Still to do as part of the later phases: the QML
 menu bar and the pipeline/panel commands that currently live in the desktop command panel, and the icons (A9).
 
-**Evidence.** 76 action ids are declared centrally (`gui/base/actions/Actions.h`), and **51 of the 65
+**Evidence.** 76 action ids are declared centrally (`gui/base/actions/ActionManager.h`, as `#define ACTION_*` strings
+consumed by `Command` objects), and **51 of the 65
 `createCommandAction(...)` call sites are already in gui/base** — only 14 are desktop-only (command-panel pages,
 snippet import/export, overlay-layer operations, modifier templates). So the *command surface is not the problem*; the
 problem is its representation:
@@ -296,8 +297,10 @@ tasks, title, empty state, status line and message boxes in `QmlWorkbenchControl
 `UserInterface::taskProgressBegin/End` and `visitRunningTasks()`, a selection/hover model, a recent-files model, a
 small application-settings facade, and a session service. Two skins render the same model.
 
-**Payoff.** The classic frontend's per-task progress bars and cancellation become available to QML without a second
-implementation, and the "no session support" gap (3.6) becomes a matter of binding, not of new logic. The progress model
+**Payoff.** The per-task progress *rows* of the shared model become available to QML without a second implementation, and
+the "no session support" gap (3.6) becomes a matter of binding, not of new logic. Per-task *cancellation* is explicitly
+not part of that payoff: a `TaskProgress` carries no handle to its `Task`, so only a shell-started operation can be
+cancelled and the model reports progress only. The progress model
 was measured to do this in the Qt Quick shell with a real operation: the spike's import check logs the model reporting
 `Reading VASP file ...` while a large import runs and no task afterwards. The session workflow is verified the same way
 (`--qml-session-check`): a scene is saved to a session file, a change marks it modified, saving again clears that, and
@@ -371,7 +374,9 @@ Previously unscheduled and now assigned by Phase 2.5 of UI_PLAN.md (kept here so
   (Show Grid, Constrain Rotation, View Type, Maximize) and leaves the rest as disabled placeholders for Phase 4/5;
 * undo/redo discoverability (shortcuts exist, no menu item/tooltip) — Phase 2.5, together with the menu bar;
 * per-task progress display (3.4) — Phase 2.5, as a new capability rather than restored classic behaviour;
-* "About"/"Quit"/"Preferences" reachability on macOS (3.7) — Phase 2.5, through the same menu bar.
+* "About"/"Quit"/"Preferences" reachability on macOS (3.7) — Phase 2.5, through the same menu bar. **About and Quit** are
+  deliverable there; **Preferences** is not, because its command has no handler outside the desktop settings dialog — it
+  stays a disabled placeholder and is delivered by Phase 7 (the settings dialogs).
 
 ---
 
@@ -412,14 +417,26 @@ Open candidates, each with the measurement that must decide it:
 about removing differences rather than adding features. A3, A6 and A7 are explicitly assigned to Phases 5, 7 and 4 there,
 because each of them changes semantics that those phases are already touching.
 
-1. **Already done**: A1 (command layer) and the first half of A5 (recent files list, shared task progress model, session
-   workflow), plus A2 in reduced form (the viewport renderer registry). These were the load-bearing shared layers, and
-   they landed before the phases that need them.
-2. **New Phase 2.5, before the Phase 3 presentation models**: A4 (offscreen rendering service), A8.1–A8.5 (the remaining
-   core/frontend couplings), A9 (shared icons), the four small gaps of §5, and the finish of the Phase 0 inventory.
-3. **Phase 4, with the pipeline and property work**: A7 (property model) — the largest single duplication the migration
-   can avoid — plus the selection model of A5.
-4. **Phase 5, with the interaction work**: A3 (asynchronous pick API), because `SelectionMode`, `NavigationModes` and
-   `XFormModes` are what consume a pick on every mouse move.
-5. **Phase 7, with the remaining desktop parity**: A6 (import options), since the import *flow* is already shared and the
-   missing part is the option UI.
+**State of every item.** Each review item is in exactly one state, and this table is what Phase 2.5's exit gate re-checks:
+
+| Item | State | Where |
+|---|---|---|
+| A1 command layer | implemented | before Phase 2; QML exposure in Phase 2 |
+| A2 viewport renderer registry | implemented, reduced form | before Phase 2; the window objects stay per frontend, the layout rules are Phase 4 |
+| A3 one asynchronous pick API | assigned | Phase 5 (deliverable 5) |
+| A4 offscreen rendering service | assigned | Phase 2.5 (deliverable 6) |
+| A5 recent files, task-progress model, session workflow | implemented | before Phase 2 |
+| A5 settings facade | assigned | Phase 2.5 (deliverable 2) |
+| A5 selection/hover model | assigned | Phase 4 |
+| A6 import plan/options model | assigned | Phase 7; the user-visible *notice* is Phase 2.5 |
+| A7 property model foundation | assigned | Phase 4 (deliverable 0, mandatory before its other deliverables) |
+| A8.1–A8.5 remaining couplings | assigned | Phase 2.5 (deliverable 4) |
+| A9 shared icon/theme assets | assigned | Phase 2.5 (deliverable 5) |
+
+The four small gaps of §5 are Phase 2.5 deliverable 3 — with **About and Quit** in the menu bar and **Preferences deferred
+to Phase 7**, since its command has no handler outside the desktop settings dialog — and the import-diagnostics notice of
+§3.3 belongs to the same deliverable, so it cannot fall between this phase and Phase 7's option model.
+
+**Order within Phase 2.5**: the finish of the Phase 0 inventory (it is what says what is left), then the settings facade
+(the window state of the visible gaps persists through it), then the gaps, the couplings and the assets, then the offscreen
+service, and finally the measurement-driven optimization pass.

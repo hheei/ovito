@@ -275,7 +275,12 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   `OVITO_BUILD_QML_FRONTEND=OFF` still builds classic and headless. Verify: window and viewport layout derived from the
   session's layout cell (including maximize and a dragged splitter that undoes), import of a real multi-frame trajectory
   including failure and cancellation, both themes, resizing and minimum size, keyboard focus order, and QML resource
-  loading from the deployed layout. The first two are automated in the spike harness (`--qml-layout-check`,
+  loading from the layout the frontend is actually deployed in. That last one is verified **partly** and is recorded that
+  way instead of as done: the macOS bundle layout passes (the spike resolves `GuiQml` through
+  `@executable_path/../PlugIns/` after the O9 rpath fix) and so does the Windows one-directory build-tree layout
+  (`ovito.exe`, `ovito-qml-spike.exe` and every `*.ovito.dll` next to each other, found through `QT_PLUGIN_PATH` and
+  `QML_IMPORT_PATH`), while no **installed** tree has been run on any platform even though CMake's build-tree and
+  install-tree plugin paths differ. Closing that gap is part of Phase 2.5 deliverable 1. The first two are automated in the spike harness (`--qml-layout-check`,
   `--qml-import-check`); the remaining ones are checked by running the frontend in its themes and window sizes (see
   [UI_TEST_ENV.md](UI_TEST_ENV.md)). Record the platform results (Linux, macOS, Windows) in the parity matrix and the
   environment notes. The D3D12 runtime evidence that Phase 1 left open is **recorded**, not assumed: the full check set
@@ -308,6 +313,13 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      3 and 4) are still pending. This is the last phase that works on the *difference* between the two frontends rather
      than on features, and the matrix is what tells Phases 3–7 what is left. Record per row: implemented / scheduled in
      phase X / deliberately out of scope, with a source reference and an acceptance case.
+     * The row set has to include what Phase 2 could not verify, starting with the **installed layout**: build-tree paths
+       differ from installed paths, so add an install-and-run check (`cmake --install` into a prefix and then start the
+       frontend and the spike from there) on Linux — the platform where this environment can do it — and record
+       macOS/Windows as unverified rather than assumed.
+     * The **Windows packaging prerequisites** belong to the matrix too: a Windows redistributable build needs Boost, a
+       zlib-enabled HDF5 and Perl before it configures at all (defect F16), so that row names the prerequisites instead of
+       implying the build just works.
   2. **Settings facade (the remainder of review item A5)**: one small `gui/base` service that owns the names and defaults
      of the keys the frontends persist (window geometry, renderer selection is already in `ViewportRendererRegistry`,
      per-dialog directory history, UI theme), so neither frontend names storage paths itself. This is deliverable 2 and
@@ -332,13 +344,23 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        commands whose handler exists in `gui/base` or whose frontend action exists in the QML shell — today that is Edit
        (undo/redo/delete), View (viewport modes, maximize, zoom) and File (import through the existing dialog, quit);
        save/save-as, export, settings, render and animation-settings entries are disabled placeholders naming Phase 3,
-       Phase 7, Phase 7, Phase 7 and Phase 5 respectively. This also gives macOS the About/Quit/Preferences reachability
-       it lacks today, where Qt moves those entries into the global menu. Verified by extending the spike's command check
+       Phase 7, Phase 7, Phase 7 and Phase 5 respectively. This also gives macOS the **About and Quit** reachability it
+       lacks today, where Qt moves those entries into the global menu: `ACTION_HELP_ABOUT` exists in `gui/base` but its only
+       handler is the desktop dialog, so this phase adds a small QML About surface (application name, version, build type,
+       links) bound to that command. **Preferences is not delivered here** — `ACTION_SETTINGS_DIALOG` (with the native
+       `QKeySequence::Preferences`) has no handler outside the desktop settings dialog either, so it stays a disabled
+       placeholder naming Phase 7, and the parity claim is About and Quit only. Verified by extending the spike's command check
        with a menu walk that asserts every item is either enabled with a handler or disabled with an owner.
      * **Per-task progress** (a new capability, not restored parity — the classic status bar shows one aggregate bar and
        cannot cancel a single task either): the shared `TaskProgressModel` already exposes one row per running task, so
        present them (`text`, `value`, `maximum`) and keep the existing Cancel for shell-started operations. Per-task
        cancellation stays out of scope, because a `TaskProgress` carries no handle to its `Task`.
+     * **Import diagnostics in the status line** (assigned here by review §3.3 so the promise cannot fall between this
+       phase and Phase 7's option UI, which only adds the *options*): after an import, report the detected file format and
+       the number of source frames, and keep the notice until the next operation. Acceptance: the spike imports a file
+       whose comment line contains `atoms`, which defect F6 hands to the LAMMPS Data importer and which yields an empty
+       scene, and asserts that the notice names the format that was used and the frame count — the misdetection becomes
+       visible instead of silent.
      * **Window state**: remember window size/position, the last used theme and the pane-layout policy through the settings
        facade of deliverable 2, so a second launch does not look like a first launch.
   4. **Remaining core/frontend couplings (review item A8)**:
@@ -350,9 +372,13 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      * **A8.3** — `--noviewports` is registered by the desktop frontend and read by core
        (`core/dataset/DataSet.cpp`); make it a core-level parameter or let the frontend decide the default viewport
        configuration.
-     * **A8.4** — decide O1 (the `ovitoheadless` QPA plugin does not exist in this tree): either ship a minimal plugin or
-       fail with a clear message that names the platform plugin instead of attempting a nonexistent one. Whichever way,
-       the requirement is documented for users, not only for tests.
+     * **A8.4** — O1 is settled as a **documented environment constraint, not an implementation task**: the
+       `ovitoheadless` QPA plugin does not exist in this tree, Qt's `offscreen` plugin provides no QRhi, and the working
+       headless route for the Qt Quick frontend is `xvfb` with `QT_QPA_PLATFORM=xcb` (UI_TEST_ENV.md sections 1 and 3.2).
+       What this phase adds is the failure path that constraint implies: when no QRhi-capable platform is available, the
+       frontend must detect it (`QQuickWindow::rhi()` stays null) and report an error naming the platform plugin and the
+       recipe instead of opening a blank viewport. Acceptance: a spike run with `QT_QPA_PLATFORM=offscreen` takes the error
+       path and says so, and the constraint is stated for users, not only for tests.
      * **A8.5** — `AvailableModifiersModel` and `AvailableOverlaysModel` still register plain `QAction`s; convert them to
        `Command`s so Phase 4's modifier library (and the QML command list) can consume them.
   5. **Shared presentation assets (review item A9)**: publish the classic icon set
@@ -364,8 +390,16 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      picking pass, the ambient-occlusion modifier and — in Phase 7 — render output. It does **not** re-introduce a shared
      `PickingBufferTarget`: that duplication (O7) was already removed when the Qt Quick frontend moved to
      `RenderThread::renderPickingFrame()`. Today four call sites own their target, flags and readback, two of them from a
-     work thread, and misuse is caught by runtime assertions rather than by the interface. Render *settings* and the output
-     dialog remain Phase 7.
+     work thread, and misuse is caught by runtime assertions rather than by the interface.
+     The deliverable must therefore **state, per entry point, the thread it runs on, who owns the target and the QRhi
+     resources, which executor the completion arrives on, and the reuse/destruction rule across threads** — today only the
+     render thread may touch `QRhi`, `createOffscreenTarget` returns a handle whose target is created lazily on the render
+     thread, and the AO path awaits its frame from a thread pool. A service that hides those differences without naming
+     them would be worse than the duplication it removes, so the interface and the phase's documentation carry the
+     protocol instead of leaving it implicit. Acceptance is a concurrency and teardown check **per entry point**: the AO
+     sampling, the picking pass, the viewport grab and the render output must each run to completion while the others are
+     in flight, a superseded request must neither deadlock nor read a freed target, and releasing the resources with a
+     request in flight must fail loudly rather than silently. Render *settings* and the output dialog remain Phase 7.
   7. **Measurement-driven viewport optimization pass** (each item decided by numbers, not by intuition; method in
      [UI_TEST_ENV.md](UI_TEST_ENV.md) section 9.5 — `QSG_NO_VSYNC=1`, both render loops, medians of three runs at 512 and
      32768 atoms):
@@ -394,10 +428,16 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
     import-mode dialog), not the import flow, which Phase 2 already shares.
   * **A7** (property model foundation) belongs to Phase 4, immediately before the first inspector, and is the one item of
     this list that must not be deferred past its phase: it is the largest single duplication the migration can avoid.
-  * Pipeline/selection models, timeline and keyframes, render settings and output, data inspector, command list (the
-    "command palette" consumption of A1), settings *dialogs* and the snippet import/export UI keep their own phases.
-- **Exit Gate**: every review item A1–A9 is either implemented here or explicitly assigned to a later phase in this
-  document; each closed gap has an automated check in `OvitoQmlSpike` (context menu, menu-bar commands including
+  * Pipeline/selection models, timeline and keyframes, render settings and output, data inspector and the command list
+    (the "command palette" consumption of A1) keep their own phases, and the two entries of that list which used to have
+    no owner are assigned explicitly: the **settings dialogs** (Preferences as well as the application-settings pages
+    behind `ACTION_SETTINGS_DIALOG`) are Phase 7 deliverable 5, and the **snippet import/export UI** is Phase 4
+    deliverable 7.
+- **Exit Gate**: every review item A1–A9 is in exactly one of three states, and the mapping is written down in
+  [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md) section 7 as well as in the parity matrix: **implemented before this
+  phase** (A1's command layer, A2's renderer registry, most of A5 — recent files, task-progress model, session workflow),
+  **implemented here** (A4, A8, A9, A5's settings facade) or **assigned to a named later phase** (A3 → Phase 5, A6 →
+  Phase 7, A7 and A5's selection model → Phase 4). An item in no state fails the gate; each closed gap has an automated check in `OvitoQmlSpike` (context menu, menu-bar commands including
   undo/redo enablement, per-task list) that also runs in the four CI jobs, or a documented manual check; the classic
   frontend still passes `ctest --preset native`, `--nogui`, and a graphical run in its own session, and the QML frontend
   still passes the full spike set on Linux (and on macOS/Windows whenever a host is available); every optimization
@@ -411,9 +451,11 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
     verify on macOS, where Qt relocates entries into the global menu and can silently drop duplicates.
   * *A context menu can fork `ViewportMenu` semantics.* Drive it from the shared commands and the viewport API, and keep
     the layout mutations in one implementation (Phase 4).
-  * *Platform-specific build traps recur.* Header-only exported classes and conditionally compiled sources have already
-    caused MSVC link and AUTOMOC failures (defects F15, F16): define special members out of line and clear a stale
-    `*_autogen` directory when a source joins a target.
+  * *Platform-specific build traps recur.* Three of them have already cost real time: a header-only exported class whose
+    implicitly generated destructor MSVC imports instead of exporting it (defect F15 — define special members out of line),
+    the Windows redistributable build which will not configure without Boost, a zlib-enabled HDF5 and Perl (defect F16),
+    and a conditionally compiled source that joins a target without being moc'd, which needs the stale `*_autogen`
+    directory cleared (UI_TEST_ENV.md section 5.5). Deliverable 1's Windows rows start from those prerequisites.
 
 ---
 
@@ -450,7 +492,7 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      animated) with an editor registry keyed by property descriptor. Both frontends consume it — `PropertiesPanel`
      becomes one rendering of the model rather than the owner of the knowledge — and the phase is only enterable through
      this deliverable, because deliverables 1–3 re-derive units, bounds and controller semantics otherwise.
-  1. `PipelineView.qml`: Compact rows with eye toggles, selection, modifier insertion/deletion, and validated drag reordering. Preserve audited group/shared-object and source/visual-element behavior through shared operations.
+  1. `PipelineView.qml`: Compact rows with eye toggles, selection, modifier insertion/deletion, and validated drag reordering. Preserve audited group/shared-object and source/visual-element behavior through shared operations. It consumes the **shared selection/hover model** (the second half of review item A5), which this deliverable adds to `gui/base` next to the pipeline model, so the classic pipeline list and the QML one share one selection instead of each tracking its own.
   2. `ModifierEditorRegistry`: C++ registry dispatching to specialized QML editors or generic fallback.
   3. `AutoPropertyEditor.qml`: Integer/float, boolean, and color fields plus scalar controller values at the current time. Respect units, bounds, read-only state, and the shared command contract.
   4. Coverage reporting in the Phase 0 field inventory. Unsupported user-editable parameters are clearly identified in the UI, with read-only values where meaningful; they remain parity gaps.
@@ -460,6 +502,16 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      per-viewport *window* lifecycle stays with each frontend (A2 of the review document does not propose a shared window
      manager); what this deliverable settles is the rule for when a viewport's window or item is created and destroyed as
      the layout changes, and it verifies it in both frontends.
+  6. **Create Camera** (the `View Type` submenu entry whose QML counterpart Phase 2.5 ships disabled): create a camera
+     scene node with a `StandardCameraSource` positioned from the clicked viewport's current view, inside a
+     `performTransaction()` named "Create camera" exactly as `ViewportMenu::onCreateCamera()` does, so one undo step, and
+     refuse it while the viewport already follows a camera node (`viewNode() != nullptr`). Acceptance: create the camera,
+     verify the viewport keeps the same image, undo, and verify the camera node is gone and the view is a free camera
+     again.
+  7. **Snippet import/export UI** (assigned here because both operate on pipeline items): import an `.ovito` snippet as a
+     new pipeline and export the selected pipeline item(s) as a snippet, reusing the existing file-importer/exporter
+     machinery and the shared file dialogs. Acceptance: round-trip one snippet through export and import, and undo the
+     import.
 - **Exit Gate**: On a real imported trajectory, add/edit/reorder/delete modifiers and undo the sequence. Verify group drop boundaries, invalid numeric entry, unit conversion, current-time controller edits, and refresh after undo or time changes. Every initial field has a recorded supported or unsupported outcome. The shared A7 model must show the **same** fields, units, bounds and read-only flags that the classic panel shows for the same object, verified side by side on one scene rather than by trusting the QML side. Splitting and removing a viewport must be undoable and must leave no orphaned viewport window or QML item in either frontend.
 
 ---
@@ -477,7 +529,20 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      safe: a pick future whose completion is delivered through the GUI event loop (the Qt Quick implementation resumes its
      coroutine on `ObjectExecutor(this)`) must never be awaited on the GUI thread, so this deliverable also states the
      completion thread and the dispatch rule, and adapts `SelectionMode`/`NavigationModes`/`XFormModes` accordingly.
-- **Exit Gate**: Execute navigation and animation cases side-by-side with classic on the same scene. Verify picking at fractional display scaling, frame/time mapping, playback cancellation, keyframe edit/undo/cancel, and parameter values at keyed and interpolated times. For A3: a hover pick in both frontends must complete without blocking the GUI thread and without deadlocking against the completion path (a test that fails fast if the pick result is only delivered through the blocked loop), and both frontends must agree on the pick result for the same position and scene.
+  6. **Adjust View…** (the `ViewportMenu` entry whose QML counterpart Phase 2.5 ships disabled): a QML form editing the
+     active viewport's view type, field of view, camera position, camera direction and camera transformation through the
+     same `Viewport` setters the classic `AdjustViewDialog` uses (`setViewType`, `setFieldOfView`, `setCameraPosition`,
+     `setCameraDirection`, `setCameraTransformation`). Those properties are `PROPERTY_FIELD_NO_UNDO` in core, so the form is
+     deliberately *not* undoable — neither is the classic dialog — and the rule is recorded rather than invented.
+     Acceptance: change each field and verify the viewport follows and the values survive a view-type switch; verify the
+     entry is disabled while the viewport follows a camera node.
+  7. **Preview Mode** (the `ViewportMenu` toggle whose QML counterpart Phase 2.5 ships disabled): drive
+     `Viewport::renderPreviewMode()`/`setRenderPreviewMode()` and render the non-interactive preview in the viewport,
+     including the settings the preview needs (render-output resolution and aspect) and the behaviour while a render is in
+     progress. Acceptance: toggle it in a viewport with a known view, verify the flag, that the image switches to the
+     render-output aspect and resolution, and that turning it off restores the previous interactive view; verify interaction
+     is suspended while it is on.
+- **Exit Gate**: Execute navigation and animation cases side-by-side with classic on the same scene. Verify picking at fractional display scaling, frame/time mapping, playback cancellation, keyframe edit/undo/cancel, and parameter values at keyed and interpolated times. For A3: a hover pick in both frontends must complete without blocking the GUI thread and without deadlocking against the completion path (a test that fails fast if the pick result is only delivered through the blocked loop), and both frontends must agree on the pick result for the same position and scene. For deliverables 6–7 the disabled placeholders of Phase 2.5 must become working entries: no menu item this phase owns may stay disabled, and Adjust View and Preview Mode must match their classic counterparts on the same scene.
 
 ---
 
@@ -502,7 +567,10 @@ These lists identify starting controls, not complete editor specifications. Incl
   2. Overlays & Visual Elements (Simulation Cell display, Coordinate Tripod, Color Legend).
   3. Data Inspector and utilities: begin with particle property tables and complete all applicable inspector/utility workflows identified by Phase 0.
   4. `RenderSettingsView.qml`, render output/progress view, still and animation rendering, cancellation, and saving output through existing rendering services.
-  5. Complete remaining property editor and command gaps from the coverage inventory. Validate keyboard/accessibility and small-window behavior throughout the workbench.
+  5. Complete remaining property editor and command gaps from the coverage inventory, including the **settings dialogs**:
+     the QML equivalent of the application-settings pages behind `ACTION_SETTINGS_DIALOG` (the Preferences entry that
+     Phase 2.5 leaves as a disabled placeholder), covering the persisted keys of the `gui/base` settings facade instead of
+     introducing a second storage scheme. Validate keyboard/accessibility and small-window behavior throughout the workbench.
   6. Run the complete parity matrix in `ovito` and `ovito --gui=qml` using the same build configuration and datasets, and record platform results.
 - **Exit Gate**: Every applicable audited parity row passes, with evidence linked from the matrix; no unresolved parameter, workflow, or platform gaps remain under a complete-parity claim. Regression checks preserve classic and headless operation. If scope is reduced, label the release as partial parity and update both documents rather than marking omitted rows passed.
 
@@ -547,4 +615,4 @@ performance baseline are documented in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md),
 [UI_PLAN.md](UI_PLAN.md) and the audits in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md); the testing recipes and traps are in
 [UI_TEST_ENV.md](UI_TEST_ENV.md). The architecture status remains **proposed** until the owner freezes it — the technical
 preconditions (rendering bridge, picking, teardown, four platforms, assert-enabled run, performance baseline) are met. This
-roadmap describes planned work; no phase is marked complete by this document revision.
+roadmap describes planned work: Phases 1 and 2 are recorded as verified above, and Phases 2.5–9 have not started.
