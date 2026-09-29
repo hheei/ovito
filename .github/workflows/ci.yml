@@ -101,6 +101,7 @@ jobs:
               --qml-settings-check \
               --qml-session-check \
               --qml-pick 300,300 \
+              --qml-parity-check \
               --qml-import-check \
               "$RUNNER_TEMP/lattice_512.xyz"
 
@@ -187,6 +188,7 @@ jobs:
               --qml-settings-check \
               --qml-session-check \
               --qml-pick 300,300 \
+              --qml-parity-check \
               --qml-import-check \
               "$RUNNER_TEMP/lattice_512.xyz"
 
@@ -259,6 +261,7 @@ jobs:
               --qml-settings-check \
               --qml-session-check \
             --qml-pick 300,300 \
+            --qml-parity-check \
             --qml-import-check \
             "$RUNNER_TEMP/lattice_512.xyz"
 
@@ -416,6 +419,7 @@ jobs:
               --qml-settings-check `
               --qml-session-check `
               --qml-pick 300,300 `
+              --qml-parity-check `
               --qml-import-check `
               $dataset
           if($LASTEXITCODE -ne 0) {
