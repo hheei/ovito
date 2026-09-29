@@ -550,8 +550,13 @@ images of this directory were taken from a private Xvfb display with ffmpeg.
 smoke test and pass. The Windows job **builds the whole tree** (1149/1149 targets, `ovito.exe` and `ovito-qml-spike.exe`
 included) but has not yet reached its D3D12 smoke test: the run stopped at the preceding CTest step, where five tests
 aborted with `0xc0000135`, which turned out to be the `PATH` trap described below rather than a test failure. That trap is
-fixed, but the job has not been re-run since - a D3D12 runtime result from CI is still outstanding, and CI usage is
-deliberately kept low, so a Windows verification should be a single deliberate run rather than a debug loop.
+fixed - **twice**: the first fix composed `PATH` inside the step, but pointed it at `build\lib\ovito\plugins`, which is
+where Linux keeps the libraries. On Windows every OVITO library (Core, Gui, GuiBase and all plugin DLLs) is placed
+**directly in the build directory**, and so are the executables (`build\ovito.exe`, `build\ovito-qml-spike.exe`), because
+Windows would not find Core in a plugins subdirectory (`OVITO_RELATIVE_BINARY_DIRECTORY`, `OVITO_RELATIVE_PLUGINS_DIRECTORY`
+and `cmake/Plugins.cmake`). Both Windows steps therefore put `<checkout>\build` and the vcpkg `bin` directory on `PATH`
+and use `build\ovito-qml-spike.exe`. A D3D12 runtime result from CI is still outstanding - CI usage is deliberately kept
+low, so a Windows verification should be a single deliberate run rather than a debug loop.
 
 This is a gap of **CI automation**, not of the D3D12 gate: the cross-API verification itself was done on a physical
 Windows x86_64 host (SSH host `kitty`, GeForce GTX 1080, Windows 11) in §5.5, where the spike passed on D3D12, on WARP and
@@ -734,6 +739,14 @@ Traps and facts that cost time here, in order:
   * A cancel request needs a running Qt event loop. A `QTimer` only fires while the import is inside a nested loop
     (the shell keeps processing events while it waits); during the format detection of a long list of files the main
     thread never returns to the event loop, so a cancel requested then is only noticed when the loop is entered again.
+  * **The cancellation has to win a race against the import, and the window is narrow.** The spike cancels as soon as
+    the task progress model reports the running import and at the latest 200 ms into it; the 512k-atom POSCAR is still
+    being read then on every machine measured (about 0.5 s here), but a *later* cancel arrives after the import has
+    finished, and the check then fails for the right reason (nothing was cancelled, the scene keeps the pipeline). A
+    larger file is the knob to turn. Whether the model reported the import *at that moment* is deliberately only logged:
+    the shell refreshes the model at most every 100 ms and an importer starts reporting when it chooses, which made the
+    check fail on the slower CI runners although the import had been cancelled correctly there - the per-task display is
+    asserted where it is deterministic (the parity check drives the model itself, §9.2.3).
 * **`QQuickWindow::grabWindow()` is unusable with the `QQuickRhiItem` viewports** (§2.2 and §9): the shell is
   screenshotted from the X server.
 * **QML components must not share their name with a C++ type registered in the same module.** `WorkbenchWindow.qml`
