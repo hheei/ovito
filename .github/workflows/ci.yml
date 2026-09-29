@@ -116,6 +116,7 @@ jobs:
               --qml-library-check \
               --qml-icon-check \
               --qml-offscreen-check \
+              --qml-prewarm-check \
               --qml-pick 300,300 \
               --qml-parity-check \
               --qml-import-check \
@@ -219,6 +220,7 @@ jobs:
               --qml-library-check \
               --qml-icon-check \
               --qml-offscreen-check \
+              --qml-prewarm-check \
               --qml-pick 300,300 \
               --qml-parity-check \
               --qml-import-check \
@@ -295,6 +297,7 @@ jobs:
               --qml-library-check \
               --qml-icon-check \
               --qml-offscreen-check \
+              --qml-prewarm-check \
             --qml-pick 300,300 \
             --qml-parity-check \
             --qml-import-check \
@@ -456,6 +459,7 @@ jobs:
               --qml-library-check `
               --qml-icon-check `
               --qml-offscreen-check `
+              --qml-prewarm-check `
               --qml-pick 300,300 `
               --qml-parity-check `
               --qml-import-check `
