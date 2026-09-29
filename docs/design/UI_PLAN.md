@@ -550,7 +550,66 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      * *Verification of deliverable 7*: the numbers, the two decided-against items and the pre-warm's acceptance are
        documented in [UI_TEST_ENV.md](UI_TEST_ENV.md) sections 9.4 (frame times) and 9.2.7 (the check, and the release-only
        corruption that defect F20 turned out to be); `--qml-prewarm-check` runs in the four CI jobs.
-- **Status**: **deliverables 1–7 are done** — Phase 2.5 is complete except for the exit gate's final pass; every review item A1–A9 is in one of the three states the gate asks for (see the table in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md) section 7), and each optimization of deliverable 7 is recorded with its measured medians, including the two that were decided against; the picking pre-warm also names the release-only corruption it exposed (D36, defect F20) and its fix. Phase 2 is complete (deliverables 1–7, exit gate
+  8. **Workbench fit and finish** — the closing pass over the gaps the audit left behind. Every item is small and every
+     one is *wiring*: the shared layer exists, what is missing is the place where the Qt Quick shell uses it. They are the
+     last items of this phase because they change behaviour the shell already has (closing, saving, reopening), and
+     because a shared-code change has to be verified in both frontends - the Windows round (defect F13) is the reminder of
+     what that costs.
+     * **A modified session must never be lost silently.** The classic frontend asks in `MainWindow::closeEvent()` and in
+       its Quit path (`gui/desktop/mainwin/MainWindow.cpp:440`, `:552`, `:629`). The shell answered Quit with
+       `shutdown(); QCoreApplication::quit();` and had no window-closing handler at all, so a session the user had
+       modified disappeared without a question: the one item of this list that can lose work. `WorkbenchUI::
+       askForSaveChanges()` is shared already; the shell gains a `canCloseWorkbench()` that asks through the workbench's
+       message box and returns `false` when the user cancels, and both the window's `closing` signal and the Quit command
+       consult it (the `this_task::cancelAndThrow()` of a cancelled prompt becomes "do not close", not an exception).
+     * **The title shows the modified state.** `QmlWorkbenchController::determineWindowTitle()` read only the data set's
+       file path, so the shell showed no dirty marker where the classic frontend shows `[*]` (`setWindowModified()`). The
+       title follows `UndoStack::cleanChanged` as well and marks a modified session - which is also what makes the prompt
+       above intelligible.
+     * **File → Recent Files.** `RecentFilesList` is a widget-free `gui/base` singleton with a `listChanged()` signal and
+       was already used by the spike's session check, but the shell's File menu offered only the import entry. The menu
+       gains the submenu the classic frontend has: session entries reopen the session, data entries re-import through the
+       remembered importer class and format, and the submenu is disabled while the list is empty.
+     * **The import dialog remembers the last directory.** `GuiSettings` owns the per-dialog-class directory history
+       (D30) and `--qml-settings-check` round-trips it, but the shell's `FileDialog` neither read nor wrote it, so it
+       opened somewhere else every time where the classic frontend returns to the last directory. Both directions are
+       wired through the same dialog-class key the classic dialog uses.
+     * **A session with several file pipelines is not loaded silently.** `MainWindowUI::checkLoadedDataset()` asks which
+       pipeline to keep when a (non-professional) session holds two or more file source pipelines and deletes the others;
+       the shell kept all of them without a word, which is a difference in what the user gets rather than in how it looks.
+       The QML frontend asks the same question with a chooser listing the pipelines (a message box cannot return a choice
+       of N), and a cancelled load leaves the data set untouched, as in the classic frontend.
+     * **Acceptance**: `--qml-session-check` covers the prompt (a modified session answered three ways: cancel keeps the
+       window and the session, discarding proceeds without saving, saving writes the file and leaves a clean state) and
+       `--qml-parity-check` covers the Recent Files submenu and the directory the import dialog opens in; the multi-
+       pipeline chooser gets a documented manual check, because its fixture - a session holding two file sources - is not
+       in the matrix's fixture list yet and is added there with it.
+  9. **A visual regression net for the shell** — every check of this phase asserts a *model*, so a shell that renders a
+     single empty pane passes all of them; that happened once (the layout round of Phase 2, where all `LAYOUT_*`
+     assertions passed while the capture showed one empty pane) and was only caught by looking at a screenshot. The Linux
+     CI jobs capture the running workbench with `ffmpeg -f x11grab` on the private Xvfb display they already start (the
+     recipe of [UI_TEST_ENV.md](UI_TEST_ENV.md) §9.7, which is also why the spike holds its window open with
+     `--qml-hold-ms` instead of grabbing it itself) and upload the image as a job artifact. Deliberately **not** a
+     byte-exact pixel comparison in the build: font rasterization alone would make that fail, so the artifact is for a
+     reviewer and for comparing rounds by hand.
+  10. **Harness maintainability** — the spike's `Main.cpp` is over 3000 lines and holds every check, and a new
+     verification option has to be registered in two places (the parser and the predicate that decides whether a run is a
+     verification run), a trap that has already produced a run which timed out without doing anything. The steps move into
+     one file per check under `src/ovito/gui/qml/spike/checks/` behind a small registry that derives the option list, the
+     help text and the "is this a verification run" decision from one table.
+  11. **Close the phase** — with the items above landed, the architecture status of [UI_DESIGN.md](UI_DESIGN.md) ends its
+     "proposed" state, which was waiting for exactly three things: the Phase 0 audit, the Phase 1 rendering validation
+     and the exit gate of this phase, and all three are done. The documents that describe the shell are checked against
+     the tree once more (the parity matrix rows this phase closed, the review's item table, the cross-references between
+     them), and the freeze is recorded in `AGENTS.md` so that later work knows which parts of the design are still open
+     to change (the presentation models of Phase 3 onward) and which are settled.
+     * **Not in this phase**, recorded so that the list is complete rather than open: the *performance* candidates were
+       measured in deliverable 7 and are decided (picking pre-warm adopted, single viewport canvas rejected with its
+       numbers, frame-graph generation measured as a tenth of a frame); the *deferred* features keep their phases (the
+       asynchronous pick API A3 with hover coalescing in Phase 5, the selection/hover model A5 in Phase 4, a manual
+       dark/light choice and accessibility in Phase 8); and the *environment* gaps (mixed-DPI multi-monitor, macOS
+       screenshots, a Vulkan driver under Xvfb) stay recorded as environment in the matrix's §6.
+- **Status**: **deliverables 1–7 are done, 8–11 are running** — every review item A1–A9 is in one of the three states the gate asks for (see the table in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md) section 7), and each optimization of deliverable 7 is recorded with its measured medians, including the two that were decided against; the picking pre-warm also names the release-only corruption it exposed (D36, defect F20) and its fix. Phase 2 is complete (deliverables 1–7, exit gate
   verified on Linux/OpenGL, Linux/Vulkan, macOS/Metal and Windows/D3D12), so this phase starts from a verified base; the
   audit decisions it produces are recorded as D30 onward in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md). Deliverable 1 (the
   action/editor inventory in that document's section 6 plus [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md)) is delivered and
@@ -581,7 +640,12 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   undo/redo enablement, per-task list) that also runs in the four CI jobs, or a documented manual check; the classic
   frontend still passes `ctest --preset native`, `--nogui`, and a graphical run in its own session, and the QML frontend
   still passes the full spike set on Linux (and on macOS/Windows whenever a host is available); every optimization
-  decision — including the ones decided *against* — is recorded with its measured medians.
+  decision — including the ones decided *against* — is recorded with its measured medians. Deliverables 8–11 add their own
+  acceptance: the closing and reopening behaviour of deliverable 8 is asserted by `--qml-session-check` (the modified-
+  session prompt) and `--qml-parity-check` (Recent Files and the directory the import dialog opens in), with one documented
+  manual check (the multi-pipeline chooser, whose fixture is a session holding two file sources), the Linux jobs upload the
+  shell capture of deliverable 9 as an artifact, deliverable 10 keeps every existing check green with the options derived
+  from one table, and the freeze of deliverable 11 is recorded in `AGENTS.md`.
 - **Risks**:
   * *Small wins with a shared-code blast radius.* Mitigation: land the phase as separate grouped commits per deliverable,
     with the classic-frontend checks after each, exactly as in Phases 1–2; a `gui/base`-only change still needs the
