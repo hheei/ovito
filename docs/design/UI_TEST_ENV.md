@@ -755,6 +755,14 @@ Traps and facts that cost time here, in order:
   views of the shell's model objects are therefore named `WorkbenchPane.qml`, `WorkbenchSplitter.qml`,
   `WorkbenchStatusBar.qml` and `WorkbenchMessageBox.qml`, and the model types keep the names of their C++ classes
   (`ViewportPane`, `ViewportSplitter`, `ViewportLayout`, `ViewportController`, `WorkbenchController`).
+* **Two parity checks are sensitive to the window manager, and the CI runners differ from a desktop.** The keyboard
+  focus order can only be read from `QQuickWindow::contentItem()->nextItemInFocusChain()` while the window *has* the
+  keyboard focus: the headless macOS runner never gives it to the window, the walk then returns a single stop, and the
+  check used to fail there although the shell was fine. It now always verifies the structural precondition (the import
+  control and the viewports are tabbable items) and asserts the order itself only when the chain can be walked. Window
+  sizes are clamped as well (the same runner turned a requested 1100x700 window into 1100x656), so the window-state check
+  asks for a modest 900x600, compares the store against the size the window *actually* became, and asserts the restore
+  direction exactly only when the platform honoured that size while writing it.
 * **The message dialog blocks the caller.** `showMessageBox()` runs a nested event loop while the dialog is open (like
   the desktop frontend's modal `QMessageBox::exec()`), so an automated run that triggers an error has to answer it -
   the spike polls for `messageBoxVisible` and calls `answerMessageBox(Ok)`, which also verifies the dialog.
