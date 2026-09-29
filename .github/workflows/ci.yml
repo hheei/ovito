@@ -66,6 +66,19 @@ jobs:
       # renders into an Xvfb display with the software rasterizer. Picking runs through OVITO's own offscreen
       # RenderThread, which uses Vulkan on Linux and therefore needs a usable ICD (lavapipe here, since the
       # runners have no GPU). See docs/design/UI_TEST_ENV.md.
+      # The Qt Quick frontend must notice when its platform plugin provides no graphics device and must name the
+      # plugin at fault instead of leaving the viewports empty (plan item A8.4). Qt's offscreen plugin provides no
+      # QRhi, so this run takes that error path, and the spike fails if the frontend reports a device that the
+      # window does not have.
+      - name: Smoke test the missing-graphics-device report
+        env:
+          QT_QPA_PLATFORM: offscreen
+          LD_LIBRARY_PATH: ${{ env.Qt6_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
+        run: |
+          ./build/bin/ovito-qml-spike \
+            --qml-startup-delay 3000 \
+            --qml-device-check
+
       - name: Smoke test the Qt Quick frontend
         env:
           QT_QPA_PLATFORM: xcb
@@ -100,6 +113,7 @@ jobs:
               --qml-command-check \
               --qml-settings-check \
               --qml-session-check \
+              --qml-library-check \
               --qml-pick 300,300 \
               --qml-parity-check \
               --qml-import-check \
@@ -155,6 +169,19 @@ jobs:
         run: |
           ctest --test-dir build --output-on-failure
 
+      # The Qt Quick frontend must notice when its platform plugin provides no graphics device and must name the
+      # plugin at fault instead of leaving the viewports empty (plan item A8.4). Qt's offscreen plugin provides no
+      # QRhi, so this run takes that error path, and the spike fails if the frontend reports a device that the
+      # window does not have.
+      - name: Smoke test the missing-graphics-device report
+        env:
+          QT_QPA_PLATFORM: offscreen
+          LD_LIBRARY_PATH: ${{ env.Qt6_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
+        run: |
+          ./build/bin/ovito-qml-spike \
+            --qml-startup-delay 3000 \
+            --qml-device-check
+
       - name: Smoke test the Qt Quick frontend
         env:
           QT_QPA_PLATFORM: xcb
@@ -187,6 +214,7 @@ jobs:
               --qml-command-check \
               --qml-settings-check \
               --qml-session-check \
+              --qml-library-check \
               --qml-pick 300,300 \
               --qml-parity-check \
               --qml-import-check \
@@ -260,6 +288,7 @@ jobs:
               --qml-command-check \
               --qml-settings-check \
               --qml-session-check \
+              --qml-library-check \
             --qml-pick 300,300 \
             --qml-parity-check \
             --qml-import-check \
@@ -418,6 +447,7 @@ jobs:
               --qml-command-check `
               --qml-settings-check `
               --qml-session-check `
+              --qml-library-check `
               --qml-pick 300,300 `
               --qml-parity-check `
               --qml-import-check `
