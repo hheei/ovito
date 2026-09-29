@@ -945,11 +945,54 @@ Traps of this round:
    switches the theme for its own purposes has to put the previous one back (it reads it from
    `GuiSettings::instance().usingDarkTheme()`), or the rest of the run renders with the wrong icons.
 
+### 9.2.6 Testing the shared offscreen rendering service
+
+`--qml-offscreen-check` covers `core/rendering/OffscreenRenderTarget` (audit decision D34), the one owner of offscreen
+rendering for both frontends. It first proves the *kind* contract - a `renderPicking()` submitted to a `Kind::Visual`
+target and a `renderImage()` submitted to a `Kind::PickingOnly` target are refused (in a build with active assertions they
+abort, which is the point of the check, so the case is skipped there) - and then drives the three offscreen paths the Qt
+Quick process can reach **at the same time**:
+
+1. the ambient-occlusion sampling, started by triggering the library command whose id ends in `AmbientOcclusionModifier`
+   on a pipeline that the check selected through `PipelineListModel`,
+2. a picking pass whose result the check deliberately does not await, and
+3. a render output (`RenderSettings::render()`), whose read-back image is compared scan line by scan line against a
+   baseline until the ambient-occlusion shading appears.
+
+While the sampling, the picking and the render output are in flight the check resizes the workbench window, which
+supersedes the picking target; afterwards a fresh pick has to succeed, which is the teardown/deadlock part of the
+acceptance. The desktop-only viewport grab (`WidgetViewportWindow::grabViewportImage()`) shares `renderImage()` with the
+render-output path and is not exercised separately.
+
+Traps of this round:
+
+1. **A Qt callback has no task context of its own.** `Task::waitFor()` and the coroutine machinery read `this_task`, and
+   a timer/event callback runs without one, so waiting for a future or starting a render output from a poll callback
+   crashes in ways that have nothing to do with the feature (a null dereference in `this_task::ui()` or in
+   `Task::waitFor()`). Every callback that touches OVITO opens its own `GuiTaskScope` - the harness callbacks do this as
+   their first statement, and the poll helper calls them outside the scope of the function that started the poll.
+2. **Only the main thread may allocate an offscreen target**, because allocation creates the shared render thread and its
+   graphics device (`UserInterface::renderThread()` asserts main-thread execution). The ambient-occlusion sampling
+   submits its passes from a worker thread, so its modifier calls `OffscreenRenderTarget::prepare()` while it is still on
+   the main thread. This is the one defect of the round that the *assert-enabled* build found and the release build hid.
+3. **The scene a later check inherits may hold no particles.** The parity check imports a file that OVITO's autodetection
+   hands to the LAMMPS importer, which parses it into an empty scene, and ambient-occlusion shading has nothing to recolor
+   there. The check therefore imports a lattice of its own and waits until the file source has evaluated it, instead of
+   assuming the startup dataset of the run.
+4. **A `PipelineListModel` or library model can exist only once per process.** Their constructors register commands with
+   fixed ids, and `ActionManager::addCommand()` refuses a duplicate id (in the assert-enabled build it aborts with
+   "There is already a command with the same ID"). The spike creates them once in `workbenchModels()` and shares them
+   between checks; a frontend is in the same position.
+5. **Selecting the node that is already selected is not a selection change.** The model adopts the scene selection through
+   `DataSetContainer::selectionChangeComplete`, which is emitted only for a real change, so a check that wants the model
+   to adopt a node has to clear the selection first.
+
 ### 9.5 The CI smoke test and its render loop
 
 The Qt Quick smoke test of the GitHub workflow (`.github/workflows/ci.yml`) runs with `QSG_RENDER_LOOP=basic` on the
 two Linux jobs. It asserts that the frontend starts, renders frames, picks, lays out its panes, passes the shell's parity
-check (`--qml-parity-check`) and imports a file - none of which depends on the render loop - while the runner has no GPU and few CPU cores, where the threaded loop's
+check (`--qml-parity-check`), exercises the shared offscreen service (`--qml-offscreen-check`) and imports a file - none of
+which depends on the render loop - while the runner has no GPU and few CPU cores, where the threaded loop's
 frame synchronization is a source of flakiness rather than of signal. Both loops are part of the local verification
 (section 9.4), so the loop that is left out of CI is covered elsewhere.
 

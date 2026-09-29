@@ -418,8 +418,9 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        command whose `QAction` view and row flags agree with it) plus the offscreen `--qml-device-check` run that accepts
        the missing-graphics-device path; and the whole spike suite in the release and the assert-enabled build. The insert
        path of the library rows is *not* exercised by the spike: inserting a viewport layer switches the viewport into
-       render preview mode, which the Qt Quick viewport does not implement yet (Phase 5), and inserting a modifier needs a
-       selected pipeline in the list model, which only a selection operation of the frontend establishes.
+       render preview mode, which the Qt Quick viewport does not implement yet (Phase 5). A modifier *is* inserted through
+       a library command, by the ambient-occlusion case of `--qml-offscreen-check`, which selects the pipeline through the
+       model first (deliverable 6).
   5. **Shared presentation assets (review item A9) — done**: the classic icon set
      (`gui/base/resources/icons/ovito-dark|light`) is published for QML use and the drawn glyphs of the shell are gone, so
      both frontends speak one visual language. `gui/base/app/IconTheme` owns the rule that answers which of the two themes
@@ -431,7 +432,7 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      the shell and of its commands, the QML singleton reports the theme of the shared layer, every icon image is loaded, and
      a maximized pane switches its button to the restore icon), in the release and the assert-enabled build, plus a classic
      run whose toolbar still shows its icons after the theme wiring moved. Evidence: `docs/design/evidence/phase25_icons.png`.
-  6. **Offscreen rendering service (review item A4)**: one core-facing service over the four `RenderThread` offscreen
+  6. **Offscreen rendering service (review item A4) — done**: one core-facing service over the four `RenderThread` offscreen
      entry points (`createOffscreenTarget`, `renderOffscreenFrame`, `renderAOFrame`, `renderPickingFrame`), owning target
      creation, the `forPickingOnly`/AO flag, supersampling, readback and reuse, used by the classic viewport grab, the QML
      picking pass, the ambient-occlusion modifier and — in Phase 7 — render output. It does **not** re-introduce a shared
@@ -447,6 +448,26 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      sampling, the picking pass, the viewport grab and the render output must each run to completion while the others are
      in flight, a superseded request must neither deadlock nor read a freed target, and releasing the resources with a
      request in flight must fail loudly rather than silently. Render *settings* and the output dialog remain Phase 7.
+     *Outcome:* the service is `core/rendering/OffscreenRenderTarget` (audit decision D34) — move-only, constructed as
+     `OffscreenRenderTarget(UserInterface&, Kind)` with `Kind::Visual` or `Kind::PickingOnly`, exposing `renderImage()`,
+     `renderPicking()` and `renderAmbientOcclusion()` and reusing its GPU target until the requested resolution changes.
+     The `Kind` replaces the raw `forPickingOnly` flag, and a pass of the wrong kind throws (and asserts) before any GPU
+     work is submitted. The interface carries the thread protocol explicitly rather than leaving it implicit: **only the
+     main thread may allocate a target** (allocation creates the shared render thread and the graphics device), **a pass
+     may be submitted from any thread** once the target exists for that size, and completion arrives on the awaiter's
+     executor; `prepare()` is the main-thread step that exists for the one consumer whose pass is submitted from a worker
+     thread (the ambient-occlusion sampling). All five consumers moved onto the service — `RenderSettings` render output,
+     `WidgetViewportWindow::grabViewportImage()`, the QML picking pass, `AmbientOcclusionModifier` and
+     `ColorLegendOverlay` symbol rendering — and a shared `PickingBufferTarget` was deliberately not re-introduced.
+     *Verification:* the spike's new `--qml-offscreen-check` first proves the kind contract (a `renderPicking()` on a
+     `Visual` target and a `renderImage()` on a `PickingOnly` target are refused) and then drives the three QML-reachable
+     offscreen paths **at the same time**: it inserts the ambient-occlusion modifier through its shared library command
+     (so the sampling runs on the pipeline's worker thread), starts a picking pass whose result it deliberately does not
+     await, resizes the workbench window while the sampling, the picking and a render output are in flight, and then
+     re-renders the render output until the ambient-occlusion shading appears in the read-back image — after which a
+     fresh pick proves the superseded picking target neither deadlocked nor read a freed target. The step runs in the four
+     CI jobs. The desktop-only viewport grab shares `renderImage()` with the render-output path and is therefore not
+     exercised separately.
   7. **Measurement-driven viewport optimization pass** (each item decided by numbers, not by intuition; method in
      [UI_TEST_ENV.md](UI_TEST_ENV.md) section 9.4 — `QSG_NO_VSYNC=1`, both render loops, medians of three runs at 512 and
      32768 atoms):
@@ -464,13 +485,16 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        mean four frame graphs, which is expected and may already be dominated by something else.
      * **`--gui` diagnostics** — an unknown frontend name currently prints the available names and exits 1; also list the
        names for a typo and make the message usable from a desktop launcher.
-- **Status**: **deliverables 1–3 are done; deliverables 4–7 are not started.** Phase 2 is complete (deliverables 1–7, exit gate
+- **Status**: **deliverables 1–6 are done; deliverable 7 (the measurement-driven optimization pass) is not started.** Phase 2 is complete (deliverables 1–7, exit gate
   verified on Linux/OpenGL, Linux/Vulkan, macOS/Metal and Windows/D3D12), so this phase starts from a verified base; the
   audit decisions it produces are recorded as D30 onward in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md). Deliverable 1 (the
   action/editor inventory in that document's section 6 plus [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md)) is delivered and
   verified: writing it also ran the installed-tree check of §2.3 of UI_TEST_ENV.md, fixed defect F17, and corrected a
   testing recipe that had been recorded as working without ever having worked. Deliverable 2 (the settings facade, D30) is
-  delivered as well, with its check running in all four CI jobs.
+  delivered as well, with its check running in all four CI jobs. Deliverable 3 (the small parity gaps and the import
+  notice, D31), deliverable 4 (the A8 shared-layer cleanup, D32), deliverable 5 (the A9 icon layer, D33) and deliverable 6
+  (the A4 offscreen service, D34) are delivered and verified in the release and the assert-enabled build, each with its
+  spike check running in the four CI jobs.
 - **Non-goals** (each assigned to a phase where its semantics are already being changed, so they are not silently lost):
   * **A3** (one asynchronous pick API) belongs to Phase 5: it changes the `pick()` contract that `SelectionMode`,
     `NavigationModes` and `XFormModes` call on every mouse move, and the classic frontend's blocking behaviour has to be

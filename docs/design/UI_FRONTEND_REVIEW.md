@@ -257,7 +257,7 @@ the hover-pick deadlock test that both frontends must pass.
 
 **Payoff.** Removes the classic frontend's per-hover-move stall and ends the second picking implementation.
 
-### A4 — Offscreen rendering service (P1–P2, ~1–2 days)
+### A4 — Offscreen rendering service (P1–P2, ~1–2 days) — **implemented in Phase 2.5**
 
 **Evidence.** Four consumers drive `RenderThread` themselves, each with its own lifetime and flag handling:
 
@@ -276,6 +276,17 @@ samples") that owns target creation, the `forPickingOnly`/AO flag, supersampling
 frontend picks through `RenderThread::renderPickingFrame()` and `ObjectPickingBuffer`. What is still duplicated is the
 offscreen *target lifecycle* around those calls, including the AO path that creates and awaits its target from a work
 thread. The QML render output planned for Phase 7 and the classic render output would then use identical code.
+
+**Outcome (`core/rendering/OffscreenRenderTarget`, audit decision D34).** The service is a move-only class constructed
+from the `UserInterface` and a `Kind` (`Visual` for image output, `PickingOnly` for picking passes and AO sampling) with
+three entry points — `renderImage()`, `renderPicking()` and `renderAmbientOcclusion()` — and reuses its GPU target until
+the requested resolution changes. All five in-tree consumers moved onto it (render output, the classic viewport grab, the
+QML picking pass, the AO sampling, the color-legend symbol rendering), which removed their duplicated target/flag/
+supersampling/readback code; the AO path lost its implicit "create on the main thread, await on a worker" split, because
+the service now *names* the rule: **only the main thread may allocate a target** (allocating one is what creates the
+shared render thread and its graphics device) while **a pass may be submitted from any thread** once the target exists.
+`prepare()` exists for exactly that reason and is called by the ambient-occlusion modifier before it moves to its worker
+thread. The QML-side acceptance of the service is the spike's `--qml-offscreen-check`.
 
 ### A5 — Workbench state models (P2, ~2–3 days) — **partly implemented**
 
@@ -438,14 +449,14 @@ row.
 | A1 command layer | implemented | before Phase 2; QML exposure in Phase 2 |
 | A2 viewport renderer registry | implemented, reduced form | before Phase 2; the window objects stay per frontend, the layout rules are Phase 4 |
 | A3 one asynchronous pick API | assigned | Phase 5 (deliverable 5) |
-| A4 offscreen rendering service | assigned | Phase 2.5 (deliverable 6) |
+| A4 offscreen rendering service | implemented | Phase 2.5 (deliverable 6) |
 | A5 recent files, task-progress model, session workflow | implemented | before Phase 2 |
 | A5 settings facade | assigned | Phase 2.5 (deliverable 2) |
 | A5 selection/hover model | assigned | Phase 4 |
 | A6 import plan/options model | assigned | Phase 7; the user-visible *notice* is Phase 2.5 |
 | A7 property model foundation | assigned | Phase 4 (deliverable 0, mandatory before its other deliverables) |
 | A8.1–A8.5 remaining couplings | implemented | Phase 2.5 (deliverable 4) |
-| A9 shared icon/theme assets | assigned | Phase 2.5 (deliverable 5) |
+| A9 shared icon/theme assets | implemented | Phase 2.5 (deliverable 5) |
 
 The four small gaps of §5 are Phase 2.5 deliverable 3 — with **About and Quit** in the menu bar and **Preferences deferred
 to Phase 7**, since its command has no handler outside the desktop settings dialog — and the import-diagnostics notice of
