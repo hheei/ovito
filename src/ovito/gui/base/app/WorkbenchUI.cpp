@@ -4,6 +4,7 @@
 #include <ovito/gui/base/GUIBase.h>
 #include <ovito/gui/base/actions/ActionManager.h>
 #include <ovito/gui/base/app/TaskProgressModel.h>
+#include <ovito/gui/base/mainwin/RecentFilesList.h>
 #include <ovito/gui/base/viewport/ViewportInputManager.h>
 #include <ovito/core/app/undo/UndoStack.h>
 #include <ovito/core/dataset/DataSet.h>
@@ -155,6 +156,117 @@ void WorkbenchUI::runFileImport(FileImporter& importer, Scene* scene, std::vecto
     // A frontend that can show the progress of the import operation (and let the user cancel it) overrides this method.
     Future<OORef<Pipeline>> future = importer.importFileSet(scene, std::move(urlImporters), importMode, true, FileImporter::ImportAsTrajectory);
     (void)future.blockForResult();
+}
+
+/******************************************************************************
+* Returns the file the current session was loaded from or saved to.
+******************************************************************************/
+QString WorkbenchUI::sessionFilePath() const
+{
+    OORef<DataSet> dataset = datasetContainer().currentSet();
+    return dataset ? dataset->filePath() : QString();
+}
+
+/******************************************************************************
+* Indicates whether the current session contains changes that have not been saved yet.
+******************************************************************************/
+bool WorkbenchUI::isSessionModified() const
+{
+    return undoStack() && !undoStack()->isClean();
+}
+
+/******************************************************************************
+* Loads a session state file and makes it the current data set.
+******************************************************************************/
+bool WorkbenchUI::loadSessionFile(const QUrl& url)
+{
+    OVITO_ASSERT(this_task::get());
+
+    // The file path is part of the data set, so it is set by the loading code (DataSet::createFromFile).
+    OORef<DataSet> dataset = DataSet::createFromFile(url.toLocalFile());
+    if(!checkLoadedDataset(dataset))
+        return false;
+
+    // Display the loaded session state and remember it. The undo stack of a freshly loaded session is clean.
+    datasetContainer().setCurrentSet(std::move(dataset));
+    if(undoStack())
+        undoStack()->setClean();
+    RecentFilesList::instance().addSessionFileEntry(url);
+    return true;
+}
+
+/******************************************************************************
+* Saves the current session to the given file.
+******************************************************************************/
+void WorkbenchUI::saveSessionFile(const QString& filePath)
+{
+    OVITO_ASSERT(this_task::get());
+    OORef<DataSet> dataset = datasetContainer().currentSet();
+    if(!dataset)
+        throw Exception(tr("There is no session to save."));
+
+    dataset->saveToFile(filePath);
+    dataset->setFilePath(QFileInfo(filePath).absoluteFilePath());
+    if(undoStack())
+        undoStack()->setClean();
+    RecentFilesList::instance().addSessionFileEntry(QUrl::fromLocalFile(filePath));
+}
+
+/******************************************************************************
+* Saves the current session, asking the frontend for a file path if the session has none yet.
+******************************************************************************/
+bool WorkbenchUI::saveSession()
+{
+    OVITO_ASSERT(this_task::get());
+    OORef<DataSet> dataset = datasetContainer().currentSet();
+    if(!dataset)
+        return false;
+
+    QString filePath = dataset->filePath();
+    if(filePath.isEmpty()) {
+        // The session has not been saved yet, so the frontend has to ask the user for a file name.
+        if(!requestSessionFilePath(filePath))
+            return false;
+        if(filePath.isEmpty())
+            return false;
+    }
+    saveSessionFile(filePath);
+    return true;
+}
+
+/******************************************************************************
+* Asks the user to save the changes of the current session before it is discarded.
+******************************************************************************/
+void WorkbenchUI::askForSaveChanges()
+{
+    OVITO_ASSERT(this_task::get());
+    OORef<DataSet> dataset = datasetContainer().currentSet();
+    if(!dataset || !isSessionModified())
+        return;
+
+    const QString filePath = sessionFilePath();
+    QString message = filePath.isEmpty()
+        ? tr("The current program session has not been saved. Do you want to save it?")
+        : tr("The current session state has been modified. Do you want to save the changes?");
+    if(!filePath.isEmpty())
+        message += QStringLiteral("\n\n") + tr("File: %1").arg(filePath);
+
+    // The question is presented by the frontend (the message box of the user interface), so both frontends ask it in
+    // the same way and only differ in how the message is displayed.
+    const MessageBoxButton result = showMessageBox(InformationIcon, tr("Save changes"), message, Yes | No | Cancel, Cancel);
+    if(result == Cancel)
+        this_task::cancelAndThrow(); // Operation canceled by the user.
+    else if(result != No)
+        saveSession();
+}
+
+/******************************************************************************
+* Hook of the session workflow: asks the frontend for the file the session should be saved to.
+******************************************************************************/
+bool WorkbenchUI::requestSessionFilePath(QString& filePath)
+{
+    throw Exception(tr("Cannot save the session: this user interface provides no file selection dialog. Use the "
+                       "session commands of the frontend or save the session from a script."));
 }
 
 /******************************************************************************

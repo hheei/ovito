@@ -14,6 +14,7 @@
 #include <ovito/gui/qml/QmlFrontend.h>
 #include <ovito/gui/qml/mainwin/QmlMainWindowUI.h>
 #include <ovito/gui/base/app/TaskProgressModel.h>
+#include <ovito/gui/base/mainwin/RecentFilesList.h>
 #include <ovito/gui/qml/viewport/QuickViewportItem.h>
 #include <ovito/gui/qml/viewport/QuickViewportWindow.h>
 #include <ovito/core/app/StandaloneApplication.h>
@@ -1011,6 +1012,117 @@ void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     continuation();
 }
 
+/// Verifies the session workflow of the workbench, which both frontends share (WorkbenchUI::saveSessionFile(),
+/// saveSession(), loadSessionFile() and isSessionModified()): saving a session writes a file and clears the modified
+/// state, a change to the scene marks the session as modified, and loading the session brings the saved content back.
+///
+/// The file dialog in front of the workflow is frontend specific (the classic main window shows a QFileDialog, the Qt
+/// Quick shell has no session commands yet), so this check drives the operations that do not need a file name.
+void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    const QString sessionFile = QDir::tempPath() + QStringLiteral("/ovito-qml-session-test/session.ovito");
+    QDir().mkpath(QFileInfo(sessionFile).absolutePath());
+    QFile::remove(sessionFile);
+
+    // The check saves the scene of the workbench, so there has to be one: an earlier step may have canceled an import
+    // and left the scene empty.
+    {
+        GuiTaskScope taskScope(*ui);
+        if(Scene* scene = ui->datasetContainer().activeScene(); !scene || scene->children().empty()) {
+            const QString dataFile = QDir::tempPath() + QStringLiteral("/ovito-qml-session-test/lattice.xyz");
+            if(!writeLatticeFile(dataFile, 8, 3.6).isEmpty())
+                ui->workbenchController()->importFiles(QVariantList{ QUrl::fromLocalFile(dataFile) });
+        }
+    }
+
+    Scene* scene = ui->datasetContainer().activeScene();
+    SceneNode* node = scene && !scene->children().empty() ? scene->children().front() : nullptr;
+    if(!node) {
+        reportVerificationFailure(QStringLiteral("session check: the scene holds no object to save"));
+        continuation();
+        return;
+    }
+
+    GuiTaskScope taskScope(*ui);
+    ui->handleExceptions([&]() {
+        // 1. Saving a session writes the file, remembers it and clears the modified state.
+        ui->saveSessionFile(sessionFile);
+        if(!QFileInfo::exists(sessionFile))
+            reportVerificationFailure(QStringLiteral("session check: saving wrote no file"));
+        if(ui->sessionFilePath() != QFileInfo(sessionFile).absoluteFilePath())
+            reportVerificationFailure(QStringLiteral("session check: the workbench does not remember the file it saved (%1)").arg(ui->sessionFilePath()));
+        if(ui->isSessionModified())
+            reportVerificationFailure(QStringLiteral("session check: a freshly saved session is reported as modified"));
+        qInfo() << "SESSION_TEST saved the scene to" << QFileInfo(sessionFile).fileName()
+                << QStringLiteral("(%1 bytes)").arg(QFileInfo(sessionFile).size());
+
+        // 2. A change marks the session as modified, and saving it again (into the remembered file) clears that.
+        ui->performTransaction(QStringLiteral("Rename pipeline"), [&]() { node->setSceneNodeName(QStringLiteral("renamed after saving")); });
+        if(!ui->isSessionModified())
+            reportVerificationFailure(QStringLiteral("session check: a change to the scene did not mark the session as modified"));
+        ui->saveSession();
+        if(ui->isSessionModified())
+            reportVerificationFailure(QStringLiteral("session check: the modified session is still reported as modified after saving it again"));
+
+        // 3. Loading the session file has to replace the current scene by the saved one. Change the scene again without
+        //    saving it first, so that the reload has something to undo.
+        Scene* currentScene = ui->datasetContainer().activeScene();
+        SceneNode* currentNode = currentScene && !currentScene->children().empty() ? currentScene->children().front() : nullptr;
+        if(currentNode) {
+            ui->performTransaction(QStringLiteral("Rename pipeline"), [&]() { currentNode->setSceneNodeName(QStringLiteral("renamed without saving")); });
+        }
+
+        const bool loaded = ui->loadSessionFile(QUrl::fromLocalFile(sessionFile));
+        if(!loaded) {
+            reportVerificationFailure(QStringLiteral("session check: the frontend rejected the session file it had written"));
+        }
+        else {
+            Scene* reloadedScene = ui->datasetContainer().activeScene();
+            SceneNode* reloadedNode = reloadedScene && !reloadedScene->children().empty() ? reloadedScene->children().front() : nullptr;
+            if(!reloadedNode)
+                reportVerificationFailure(QStringLiteral("session check: loading the session file produced an empty scene"));
+            else if(reloadedNode->objectTitle() != QStringLiteral("renamed after saving"))
+                reportVerificationFailure(QStringLiteral("session check: loading the session file did not restore the saved scene (title: %1)").arg(reloadedNode->objectTitle()));
+            if(ui->isSessionModified())
+                reportVerificationFailure(QStringLiteral("session check: a freshly loaded session is reported as modified"));
+            if(ui->sessionFilePath() != QFileInfo(sessionFile).absoluteFilePath())
+                reportVerificationFailure(QStringLiteral("session check: the loaded session does not remember its file"));
+        }
+
+        // 4. The session file ends up in the recently opened files, which is the list the frontends offer to the user.
+        const auto& recentEntries = RecentFilesList::instance().entries();
+        const bool isMostRecent = !recentEntries.isEmpty() && recentEntries.front().urls.size() == 1
+            && recentEntries.front().urls.front() == QUrl::fromLocalFile(sessionFile);
+        if(!isMostRecent)
+            reportVerificationFailure(QStringLiteral("session check: the session file is not the most recently opened file"));
+        qInfo() << "SESSION_TEST the session workflow saved, modified and reloaded the scene;"
+                << RecentFilesList::instance().entries().size() << "recent file(s)";
+
+        // 5. A session without a file name needs a file dialog, which this frontend does not provide yet. That has to be
+        //    reported instead of failing silently - the classic frontend overrides requestSessionFilePath() with its
+        //    QFileDialog.
+        OORef<DataSet> dataset = ui->datasetContainer().currentSet();
+        const QString rememberedPath = ui->sessionFilePath();
+        if(dataset)
+            dataset->setFilePath({});
+        bool reportedMissingDialog = false;
+        try {
+            ui->saveSession();
+        }
+        catch(const Exception&) {
+            reportedMissingDialog = true;
+        }
+        if(!reportedMissingDialog)
+            reportVerificationFailure(QStringLiteral("session check: saving a session without a file name did not report the missing file dialog"));
+        else
+            qInfo() << "SESSION_TEST a session without a file name reports the missing file dialog";
+        if(dataset)
+            dataset->setFilePath(rememberedPath);
+    });
+
+    continuation();
+}
+
 /// Measures the frame rate the viewports achieve when frames are requested continuously, which is what animation
 /// playback does. The requests originate from a queued connection because QQuickWindow::frameSwapped is emitted
 /// on the render thread, while requesting frames is a GUI-thread operation.
@@ -1129,6 +1241,8 @@ protected:
         parser.addOption(QCommandLineOption(QStringLiteral("qml-resize"),
             tr("Resize the workbench window to the given size (WxH) and verify that rendering and picking recover."),
             QStringLiteral("WxH")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-session-check"),
+            tr("Verify the session workflow of the workbench: saving, the modified state, and loading a session back.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-command-check"),
             tr("Verify the shared command layer: the commands the QML workbench sees, their state rules and their handlers.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-layout-check"),
@@ -1218,6 +1332,7 @@ protected:
         const bool hideShowTest = cmdLineParser().isSet(QStringLiteral("qml-hide-show"));
         const bool layoutCheck = cmdLineParser().isSet(QStringLiteral("qml-layout-check"));
         const bool commandCheck = cmdLineParser().isSet(QStringLiteral("qml-command-check"));
+        const bool sessionCheck = cmdLineParser().isSet(QStringLiteral("qml-session-check"));
         const bool importCheck = cmdLineParser().isSet(QStringLiteral("qml-import-check"));
         const int lifecycleCycles = cmdLineParser().value(QStringLiteral("qml-lifecycle-cycles")).toInt();
         QSize resizeSize;
@@ -1231,7 +1346,7 @@ protected:
         const int holdMs = cmdLineParser().value(QStringLiteral("qml-hold-ms")).toInt();
 
         // Interactive mode: without a verification option, keep the window open.
-        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck && !commandCheck)
+        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck && !commandCheck && !sessionCheck)
             return;
 
         int delay = cmdLineParser().value(QStringLiteral("qml-startup-delay")).toInt();
@@ -1308,6 +1423,13 @@ protected:
         if(verifyPicking) {
             _verificationSteps.push_back([ui = mainWinUI, pickPos = *pickPosition](std::function<void()> next) {
                 runPickTest(ui, pickPos, std::move(next));
+            });
+        }
+        if(sessionCheck) {
+            // Before the import check, which ends with a canceled import that leaves the scene empty; this check saves
+            // and reloads the scene of the workbench.
+            _verificationSteps.push_back([ui = mainWinUI](std::function<void()> next) {
+                runSessionTest(ui, std::move(next));
             });
         }
         if(importCheck) {

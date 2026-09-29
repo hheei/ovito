@@ -98,6 +98,7 @@ jobs:
               --qml-hide-show \
               --qml-layout-check \
               --qml-command-check \
+              --qml-session-check \
               --qml-pick 300,300 \
               --qml-import-check \
               "$RUNNER_TEMP/lattice_512.xyz"
@@ -182,6 +183,7 @@ jobs:
               --qml-lifecycle-cycles 2 \
               --qml-layout-check \
               --qml-command-check \
+              --qml-session-check \
               --qml-pick 300,300 \
               --qml-import-check \
               "$RUNNER_TEMP/lattice_512.xyz"
@@ -252,6 +254,7 @@ jobs:
             --qml-lifecycle-cycles 2 \
             --qml-layout-check \
               --qml-command-check \
+              --qml-session-check \
             --qml-pick 300,300 \
             --qml-import-check \
             "$RUNNER_TEMP/lattice_512.xyz"
@@ -397,6 +400,7 @@ jobs:
               --qml-lifecycle-cycles 2 `
               --qml-layout-check `
               --qml-command-check `
+              --qml-session-check `
               --qml-pick 300,300 `
               --qml-import-check `
               $dataset

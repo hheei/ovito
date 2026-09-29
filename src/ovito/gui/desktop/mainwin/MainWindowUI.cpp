@@ -295,21 +295,9 @@ bool MainWindowUI::checkLoadedDataset(DataSet* dataset)
 ******************************************************************************/
 bool MainWindowUI::fileSave()
 {
-    OVITO_ASSERT(this_task::get());
-    OORef<DataSet> dataset = datasetContainer().currentSet();
-
-    if(!dataset)
-        return false;
-
-    // Ask the user for a filename if there is no one set.
-    if(dataset->filePath().isEmpty())
-        return fileSaveAs();
-
-    // Save dataset to file.
-    return handleExceptions([&] {
-        dataset->saveToFile(dataset->filePath());
-        undoStack()->setClean();
-    });
+    // The session workflow lives in the base class (see WorkbenchUI::saveSession()): it asks the frontend for a file
+    // name when the session has none yet, via requestSessionFilePath() below.
+    return saveSession();
 }
 
 /******************************************************************************
@@ -319,94 +307,67 @@ bool MainWindowUI::fileSave()
 bool MainWindowUI::fileSaveAs(const QString& filename)
 {
     OVITO_ASSERT(this_task::get());
-    OORef<DataSet> dataset = datasetContainer().currentSet();
 
-    if(!dataset)
-        return false;
+    // Without a file name the user selects one, which is what saving a session without a file does anyway.
+    if(filename.isEmpty())
+        return saveSession();
 
-    if(filename.isEmpty()) {
-
-        QFileDialog dialog(mainWindow(), tr("Save Session State"));
-        dialog.setNameFilter(tr("OVITO State Files (*.ovito);;All Files (*)"));
-        dialog.setAcceptMode(QFileDialog::AcceptSave);
-        dialog.setFileMode(QFileDialog::AnyFile);
-        dialog.setDefaultSuffix("ovito");
-
-        QSettings settings;
-        settings.beginGroup("file/scene");
-
-        if(dataset->filePath().isEmpty()) {
-            if(HistoryFileDialog::keepWorkingDirectoryHistoryEnabled()) {
-                QString defaultPath = settings.value("last_directory").toString();
-                if(!defaultPath.isEmpty())
-                    dialog.setDirectory(defaultPath);
-            }
-        }
-        else {
-#ifndef Q_OS_LINUX
-            dialog.selectFile(dataset->filePath());
-#else
-            // Workaround for bug in QFileDialog on Linux (Qt 6.2.4) crashing in exec() when selectFile() is called before (OVITO issue #216).
-            dialog.setDirectory(QFileInfo(dataset->filePath()).dir());
-#endif
-        }
-
-        TaskManager::setNativeDialogActive(true);
-        auto dlgResult = dialog.exec();
-        TaskManager::setNativeDialogActive(false);
-
-        if(dlgResult != QDialog::Accepted)
-            return false;
-
-        QStringList files = dialog.selectedFiles();
-        if(files.isEmpty())
-            return false;
-        QString newFilename = files.front();
-
-        if(HistoryFileDialog::keepWorkingDirectoryHistoryEnabled()) {
-            // Remember directory for the next time...
-            settings.setValue("last_directory", dialog.directory().absolutePath());
-        }
-
-        dataset->setFilePath(newFilename);
-    }
-    else {
-        dataset->setFilePath(filename);
-    }
-    return fileSave();
+    saveSessionFile(filename);
+    return true;
 }
 
 /******************************************************************************
-* If the scene has been changed this will ask the user if he wants
-* to save the changes.
+* Asks the user for the file the current session should be saved to.
 ******************************************************************************/
-void MainWindowUI::askForSaveChanges()
+bool MainWindowUI::requestSessionFilePath(QString& filePath)
 {
     OVITO_ASSERT(this_task::get());
     OORef<DataSet> dataset = datasetContainer().currentSet();
+    if(!dataset)
+        return false;
 
-    if(!dataset || dataset->filePath().isEmpty() || undoStack()->isClean())
-        return;
+    QFileDialog dialog(mainWindow(), tr("Save Session State"));
+    dialog.setNameFilter(tr("OVITO State Files (*.ovito);;All Files (*)"));
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+    dialog.setFileMode(QFileDialog::AnyFile);
+    dialog.setDefaultSuffix("ovito");
 
-    QString message;
-    if(dataset->filePath().isEmpty() == false) {
-        message = tr("The current session state has been modified. Do you want to save the changes?");
-        message += QString("\n\nFile: %1").arg(dataset->filePath());
+    QSettings settings;
+    settings.beginGroup("file/scene");
+
+    if(dataset->filePath().isEmpty()) {
+        if(HistoryFileDialog::keepWorkingDirectoryHistoryEnabled()) {
+            QString defaultPath = settings.value("last_directory").toString();
+            if(!defaultPath.isEmpty())
+                dialog.setDirectory(defaultPath);
+        }
     }
     else {
-        message = tr("The current program session has not been saved. Do you want to save it?");
+#ifndef Q_OS_LINUX
+        dialog.selectFile(dataset->filePath());
+#else
+        // Workaround for bug in QFileDialog on Linux (Qt 6.2.4) crashing in exec() when selectFile() is called before (OVITO issue #216).
+        dialog.setDirectory(QFileInfo(dataset->filePath()).dir());
+#endif
     }
 
-    QMessageBox::StandardButton result = MessageDialog::question(mainWindow(), tr("Save changes"),
-        message,
-        QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel, QMessageBox::Cancel);
-    if(result == QMessageBox::Cancel) {
-        this_task::cancelAndThrow();
+    TaskManager::setNativeDialogActive(true);
+    auto dlgResult = dialog.exec();
+    TaskManager::setNativeDialogActive(false);
+
+    if(dlgResult != QDialog::Accepted)
+        return false;
+
+    QStringList files = dialog.selectedFiles();
+    if(files.isEmpty())
+        return false;
+    filePath = files.front();
+
+    if(HistoryFileDialog::keepWorkingDirectoryHistoryEnabled()) {
+        // Remember directory for the next time...
+        settings.setValue("last_directory", dialog.directory().absolutePath());
     }
-    else if(result != QMessageBox::No) {
-        // Save scene first.
-        fileSave();
-    }
+    return true;
 }
 
 /******************************************************************************

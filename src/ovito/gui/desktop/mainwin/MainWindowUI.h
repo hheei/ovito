@@ -79,12 +79,6 @@ public:
     /// \throw Exception on error.
     bool fileSaveAs(const QString& filename = QString());
 
-    /// \brief Asks the user if changes made to the dataset should be saved.
-    ///
-    /// If the current dataset has been changed, this method asks the user if changes should be saved.
-    /// If yes, then the dataset is saved by calling fileSave().
-    void askForSaveChanges();
-
     /// The type-erased function object type to be passed to scheduleOperationAfterScenePreparation().
     using operation_function = fu2::function_base<
         true, // IsOwning = true: The function object owns the callable object and is responsible for its destruction.
@@ -118,6 +112,9 @@ protected:
 
     /// Creates the action manager of this workbench.
     virtual ActionManager* createActionManager(QObject* parent) override;
+
+    /// Asks the user for the file the current session should be saved to (see WorkbenchUI::saveSession()).
+    virtual bool requestSessionFilePath(QString& filePath) override;
 
     /// Presents an error message to the user and lets them acknowledge it.
     virtual void displayErrorMessage(const Exception& ex, bool blocking) override;

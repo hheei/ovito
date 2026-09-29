@@ -70,6 +70,35 @@ public:
     /// Lets the caller visit all registered tasks that are still in progress.
     void visitRunningTasks(const std::function<void(const QString& text, int progressValue, int progressMaximum)>& visitor);
 
+    /// \brief Returns the file the current session was loaded from or saved to, or an empty string if it has none.
+    QString sessionFilePath() const;
+
+    /// \brief Indicates whether the current session contains changes that have not been saved yet.
+    bool isSessionModified() const;
+
+    /// \brief Loads a session state file (.ovito) and makes it the current data set.
+    /// \param url The session file to load.
+    /// \return \c true if the file was loaded; \c false if the frontend rejected the data set (see checkLoadedDataset()).
+    /// \throw Exception if the file cannot be read or does not contain a session state.
+    bool loadSessionFile(const QUrl& url);
+
+    /// \brief Saves the current session to the given file and remembers that file as the session's own.
+    /// \throw Exception if the file cannot be written.
+    void saveSessionFile(const QString& filePath);
+
+    /// \brief Saves the current session, asking the frontend for a file path if the session has none yet.
+    /// \return \c true if the session was saved; \c false if the frontend could not provide a file path.
+    /// \throw OperationCanceled if the user aborted the operation; Exception if the file cannot be written.
+    bool saveSession();
+
+    /// \brief Asks the user to save the changes of the current session before it is discarded.
+    ///
+    /// Does nothing if the session has not been modified. A frontend that presents the session as a file (the classic
+    /// main window) calls this before the current data set is replaced; a frontend that closes with unsaved changes
+    /// calls it when the workbench is shut down.
+    /// \throw OperationCanceled if the user cancels the operation instead of answering the question.
+    void askForSaveChanges();
+
     /// Returns the model that lists the running tasks of this workbench and their progress, as the frontend displays
     /// them.
     /// \return The task progress model, or null before the workbench has been initialized (see initializeWorkbench()).
@@ -93,6 +122,12 @@ protected:
 
     /// Presents an error message to the user. reportError() has already written the message to the terminal.
     virtual void displayErrorMessage(const Exception& ex, bool blocking) = 0;
+
+    /// Hook of the session workflow: asks the frontend for the file the current session should be saved to.
+    /// \param filePath Receives the file the user selected.
+    /// \return \c false if the user canceled the operation instead of selecting a file.
+    /// The default implementation reports that this user interface cannot ask for a file name.
+    virtual bool requestSessionFilePath(QString& filePath);
 
     /// Is called when the progress state of the registered tasks has changed, at most once every 100 milliseconds.
     /// The task progress model of the workbench has been refreshed by the time an override of this method runs, so a
