@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/gui/desktop/GUI.h>
+#include <ovito/gui/base/app/GuiSettings.h>
 #include <ovito/gui/desktop/app/GuiApplication.h>
 #include <ovito/gui/desktop/app/GuiApplicationService.h>
 #include <ovito/gui/desktop/widgets/animation/AnimationTimeSpinner.h>
@@ -260,9 +261,7 @@ QDockWidget* MainWindow::createDockPanel(const QString& caption, const QString& 
 ******************************************************************************/
 void MainWindow::restoreMainWindowGeometry()
 {
-    QSettings settings;
-    settings.beginGroup("app/mainwindow");
-    restoreGeometry(settings.value("geometry").toByteArray());
+    restoreGeometry(GuiSettings::instance().mainWindowGeometry());
     show();
 }
 
@@ -271,9 +270,7 @@ void MainWindow::restoreMainWindowGeometry()
 ******************************************************************************/
 void MainWindow::saveMainWindowGeometry()
 {
-    QSettings settings;
-    settings.beginGroup("app/mainwindow");
-    settings.setValue("geometry", saveGeometry());
+    GuiSettings::instance().setMainWindowGeometry(saveGeometry());
 }
 
 /******************************************************************************
@@ -281,11 +278,9 @@ void MainWindow::saveMainWindowGeometry()
 ******************************************************************************/
 void MainWindow::restoreLayout()
 {
-    QSettings settings;
-    settings.beginGroup("app/mainwindow");
-    QVariant state = settings.value("state");
-    if(state.canConvert<QByteArray>())
-        restoreState(state.toByteArray());
+    const QByteArray state = GuiSettings::instance().mainWindowState();
+    if(!state.isEmpty())
+        restoreState(state);
     commandPanel()->restoreLayout();
 }
 
@@ -294,9 +289,7 @@ void MainWindow::restoreLayout()
 ******************************************************************************/
 void MainWindow::saveLayout()
 {
-    QSettings settings;
-    settings.beginGroup("app/mainwindow");
-    settings.setValue("state", saveState());
+    GuiSettings::instance().setMainWindowState(saveState());
     commandPanel()->saveLayout();
 }
 

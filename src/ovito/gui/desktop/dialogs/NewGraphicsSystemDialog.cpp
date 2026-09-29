@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/gui/desktop/GUI.h>
+#include <ovito/gui/base/app/GuiSettings.h>
 #include <ovito/core/app/Application.h>
 #include <ovito/core/rendering/RenderThread.h>
 #include <ovito/gui/desktop/mainwin/MainWindow.h>
@@ -143,9 +144,9 @@ void NewGraphicsSystemService::applicationStarting()
     return;
 #endif
 
-    // Check whether the user has already confirmed a GPU adapter selection.
-    const QSettings settings;
-    if(settings.value(QStringLiteral("viewport/adapter_setup_done"), false).toBool())
+    // Check whether the user has already confirmed a GPU adapter selection. The settings facade owns the key, which
+    // lives in a [viewport] section of the settings file.
+    if(GuiSettings::instance().graphicsAdapterSetupDone())
         return;
 
     // Get a pointer to the current main window. Note that the running user interface is not necessarily the
@@ -161,7 +162,7 @@ void NewGraphicsSystemService::applicationStarting()
         // Save the selected adapter and mark setup as confirmed.
         QSettings writeSettings;
         writeSettings.setValue(QLatin1String(RenderThread::adapterSettingsKey()), dialog.selectedAdapterName());
-        writeSettings.setValue(QStringLiteral("viewport/adapter_setup_done"), true);
+        GuiSettings::instance().setGraphicsAdapterSetupDone(true);
 
         // Recreate all viewport windows so RenderThreads pick up the new adapter.
         MainWindow::visitMainWindows([](MainWindow* mw) {

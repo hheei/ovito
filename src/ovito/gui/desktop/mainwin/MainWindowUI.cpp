@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/gui/desktop/GUI.h>
+#include <ovito/gui/base/app/GuiSettings.h>
 #include <ovito/gui/desktop/app/GuiApplication.h>
 #include <ovito/gui/desktop/app/GuiApplicationService.h>
 #include <ovito/gui/desktop/mainwin/MainWindow.h>
@@ -100,9 +101,6 @@ bool MainWindowUI::shutdown()
     // Stop all running tasks in this window and release program session objects.
     if(!UserInterface::shutdown())
         return false;
-
-    // Save the list of most recently visited directories to the settings store.
-    saveMostRecentlyUsedDirectories();
 
     if(mainWindow()) {
         // Save window geometry and layout in user settings file.
@@ -332,12 +330,9 @@ bool MainWindowUI::requestSessionFilePath(QString& filePath)
     dialog.setFileMode(QFileDialog::AnyFile);
     dialog.setDefaultSuffix("ovito");
 
-    QSettings settings;
-    settings.beginGroup("file/scene");
-
     if(dataset->filePath().isEmpty()) {
-        if(HistoryFileDialog::keepWorkingDirectoryHistoryEnabled()) {
-            QString defaultPath = settings.value("last_directory").toString();
+        if(GuiSettings::instance().keepDirectoryHistory()) {
+            const QString defaultPath = GuiSettings::instance().sessionFileDirectory();
             if(!defaultPath.isEmpty())
                 dialog.setDirectory(defaultPath);
         }
@@ -363,9 +358,9 @@ bool MainWindowUI::requestSessionFilePath(QString& filePath)
         return false;
     filePath = files.front();
 
-    if(HistoryFileDialog::keepWorkingDirectoryHistoryEnabled()) {
+    if(GuiSettings::instance().keepDirectoryHistory()) {
         // Remember directory for the next time...
-        settings.setValue("last_directory", dialog.directory().absolutePath());
+        GuiSettings::instance().setSessionFileDirectory(dialog.directory().absolutePath());
     }
     return true;
 }
@@ -477,7 +472,7 @@ FileImporter::ImportMode MainWindowUI::determineImportMode(Scene* scene, const s
 ******************************************************************************/
 void MainWindowUI::runFileImport(FileImporter& importer, Scene* scene, std::vector<std::pair<QUrl, OORef<FileImporter>>> urlImporters, FileImporter::ImportMode importMode)
 {
-    Future<OORef<Pipeline>> future = importer.importFileSet(scene, std::move(urlImporters), importMode, true, ImportFileDialog::multiFileImportMode());
+    Future<OORef<Pipeline>> future = importer.importFileSet(scene, std::move(urlImporters), importMode, true, GuiSettings::instance().multiFileImportMode());
     ProgressDialog::blockForFuture(std::move(future), *this, tr("Importing data"));
 }
 
@@ -486,7 +481,7 @@ void MainWindowUI::runFileImport(FileImporter& importer, Scene* scene, std::vect
 ******************************************************************************/
 void MainWindowUI::importDirectoryChanged(const QString& directoryPath)
 {
-    updateMostRecentlyUsedDirectory(QStringLiteral("import"), directoryPath); // Note: "import" is the dialog class for the FileImportDialog.
+    GuiSettings::instance().rememberDirectory(QStringLiteral("import"), directoryPath); // Note: "import" is the dialog class for the FileImportDialog.
 }
 
 /******************************************************************************
@@ -530,58 +525,6 @@ void MainWindowUI::scheduleOperationAfterScenePreparation(Scene* scene, const QS
             operation();
         });
     });
-}
-
-/******************************************************************************
-* Returns the history of most recently used directories for file selection
-* dialog type (e.g. data files, state files, Python scripts, ...).
-* This function is used by the HistoryFileDialog class to maintain a separate
-* history of recently used directories for different file I/O operations.
-******************************************************************************/
-QStringList MainWindowUI::getRecentlyUsedDirectories(const QString& dialogClass)
-{
-    QStringList& list = _recentlyUsedDirectories[dialogClass];
-    if(list.empty()) {
-        QSettings settings;
-        settings.beginGroup(QStringLiteral("filedialog/") + dialogClass);
-        list = settings.value(QStringLiteral("history")).toStringList();
-    }
-    return list;
-}
-
-/******************************************************************************
-* Updates the history of most recently used directories for file selection
-* dialog type (e.g. data files, state files, Python scripts, ...).
-* This function is used by the HistoryFileDialog class to maintain a separate
-* history of recently used directories for different file I/O operations.
-* The given directory is moved to the top of the history list.
-******************************************************************************/
-void MainWindowUI::updateMostRecentlyUsedDirectory(const QString& dialogClass, const QString& directory)
-{
-    constexpr int MAX_DIRECTORY_HISTORY_SIZE = 1;
-
-    QStringList history = getRecentlyUsedDirectories(dialogClass);
-    auto index = history.indexOf(directory);
-    if(index >= 0)
-        history.move(index, 0);
-    else {
-        history.push_front(directory);
-        if(history.size() > MAX_DIRECTORY_HISTORY_SIZE)
-            history.resize(MAX_DIRECTORY_HISTORY_SIZE);
-    }
-    _recentlyUsedDirectories[dialogClass] = std::move(history);
-}
-
-/******************************************************************************
-* Saves the list of most recently visited directories to the settings store at shutdown time.
-******************************************************************************/
-void MainWindowUI::saveMostRecentlyUsedDirectories()
-{
-    for(const auto& [dialogClass, history] : _recentlyUsedDirectories) {
-        QSettings settings;
-        settings.beginGroup(QStringLiteral("filedialog/") + dialogClass);
-        settings.setValue(QStringLiteral("history"), QVariant::fromValue(history));
-    }
 }
 
 }   // End of namespace

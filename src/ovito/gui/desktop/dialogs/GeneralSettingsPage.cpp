@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/gui/desktop/GUI.h>
+#include <ovito/gui/base/app/GuiSettings.h>
 #include <ovito/gui/desktop/mainwin/MainWindow.h>
 #include <ovito/gui/desktop/app/GuiApplication.h>
 #include <ovito/gui/desktop/dialogs/HistoryFileDialog.h>
@@ -33,7 +34,7 @@ void GeneralSettingsPage::insertSettingsDialogPage(QTabWidget* tabWidget)
     _enableAutomaticDarkMode = new QCheckBox(tr("Auto-detect color scheme and enable dark mode"));
     _enableAutomaticDarkMode->setToolTip(tr("<p>If enabled, will switch between light and dark UI depending on current system color theme.</p>"));
     layout2->addWidget(_enableAutomaticDarkMode, 0, 0);
-    _enableAutomaticDarkMode->setChecked(GuiApplication::automaticallyEnableDarkMode());
+    _enableAutomaticDarkMode->setChecked(GuiSettings::instance().followsSystemColorScheme());
 #if defined(Q_OS_LINUX)
     _enableAutomaticDarkMode->setEnabled(false);
     _enableAutomaticDarkMode->setText(_enableAutomaticDarkMode->text() + tr(" (always enabled on Linux)"));
@@ -47,12 +48,12 @@ void GeneralSettingsPage::insertSettingsDialogPage(QTabWidget* tabWidget)
     _keepDirHistory = new QCheckBox(tr("Use separate working directories for data import/export and session states"));
     _keepDirHistory->setToolTip(tr("<p>If enabled, OVITO maintains individual working directories for different kinds of file operations and remembers them across program sessions.</p><p>If disabled, the same current working directory is used for all file operations.</p>"));
     layout2->addWidget(_keepDirHistory, 1, 0);
-    _keepDirHistory->setChecked(HistoryFileDialog::keepWorkingDirectoryHistoryEnabled());
+    _keepDirHistory->setChecked(GuiSettings::instance().keepDirectoryHistory());
 
     _useNativeFileDialog = new QCheckBox(tr("Use native file selection dialog"));
     _useNativeFileDialog->setToolTip(tr("<p>If disabled, OVITO will use the Qt widget-based file selection dialog instead of the native dialog provided by the operating system, which is the default choice.</p>"));
     layout2->addWidget(_useNativeFileDialog, 2, 0);
-    _useNativeFileDialog->setChecked(!HistoryFileDialog::useQtFileDialog());
+    _useNativeFileDialog->setChecked(!GuiSettings::instance().preferQtFileDialog());
 
     // Group "Data import":
     QGroupBox* importGroupBox = new QGroupBox(tr("Data import options"), page);
@@ -66,7 +67,7 @@ void GeneralSettingsPage::insertSettingsDialogPage(QTabWidget* tabWidget)
     QRadioButton* asSeparateObjectsBtn = new QRadioButton(tr("As separate objects"));
     _importMultipleFilesBehavior->addButton(asTrajectoryBtn, FileImporter::ImportAsTrajectory);
     _importMultipleFilesBehavior->addButton(asSeparateObjectsBtn, FileImporter::ImportAsSeparateObjects);
-    _importMultipleFilesBehavior->button(ImportFileDialog::multiFileImportMode())->setChecked(true);
+    _importMultipleFilesBehavior->button(GuiSettings::instance().multiFileImportMode())->setChecked(true);
     layout2->addWidget(asTrajectoryBtn, 0, 1);
     layout2->addWidget(asSeparateObjectsBtn, 1, 1);
 #ifndef OVITO_BUILD_PROFESSIONAL
@@ -99,16 +100,11 @@ void GeneralSettingsPage::insertSettingsDialogPage(QTabWidget* tabWidget)
 void GeneralSettingsPage::saveValues(QTabWidget* tabWidget)
 {
     QSettings settings;
-    HistoryFileDialog::setKeepWorkingDirectoryHistoryEnabled(_keepDirHistory->isChecked());
-    HistoryFileDialog::setUseQtFileDialog(!_useNativeFileDialog->isChecked());
-#if !defined(Q_OS_LINUX) && !defined(Q_OS_MACOS)
-    if(_enableAutomaticDarkMode->isChecked())
-        settings.setValue("ui/automatic_dark_mode", true);
-    else
-        settings.remove("ui/automatic_dark_mode");
-#endif
+    GuiSettings::instance().setKeepDirectoryHistory(_keepDirHistory->isChecked());
+    GuiSettings::instance().setPreferQtFileDialog(!_useNativeFileDialog->isChecked());
+    GuiSettings::instance().setFollowsSystemColorScheme(_enableAutomaticDarkMode->isChecked());
 #ifdef OVITO_BUILD_PROFESSIONAL
-    ImportFileDialog::setMultiFileImportMode(static_cast<FileImporter::MultiFileImportMode>(_importMultipleFilesBehavior->checkedId()));
+    GuiSettings::instance().setMultiFileImportMode(static_cast<FileImporter::MultiFileImportMode>(_importMultipleFilesBehavior->checkedId()));
 #endif
 
 #if !defined(OVITO_BUILD_APPSTORE_VERSION)

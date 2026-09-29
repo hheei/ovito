@@ -14,6 +14,7 @@
 #include <ovito/gui/qml/QmlFrontend.h>
 #include <ovito/gui/qml/mainwin/QmlMainWindowUI.h>
 #include <ovito/gui/base/app/TaskProgressModel.h>
+#include <ovito/gui/base/app/GuiSettings.h>
 #include <ovito/gui/base/mainwin/RecentFilesList.h>
 #include <ovito/gui/qml/viewport/QuickViewportItem.h>
 #include <ovito/gui/qml/viewport/QuickViewportWindow.h>
@@ -1038,6 +1039,126 @@ void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     continuation();
 }
 
+/******************************************************************************
+* Verifies the settings facade the two workbenches share.
+*
+* Both frontends persist the same things - the color scheme, the window state, how the file dialogs behave - and have to
+* agree on the key, the default and the meaning of each value, or the classic settings dialog and the Qt Quick shell drift
+* apart. This check covers that the QML scene really reaches the facade, that the shell's theme takes its palette from it,
+* and that every accessor round-trips through the settings store.
+*
+* Every value this check writes is written back before it returns, so a verification run does not change how the
+* developer's frontends behave; only the history of a file dialog class that exists solely for this check is left behind.
+* Run the spike with an isolated XDG_CONFIG_HOME (docs/design/UI_TEST_ENV.md) for a fully clean run.
+******************************************************************************/
+void runSettingsTest(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    GuiSettings& settings = GuiSettings::instance();
+
+    // 1. The QML scene reaches the same facade object, and the theme of the shell resolves to it. Both values are read
+    //    through the QML engine, which covers the context property, the property bindings and the palette binding.
+    const bool cppDarkTheme = settings.usingDarkTheme();
+    const QVariant qmlDarkTheme = evaluateInQml(ui, QStringLiteral("guiSettings.usingDarkTheme"));
+    const QVariant qmlThemeDark = evaluateInQml(ui, QStringLiteral("workbench.darkTheme"));
+    if(qmlDarkTheme.toBool() != cppDarkTheme)
+        reportVerificationFailure(QStringLiteral("settings check: QML reads %1 as the color scheme of the shared settings while C++ reads %2")
+            .arg(qmlDarkTheme.toBool()).arg(cppDarkTheme));
+    if(qmlThemeDark.toBool() != cppDarkTheme)
+        reportVerificationFailure(QStringLiteral("settings check: the shell's theme resolved to %1 while the shared settings report %2 - the theme does not follow the shared policy")
+            .arg(qmlThemeDark.toBool()).arg(cppDarkTheme));
+
+    // 2. The window placement of a frontend without widgets. The Qt Quick shell restores its window from these, which the
+    //    classic frontend does not use (it stores QWidget geometry blobs instead).
+    auto expect = [](const QString& what, const QVariant& actual, const QVariant& expected) {
+        if(actual != expected)
+            reportVerificationFailure(QStringLiteral("settings check: %1 is '%2' after writing '%3'")
+                .arg(what, actual.toString(), expected.toString()));
+    };
+
+    const QRect originalWindowGeometry = settings.workbenchWindowGeometry();
+    settings.setWorkbenchWindowGeometry(QRect(120, 80, 1024, 768));
+    expect(QStringLiteral("the remembered window rectangle"), settings.workbenchWindowGeometry(), QRect(120, 80, 1024, 768));
+    settings.setWorkbenchWindowGeometry(originalWindowGeometry);
+    expect(QStringLiteral("the window rectangle after restoring the original"), settings.workbenchWindowGeometry(), originalWindowGeometry);
+
+    const bool originalMaximized = settings.isWorkbenchWindowMaximized();
+    settings.setWorkbenchWindowMaximized(!originalMaximized);
+    expect(QStringLiteral("the maximized flag"), settings.isWorkbenchWindowMaximized(), !originalMaximized);
+    settings.setWorkbenchWindowMaximized(originalMaximized);
+    expect(QStringLiteral("the maximized flag after restoring the original"), settings.isWorkbenchWindowMaximized(), originalMaximized);
+
+    // 3. The opaque blobs of the classic main window. They are not converted into rectangles on purpose: a QWidget
+    //    geometry blob also carries the screen and the maximized state of the window.
+    const QByteArray originalGeometry = settings.mainWindowGeometry();
+    const QByteArray originalState = settings.mainWindowState();
+    settings.setMainWindowGeometry(QByteArrayLiteral("spike-geometry-blob"));
+    settings.setMainWindowState(QByteArrayLiteral("spike-state-blob"));
+    expect(QStringLiteral("the main window geometry blob"), settings.mainWindowGeometry(), QByteArrayLiteral("spike-geometry-blob"));
+    expect(QStringLiteral("the main window layout blob"), settings.mainWindowState(), QByteArrayLiteral("spike-state-blob"));
+    settings.setMainWindowGeometry(originalGeometry);
+    settings.setMainWindowState(originalState);
+
+    // 4. The behavior of the file dialogs, which both frontends follow.
+    const bool originalKeepHistory = settings.keepDirectoryHistory();
+    const bool originalPreferQt = settings.preferQtFileDialog();
+    const QString originalSessionDirectory = settings.sessionFileDirectory();
+    settings.setKeepDirectoryHistory(!originalKeepHistory);
+    settings.setPreferQtFileDialog(!originalPreferQt);
+    settings.setSessionFileDirectory(QStringLiteral("/tmp/ovito-settings-check"));
+    expect(QStringLiteral("the directory-history flag"), settings.keepDirectoryHistory(), !originalKeepHistory);
+    expect(QStringLiteral("the preferred file dialog"), settings.preferQtFileDialog(), !originalPreferQt);
+    expect(QStringLiteral("the session file directory"), settings.sessionFileDirectory(), QStringLiteral("/tmp/ovito-settings-check"));
+    settings.setKeepDirectoryHistory(originalKeepHistory);
+    settings.setPreferQtFileDialog(originalPreferQt);
+    settings.setSessionFileDirectory(originalSessionDirectory);
+    expect(QStringLiteral("the directory-history flag after restoring the original"), settings.keepDirectoryHistory(), originalKeepHistory);
+    expect(QStringLiteral("the preferred file dialog after restoring the original"), settings.preferQtFileDialog(), originalPreferQt);
+    expect(QStringLiteral("the session file directory after restoring the original"), settings.sessionFileDirectory(), originalSessionDirectory);
+
+    // The directory history of one kind of file dialog: the most recent directory moves to the front, and an empty
+    // directory name is ignored. This uses a dialog class of its own, so no real history is touched.
+    const QString dialogClass = QStringLiteral("spike-settings-check");
+    settings.rememberDirectory(dialogClass, QStringLiteral("/tmp/ovito-check-a"));
+    settings.rememberDirectory(dialogClass, QStringLiteral("/tmp/ovito-check-b"));
+    expect(QStringLiteral("the directory history"), settings.recentDirectories(dialogClass), QStringList{QStringLiteral("/tmp/ovito-check-b")});
+    settings.rememberDirectory(dialogClass, QStringLiteral("/tmp/ovito-check-a"));
+    expect(QStringLiteral("the directory history after returning to the first directory"), settings.recentDirectories(dialogClass), QStringList{QStringLiteral("/tmp/ovito-check-a")});
+
+    // 5. The flags the first start sets: the classic frontend shows its GPU adapter dialog while this one is not set.
+    const bool originalSetupDone = settings.graphicsAdapterSetupDone();
+    settings.setGraphicsAdapterSetupDone(true);
+    expect(QStringLiteral("the graphics-adapter setup flag"), settings.graphicsAdapterSetupDone(), true);
+    settings.setGraphicsAdapterSetupDone(false);
+    expect(QStringLiteral("the graphics-adapter setup flag after clearing it"), settings.graphicsAdapterSetupDone(), false);
+    settings.setGraphicsAdapterSetupDone(originalSetupDone);
+
+#ifdef OVITO_BUILD_PROFESSIONAL
+    // The multi-file import mode is a setting of the professional edition only; elsewhere it is fixed.
+    const FileImporter::MultiFileImportMode originalImportMode = settings.multiFileImportMode();
+    settings.setMultiFileImportMode(FileImporter::ImportAsSeparateObjects);
+    expect(QStringLiteral("the multi-file import mode"), static_cast<int>(settings.multiFileImportMode()), static_cast<int>(FileImporter::ImportAsSeparateObjects));
+    settings.setMultiFileImportMode(originalImportMode);
+#endif
+
+    // The color-scheme policy itself: following the system is compulsory on Linux and macOS and a user decision
+    // elsewhere, which is where the check can exercise the stored flag.
+#if defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
+    if(!settings.followsSystemColorScheme())
+        reportVerificationFailure(QStringLiteral("settings check: following the system color scheme is not compulsory on this platform"));
+    qInfo() << "SETTINGS_TEST the color scheme always follows the system on this platform, dark theme is" << cppDarkTheme;
+#else
+    const bool originalFollowSystem = settings.followsSystemColorScheme();
+    settings.setFollowsSystemColorScheme(!originalFollowSystem);
+    expect(QStringLiteral("the automatic color-scheme flag"), settings.followsSystemColorScheme(), !originalFollowSystem);
+    settings.setFollowsSystemColorScheme(originalFollowSystem);
+    qInfo() << "SETTINGS_TEST the automatic color-scheme flag round-trips, dark theme is" << cppDarkTheme;
+#endif
+
+    qInfo() << "SETTINGS_TEST the shared settings facade round-trips the window state, the file dialog behaviour and"
+            << "the first-start flags; the shell's theme follows it";
+    continuation();
+}
+
 /// Verifies the session workflow of the workbench, which both frontends share (WorkbenchUI::saveSessionFile(),
 /// saveSession(), loadSessionFile() and isSessionModified()): saving a session writes a file and clears the modified
 /// state, a change to the scene marks the session as modified, and loading the session brings the saved content back.
@@ -1269,6 +1390,8 @@ protected:
             QStringLiteral("WxH")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-session-check"),
             tr("Verify the session workflow of the workbench: saving, the modified state, and loading a session back.")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-settings-check"),
+            tr("Verify the settings facade both frontends share: the values round-trip and the shell's theme follows it.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-command-check"),
             tr("Verify the shared command layer: the commands the QML workbench sees, their state rules and their handlers.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-layout-check"),
@@ -1358,6 +1481,7 @@ protected:
         const bool hideShowTest = cmdLineParser().isSet(QStringLiteral("qml-hide-show"));
         const bool layoutCheck = cmdLineParser().isSet(QStringLiteral("qml-layout-check"));
         const bool commandCheck = cmdLineParser().isSet(QStringLiteral("qml-command-check"));
+        const bool settingsCheck = cmdLineParser().isSet(QStringLiteral("qml-settings-check"));
         const bool sessionCheck = cmdLineParser().isSet(QStringLiteral("qml-session-check"));
         const bool importCheck = cmdLineParser().isSet(QStringLiteral("qml-import-check"));
         const int lifecycleCycles = cmdLineParser().value(QStringLiteral("qml-lifecycle-cycles")).toInt();
@@ -1372,7 +1496,7 @@ protected:
         const int holdMs = cmdLineParser().value(QStringLiteral("qml-hold-ms")).toInt();
 
         // Interactive mode: without a verification option, keep the window open.
-        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck && !commandCheck && !sessionCheck)
+        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck && !commandCheck && !sessionCheck && !settingsCheck)
             return;
 
         int delay = cmdLineParser().value(QStringLiteral("qml-startup-delay")).toInt();
@@ -1449,6 +1573,12 @@ protected:
         if(verifyPicking) {
             _verificationSteps.push_back([ui = mainWinUI, pickPos = *pickPosition](std::function<void()> next) {
                 runPickTest(ui, pickPos, std::move(next));
+            });
+        }
+        if(settingsCheck) {
+            // Before the checks that change the scene: this one only reads and writes the settings store.
+            _verificationSteps.push_back([ui = mainWinUI](std::function<void()> next) {
+                runSettingsTest(ui, std::move(next));
             });
         }
         if(sessionCheck) {

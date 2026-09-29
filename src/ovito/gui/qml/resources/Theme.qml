@@ -5,13 +5,16 @@ import QtQuick
 
 // Design tokens of the QML workbench (see docs/design/UI_DESIGN.md section 7).
 //
-// The palette follows the color scheme of the operating system and falls back to the dark scheme, which is the one the
-// design is drawn for. Each component of the shell declares its own Theme instance, so that a component can be looked
-// at in isolation - the tokens are constants, not shared state.
+// The palette follows the color scheme of the operating system: dark on a dark desktop, light on a light one. Each
+// component of the shell declares its own Theme instance, so that a component can be looked at in isolation - the tokens
+// are constants, not shared state.
 QtObject {
     id: theme
 
-    readonly property bool dark: Application.styleHints.colorScheme !== Qt.ColorScheme.Light
+    // Whether the shell draws itself dark is decided by the shared settings facade and not here, so that the Qt Quick
+    // shell and the classic frontend follow the same color-scheme policy (including the case of a platform that reports
+    // no color scheme at all, which counts as light in both).
+    readonly property bool dark: guiSettings.usingDarkTheme
 
     // Spacing and sizing.
     readonly property int spacing: 6

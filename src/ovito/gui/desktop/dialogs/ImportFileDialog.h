@@ -20,20 +20,7 @@ class OVITO_GUI_EXPORT ImportFileDialog : public HistoryFileDialog
 public:
 
     /// Returns what should happen if the user imports several files of the same kind.
-    static FileImporter::MultiFileImportMode multiFileImportMode() {
-#ifdef OVITO_BUILD_PROFESSIONAL
-        return QSettings().value("file/multi_file_import_mode", FileImporter::ImportAsTrajectory).value<FileImporter::MultiFileImportMode>();
-#else
-        return FileImporter::ImportAsTrajectory;
-#endif
-    }
-
-    /// Sets what should happen if the user imports several files of the same kind.
-    static void setMultiFileImportMode(FileImporter::MultiFileImportMode mode) {
-        QSettings settings;
-        if(mode != FileImporter::ImportAsTrajectory) settings.setValue("file/multi_file_import_mode", mode);
-        else settings.remove("file/multi_file_import_mode");
-    }
+    /// See GuiSettings, which owns this setting for both frontends.
 
 public:
 

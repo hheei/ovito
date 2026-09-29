@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
+#include <ovito/gui/base/app/GuiSettings.h>
 #include <ovito/gui/desktop/GUI.h>
 #include <ovito/gui/desktop/app/QtWidgetsFrontend.h>
 #include <ovito/gui/desktop/mainwin/MainWindow.h>
@@ -418,11 +419,9 @@ void GuiApplication::reportError(const Exception& ex, bool blocking)
 ******************************************************************************/
 bool GuiApplication::automaticallyEnableDarkMode()
 {
-#if defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
-    return true;
-#else
-    return QSettings().value("ui/automatic_dark_mode", false).toBool();
-#endif
+    // The rule and the stored setting live in the settings facade, so that the Qt Quick frontend follows exactly the
+    // same policy as the classic one.
+    return GuiSettings::instance().followsSystemColorScheme();
 }
 
 /******************************************************************************
@@ -430,10 +429,7 @@ bool GuiApplication::automaticallyEnableDarkMode()
 ******************************************************************************/
 bool GuiApplication::usingDarkTheme() const
 {
-    if(!automaticallyEnableDarkMode())
-        return false;
-
-    return QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark;
+    return GuiSettings::instance().usingDarkTheme();
 }
 
 #ifdef OVITO_SSH_CLIENT

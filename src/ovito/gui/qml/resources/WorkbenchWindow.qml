@@ -24,6 +24,10 @@ Rectangle {
     readonly property Command undoCommand: commandManager.command("EditUndo")
     readonly property Command redoCommand: commandManager.command("EditRedo")
 
+    /// The color scheme the shell resolved for itself, which is the one the classic frontend would use as well (see
+    /// GuiSettings). The verification harness reads it to check that both frontends follow the same policy.
+    readonly property bool darkTheme: theme.dark
+
     Component.onCompleted: {
         // A command that the shell uses but the frontend does not provide would silently disable its keyboard
         // shortcut or its button, so report it once instead of failing quietly.

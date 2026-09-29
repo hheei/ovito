@@ -22,28 +22,7 @@ public:
 
     /// Returns whether the user has activated the program option to maintain separate
     /// working directories for different file I/O operations.
-    static bool keepWorkingDirectoryHistoryEnabled() {
-        return QSettings().value("file/keep_dir_history", true).toBool();
-    }
-
-    /// Sets whether to maintain separate working directories for different file I/O operations.
-    static void setKeepWorkingDirectoryHistoryEnabled(bool on) {
-        QSettings settings;
-        if(!on) settings.setValue("file/keep_dir_history", false);
-        else settings.remove("file/keep_dir_history");
-    }
-
-    /// Returns whether the user has activated the program option to use the Qt widget-based file dialog instead of the native OS dialog.
-    static bool useQtFileDialog() {
-        return QSettings().value("file/dialog_type").toString() == "qt";
-    }
-
-    /// Sets whether to use the Qt widget-based file dialog instead of the native OS dialog.
-    static void setUseQtFileDialog(bool on) {
-        QSettings settings;
-        if(on) settings.setValue("file/dialog_type", "qt");
-        else settings.remove("file/dialog_type");
-    }
+    /// See GuiSettings, which owns this setting for both frontends.
 
     virtual int exec() override {
         TaskManager::setNativeDialogActive(true);

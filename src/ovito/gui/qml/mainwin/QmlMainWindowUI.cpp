@@ -7,6 +7,7 @@
 #include <ovito/gui/base/actions/ActionManager.h>
 #include <ovito/gui/base/app/TaskProgressModel.h>
 #include <ovito/gui/base/actions/Command.h>
+#include <ovito/gui/base/app/GuiSettings.h>
 #include <ovito/core/app/Application.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
@@ -119,6 +120,10 @@ void QmlMainWindowUI::initializeWindow()
     // frontends share their state, their shortcuts and their handlers.
     if(ActionManager* manager = actionManager())
         view->rootContext()->setContextProperty(QStringLiteral("commandManager"), manager);
+
+    // The settings the shell persists (color scheme, window state, file dialog behaviour) are the shared ones, so that
+    // the Qt Quick workbench follows the same policy as the classic frontend instead of inventing its own.
+    view->rootContext()->setContextProperty(QStringLiteral("guiSettings"), &GuiSettings::instance());
 
     // Create a default dataset if no dataset has been loaded yet, so that the workbench has viewports to display.
     initializeDataset();

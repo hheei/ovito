@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/gui/desktop/GUI.h>
+#include <ovito/gui/base/app/GuiSettings.h>
 #include <ovito/gui/desktop/actions/WidgetActionManager.h>
 #include <ovito/gui/desktop/mainwin/MainWindow.h>
 #include <ovito/gui/base/mainwin/RecentFilesList.h>
@@ -129,16 +130,12 @@ void WidgetActionManager::on_FileOpen_triggered()
     handleExceptions([&] {
         ui().askForSaveChanges();
 
-        QSettings settings;
-        settings.beginGroup("file/scene");
-
         // Go to the last directory used.
         QString defaultPath;
         OORef<DataSet> dataSet = this->dataset();
         if(!dataSet || dataSet->filePath().isEmpty()) {
-            if(HistoryFileDialog::keepWorkingDirectoryHistoryEnabled()) {
-                defaultPath = settings.value("last_directory").toString();
-            }
+            if(GuiSettings::instance().keepDirectoryHistory())
+                defaultPath = GuiSettings::instance().sessionFileDirectory();
         }
         else {
             defaultPath = dataSet->filePath();
@@ -151,9 +148,9 @@ void WidgetActionManager::on_FileOpen_triggered()
         if(filename.isEmpty())
             this_task::cancelAndThrow();
 
-        if(HistoryFileDialog::keepWorkingDirectoryHistoryEnabled()) {
+        if(GuiSettings::instance().keepDirectoryHistory()) {
             // Remember directory for the next time...
-            settings.setValue("last_directory", QFileInfo(filename).absolutePath());
+            GuiSettings::instance().setSessionFileDirectory(QFileInfo(filename).absolutePath());
         }
 
         OORef<DataSet> dataset = DataSet::createFromFile(filename);
@@ -328,7 +325,7 @@ void WidgetActionManager::on_FileExport_triggered()
         dialog.setFileMode(QFileDialog::AnyFile);
 
         // Go to the last directory used.
-        if(HistoryFileDialog::keepWorkingDirectoryHistoryEnabled()) {
+        if(GuiSettings::instance().keepDirectoryHistory()) {
             QString lastExportDirectory = settings.value("last_export_dir").toString();
             if(!lastExportDirectory.isEmpty())
                 dialog.setDirectory(lastExportDirectory);
@@ -347,7 +344,7 @@ void WidgetActionManager::on_FileExport_triggered()
 
         QString exportFile = files.front();
 
-        if(HistoryFileDialog::keepWorkingDirectoryHistoryEnabled()) {
+        if(GuiSettings::instance().keepDirectoryHistory()) {
             // Remember directory for the next time...
             settings.setValue("last_export_dir", dialog.directory().absolutePath());
         }

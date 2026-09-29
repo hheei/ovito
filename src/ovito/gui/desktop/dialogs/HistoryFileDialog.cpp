@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/gui/desktop/GUI.h>
+#include <ovito/gui/base/app/GuiSettings.h>
 #include "HistoryFileDialog.h"
 
 namespace Ovito {
@@ -23,11 +24,11 @@ HistoryFileDialog::HistoryFileDialog(MainWindowUI& ui, const QString& dialogClas
     // The native dialog (our default choice) is typically faster than the Qt widget implementation.
     // On the other hand, on certain platforms (e.g. Linux with older GNOME desktops) the native dialog may ignore the current working directory settings of the application and always start in the same default directory, which can be very inconvenient.
     // In this case, the user can switch to the Qt dialog, which respects the application's working directory settings.
-    if(useQtFileDialog())
+    if(GuiSettings::instance().preferQtFileDialog())
         setOption(QFileDialog::DontUseNativeDialog);
 
-    if(keepWorkingDirectoryHistoryEnabled()) {
-        QStringList history = ui.getRecentlyUsedDirectories(_dialogClass);
+    if(GuiSettings::instance().keepDirectoryHistory()) {
+        QStringList history = GuiSettings::instance().recentDirectories(_dialogClass);
         if(history.isEmpty() == false) {
             if(directory.isEmpty()) {
                 setDirectory(history.front());
@@ -45,9 +46,9 @@ void HistoryFileDialog::onFileSelected(const QString& file)
     if(file.isEmpty())
         return;
 
-    if(keepWorkingDirectoryHistoryEnabled()) {
+    if(GuiSettings::instance().keepDirectoryHistory()) {
         QString currentDir = QFileInfo(file).absolutePath();
-        ui().updateMostRecentlyUsedDirectory(_dialogClass, currentDir);
+        GuiSettings::instance().rememberDirectory(_dialogClass, currentDir);
     }
 }
 
