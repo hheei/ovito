@@ -20,6 +20,12 @@ IMPLEMENT_CREATABLE_OVITO_CLASS(QuickViewportWindow);
 ******************************************************************************/
 QuickViewportWindow::QuickViewportWindow()
 {
+    // Refresh the picking buffer once the viewport has settled, so that a hover that follows an interaction (or a
+    // change of the scene) is answered from the buffer of the current view instead of the previous one.
+    _pickingPrewarmTimer.setSingleShot(true);
+    _pickingPrewarmTimer.setInterval(150);
+    connect(&_pickingPrewarmTimer, &QTimer::timeout, this, &QuickViewportWindow::pickingPrewarmTimeout);
+
     connect(&_pickingBufferWatcher, &FutureWatcher<Future<ObjectPickingBuffer>>::completed, this, &QuickViewportWindow::pickingBufferReady);
     connect(&_pickingBufferWatcher, &FutureWatcher<Future<ObjectPickingBuffer>>::error, this, &QuickViewportWindow::pickingBufferFailed);
 }
@@ -58,7 +64,8 @@ void QuickViewportWindow::aboutToBeDeleted()
 ******************************************************************************/
 void QuickViewportWindow::releaseResources()
 {
-    // Cancel a picking pass that is still in flight.
+    // Stop the pre-warm and cancel a picking pass that is still in flight.
+    _pickingPrewarmTimer.stop();
     _pickingBufferWatcher.requestCancelation();
 
     if(_item)
@@ -77,8 +84,10 @@ void QuickViewportWindow::renderFrameGraph(OORef<FrameGraph> frameGraph)
         // describes what is on the screen (see isPickingBufferCurrent()).
         _pickingBufferGeneration++;
 
-        // The new view supersedes a picking pass that is still in flight. A pass that renders the new view is started
-        // by the next pick (see pick()); it is deliberately not started from here, see the note in pick().
+        // The new view supersedes a picking pass that is still in flight, and it is the view a later hover has to be
+        // answered from. The pass that takes care of it is started once the viewport stops rendering (see
+        // pickingPrewarmTimeout() for why that is not done right away).
+        _pickingPrewarmTimer.start();
 
         // Note: the configuration must be created before the frame graph is passed on, because the
         // order of evaluation of the function arguments is unspecified.
@@ -167,11 +176,9 @@ std::optional<ViewportWindow::PickResult> QuickViewportWindow::pick(const QPoint
     // rendered (the way the classic frontend waits for its render thread) is deliberately avoided: it would
     // stall input handling and the Qt Quick scene graph, both of which share this thread.
     //
-    // The pass is started from here and nowhere else. Refreshing the buffer from a timer after every frame graph (the
-    // pre-warm this frontend had) makes the offscreen pass run concurrently with a replacement of the data set by the
-    // user, and the resulting corruption of the heap shows up only in release builds - see defect F20 of the Phase 1
-    // report. A pass started by a pick cannot overlap a data set replacement that way, at the price of answering the
-    // first hover after a change of the view from the previous view.
+    // The pass is started here and by the pre-warm below - nowhere else. (Both go through the same guarded path, and
+    // a pass always belongs to the scene it was generated from: the buffer it produces is queried long after the pass
+    // has been read back, so it must not depend on the render service that produced it. See ObjectPickingMap.)
     if(!isPickingBufferCurrent())
         refreshPickingBuffer();
 
@@ -214,10 +221,23 @@ void QuickViewportWindow::pickingBufferReady()
     _pickingFailureReported = false;
 
     // The buffer describes the viewport contents the pass was rendered from. If the viewport rendered something else
-    // while the pass was in flight, the buffer stays behind the view and the next pick starts another pass. Nothing is
-    // retried here: an offscreen pass that no pick asked for races with a replacement of the data set, see the note in
-    // pick().
+    // while the pass was in flight, the buffer stays behind the view and another pass is needed - the pre-warm takes
+    // care of that as soon as the view has settled again. A pass that produced no usable buffer at all (a hidden
+    // viewport, for example) is not retried here: that would repeat itself every 150 ms for an unchanged view, and a
+    // pick or the next frame graph starts a fresh attempt anyway.
     _pickingBufferRenderedGeneration = _pickingBufferPendingGeneration;
+    if(_pickingBuffer.isValid() && !isPickingBufferCurrent())
+        _pickingPrewarmTimer.start();
+}
+
+/******************************************************************************
+* Refreshes the picking buffer once the viewport has settled (see the header).
+******************************************************************************/
+void QuickViewportWindow::pickingPrewarmTimeout()
+{
+    // A hidden viewport cannot be picked, and rendering an offscreen pass for it would only repeat itself.
+    if(isVisible() && !isPickingBufferCurrent())
+        refreshPickingBuffer();
 }
 
 /******************************************************************************
