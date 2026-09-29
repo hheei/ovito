@@ -93,17 +93,14 @@ public:
 	/// Returns the device-pixel resolution of the GPU target. Empty while no target has been created yet.
 	[[nodiscard]] const QSize& pixelSize() const { return _pixelSize; }
 
-	/// Indicates whether the GPU resources of the target have been allocated already.
-	[[nodiscard]] bool hasGpuResources() const;
-
 	/**
 	 * Allocates the GPU resources of the target for a given device-pixel resolution, recreating them if the size
 	 * changed since the last call. Calling it is optional: a pass allocates the target implicitly.
 	 *
 	 * This must run on the program's main thread: the shared render thread - and with it the graphics device - comes
-	 * into existence on demand, and only the main thread may create it. ef renderAmbientOcclusion() calls this from
-	 * the main thread before the sampling moves to a worker thread, because the sampling loop is the one pass that is
-	 * submitted from a thread other than the main one.
+	 * into existence on demand, and only the main thread may create it. A pass that is submitted from a worker thread
+	 * therefore has to prepare the target beforehand; AmbientOcclusionModifier does that for the sampling loop, which is
+	 * the one pass in the program that a thread other than the main one submits.
 	 */
 	void prepare(const QSize& pixelSize);
 

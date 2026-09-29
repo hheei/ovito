@@ -36,16 +36,11 @@ UserInterface* OffscreenRenderTarget::userInterface() const
 }
 
 /******************************************************************************
-* Indicates whether the GPU resources of the target have been allocated already.
+* Allocates the GPU resources of the target, or recreates them when the size changed.
 ******************************************************************************/
 void OffscreenRenderTarget::prepare(const QSize& pixelSize)
 {
 	ensureTarget(pixelSize);
-}
-
-bool OffscreenRenderTarget::hasGpuResources() const
-{
-	return static_cast<bool>(*_target);
 }
 
 /******************************************************************************
@@ -80,11 +75,18 @@ void OffscreenRenderTarget::ensureTarget(const QSize& pixelSize)
 
 	// Allocating the target needs the render thread, which is created on demand and only by the main thread. A pass
 	// that is submitted from a worker thread therefore has to find the target prepared already (see prepare()).
-	OVITO_ASSERT_MSG(this_task::isMainThread(), "OffscreenRenderTarget::ensureTarget()",
-		"An offscreen render target can only be allocated by the main thread.");
+	if(!this_task::isMainThread()) {
+		OVITO_ASSERT_MSG(false, "OffscreenRenderTarget::ensureTarget()",
+			"An offscreen render target can only be allocated by the main thread.");
+		throw Exception(QCoreApplication::translate("OffscreenRenderTarget",
+			"Cannot render offscreen: the target has to be prepared by the main thread before a pass is submitted for it."));
+	}
 
-	// If a target exists already, allocating the new one first destroys it, which waits for the render thread to
-	// release its resources. Creating a target allocates the GPU resources and blocks until the render thread is done.
+	// The old target is released before the new one is allocated, so that the peak GPU memory stays at one target's
+	// worth: a full-resolution render output holds textures large enough for the double allocation to fail.
+	_target.reset();
+
+	// Creating a target allocates the GPU resources and blocks until the render thread is done.
 	_target = std::make_unique<RenderTarget>(renderThread()->createOffscreenTarget(pixelSize, _kind == Kind::PickingOnly));
 	_pixelSize = pixelSize;
 }
