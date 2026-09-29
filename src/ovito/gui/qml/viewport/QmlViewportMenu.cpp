@@ -113,8 +113,9 @@ void QmlViewportMenu::openFor(QuickViewportItem* item, const QPointF& pos)
 
     // The viewport items are discarded and rebuilt when the data set or the layout changes, which can happen while the
     // menu is up. The menu then belongs to a viewport that is gone, so it closes itself and the scene takes the popup
-    // down with it - the entry of a menu that outlives its viewport would act on nothing.
-    _itemDestroyed = connect(item, &QObject::destroyed, this, &QmlViewportMenu::close);
+    // down with it - the entry of a menu that outlives its viewport would act on nothing. The identity check keeps the
+    // connection harmless once the menu has been opened for another viewport (or closed) in the meantime.
+    connect(item, &QObject::destroyed, this, [this, item] { if(_item == item) close(); });
 
     // The state the menu displays is read when it is opened, so tell the scene that it can now pop the menu up. The
     // state itself is reported by the individual properties, which the scene binds its entries to.
@@ -190,7 +191,6 @@ void QmlViewportMenu::toggleMaximize()
 void QmlViewportMenu::close()
 {
     if(_item) {
-        disconnect(_itemDestroyed);
         _item.clear();
         _viewport.reset();
         Q_EMIT changed();

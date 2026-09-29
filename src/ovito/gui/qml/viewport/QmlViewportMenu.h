@@ -120,9 +120,6 @@ private:
     /// The viewport item the menu was opened for, or null while the menu is closed.
     QPointer<QQuickItem> _item;
 
-    /// The connection to the destruction of the viewport item the menu is currently displayed for.
-    QMetaObject::Connection _itemDestroyed;
-
     /// The viewport the menu acts on. It is kept weakly: the menu must not keep a viewport of a replaced data set alive.
     OOWeakRef<Viewport> _viewport;
 };

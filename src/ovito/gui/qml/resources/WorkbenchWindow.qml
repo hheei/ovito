@@ -282,14 +282,11 @@ Rectangle {
         id: dropArea
         anchors.fill: parent
         onDropped: (drop) => {
-            // A drop that carries no file URL (dragged text, for example) is not an import request, so the workbench
-            // rejects it instead of pretending to have accepted it.
+            // A drop that carries no file URL (dragged text, for example) is not an import request; the drop area does
+            // not accept it then.
             if(drop.hasUrls) {
                 drop.acceptProposedAction()
                 workbenchController.importFiles(drop.urls)
-            }
-            else {
-                drop.accepted = false
             }
         }
 
