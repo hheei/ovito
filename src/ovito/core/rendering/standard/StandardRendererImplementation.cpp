@@ -16,8 +16,8 @@
 #include <ovito/core/rendering/MarkerPrimitive.h>
 #include <ovito/core/rendering/MeshPrimitive.h>
 #include <ovito/core/rendering/ParticlePrimitive.h>
-#include <ovito/core/rendering/RenderThread.h>
 #include <ovito/core/rendering/standard/StandardRenderer.h>
+#include <ovito/core/rendering/RendererService.h>
 #include "StandardRendererImplementation.h"
 
 namespace Ovito {

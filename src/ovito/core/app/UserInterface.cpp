@@ -5,6 +5,7 @@
 #include <ovito/core/app/Application.h>
 #include <ovito/core/app/PluginManager.h>
 #include <ovito/core/rendering/FrameBuffer.h>
+#include <ovito/core/rendering/GraphicsApi.h>
 #include <ovito/core/rendering/RenderThread.h>
 #include <ovito/core/dataset/DataSetContainer.h>
 #include "UserInterface.h"
@@ -39,7 +40,7 @@ std::shared_ptr<RenderThread> UserInterface::renderThread()
 
     std::shared_ptr<RenderThread> rt = _renderThread.lock();
     if(!rt) {
-        rt = std::make_shared<RenderThread>(*this, RenderThread::pickGraphicsApi());
+        rt = std::make_shared<RenderThread>(*this, GraphicsApi::preferred());
         _renderThread = rt;
         // As a performance optimization when running in headless Python mode, keep the render thread alive as long as the UserInterface exists.
         // This is to speed up consecutive invocations of the Viewport.render_image() method, which would otherwise have to create and destroy the render thread on each call.

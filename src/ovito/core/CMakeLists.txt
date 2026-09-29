@@ -118,6 +118,7 @@ SET(SourceFiles
     rendering/ColorCodingGradient.cpp
     rendering/ObjectPickingMap.cpp
     rendering/OpacityFunction.cpp
+    rendering/GraphicsApi.cpp
     rendering/RenderThread.cpp
     rendering/FrameGraphRenderPass.cpp
     rendering/WarningIndicatorRenderer.cpp

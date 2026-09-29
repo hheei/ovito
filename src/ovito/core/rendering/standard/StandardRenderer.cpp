@@ -3,8 +3,9 @@
 
 #include <ovito/core/Core.h>
 #include <ovito/core/utilities/units/UnitsManager.h>
-#include <ovito/core/rendering/RenderThread.h>
+#include <ovito/core/rendering/GraphicsApi.h>
 #include <ovito/core/rendering/standard/StandardRendererImplementation.h>
+#include <ovito/core/rendering/RendererService.h>
 #include "StandardRenderer.h"
 
 namespace Ovito {
@@ -82,7 +83,7 @@ void StandardRenderer::OOMetaClass::querySystemInformation(QTextStream& stream, 
 {
     if(this == &StandardRenderer::OOClass()) {
         stream << "======= Graphics hardware =======" << "\n";
-        QRhi::Implementation graphicsApi = RenderThread::pickGraphicsApi();
+        QRhi::Implementation graphicsApi = GraphicsApi::preferred();
         stream << "Graphics API: " << QString::fromUtf8(QRhi::backendName(graphicsApi)) << "\n";
 
         // In GUI mode, report the active real-time viewport rendering backend.
@@ -98,8 +99,8 @@ void StandardRenderer::OOMetaClass::querySystemInformation(QTextStream& stream, 
             stream << "Viewport renderer: " << rendererLabel << "\n";
         }
 
-        QList<QRhiDriverInfo> adapters = RenderThread::enumerateAdapters(graphicsApi);
-        QByteArray selectedName = RenderThread::selectedAdapterName();
+        QList<QRhiDriverInfo> adapters = GraphicsApi::enumerateAdapters(graphicsApi);
+        QByteArray selectedName = GraphicsApi::selectedAdapterName();
         // When no adapter is explicitly selected the first one in the list is the effective default.
         bool foundSelected = false;
         for(int i = 0; i < adapters.size(); ++i) {

@@ -259,6 +259,9 @@ void StandaloneApplication::registerCommandLineParameters(QCommandLineParser& pa
     parser.addOption(QCommandLineOption(QStringList{{"h", "help"}}, tr("Shows this list of program options and exits.")));
     parser.addOption(QCommandLineOption(QStringList{{"v", "version"}}, tr("Prints the program version and exits.")));
     parser.addOption(QCommandLineOption(QStringList{{"nthreads"}}, tr("Sets the number of parallel threads to use for computations."), QStringLiteral("N")));
+    // The reader of this option is the core (DataSet::createDefaultViewportConfiguration), so the option is
+    // defined here rather than by the frontend that used to introduce it (see audit decision A8.3).
+    parser.addOption(QCommandLineOption(QStringList{{"noviewports"}}, tr("Do not create any viewports (for debugging purposes only).")));
 }
 
 /******************************************************************************

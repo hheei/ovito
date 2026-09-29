@@ -104,24 +104,6 @@ public:
 	/// May be called from the renderFrame() method of a renderer implementation on the render thread.
 	void reportWarning(const QString& message) override;
 
-	/// Picks the platform-specific graphics API for the current platform.
-	static QRhi::Implementation pickGraphicsApi();
-
-	/// Enumerates available GPU adapters for the given graphics API.
-	/// Returns a list of (device name, device info) pairs.
-	/// Can be called on the GUI thread without creating a QRhi instance.
-	static QList<QRhiDriverInfo> enumerateAdapters(QRhi::Implementation graphicsApi);
-
-	/// Makes OVITO's bundled software Vulkan driver available, but only on systems that
-	/// provide no Vulkan driver of their own. Does nothing on all other platforms.
-	static void prepareVulkanEnvironment();
-
-	/// Returns the QSettings key used to store the selected GPU adapter name.
-	static constexpr const char* adapterSettingsKey() { return "viewport/gpu_adapter"; }
-
-	/// Loads the user-selected adapter name from QSettings. Returns empty string for default.
-	static QByteArray selectedAdapterName();
-
 protected:
 
 	/// The render thread's main loop.

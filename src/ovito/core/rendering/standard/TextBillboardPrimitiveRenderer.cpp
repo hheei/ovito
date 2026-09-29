@@ -3,7 +3,7 @@
 
 #include <ovito/core/Core.h>
 #include <ovito/core/viewport/ViewProjectionParameters.h>
-#include <ovito/core/rendering/RenderThread.h>
+#include <ovito/core/rendering/RendererService.h>
 #include "TextBillboardPrimitiveRenderer.h"
 #include "StandardRendererImplementation.h"
 

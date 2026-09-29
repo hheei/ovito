@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/core/Core.h>
-#include <ovito/core/rendering/RenderThread.h>
+#include <ovito/core/rendering/RendererService.h>
 #include "ImagePrimitiveRenderer.h"
 
 namespace Ovito {
