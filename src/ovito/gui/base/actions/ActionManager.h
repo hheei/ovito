@@ -228,8 +228,11 @@ public:
     /// Returns the list of registered commands in the order in which they were created.
     const QVector<Command*>& commands() const { return _commands; }
 
+    /// The list of all commands as a QVariantList of Command objects, for use by a QML frontend.
+    Q_PROPERTY(QVariantList commandList READ commandList NOTIFY commandsChanged)
+
     /// \brief Returns a list of all commands, for use by a QML frontend.
-    Q_INVOKABLE QVariantList commandList() const;
+    QVariantList commandList() const;
 
     /// \brief Returns the command with the given ID, or null if there is no such command. Intended for use by a QML frontend.
     Q_INVOKABLE Ovito::Command* command(const QString& commandId) const { return findCommand(commandId); }
@@ -286,6 +289,9 @@ Q_SIGNALS:
 
     /// \brief This signal is emitted by the ActionManager when the quick command search is activated. It tells the system to refresh the enabled/disabled state of actions as needed.
     void actionUpdateRequested();
+
+    /// This signal is emitted when a command has been added to the ActionManager.
+    void commandsChanged();
 
 private Q_SLOTS:
 

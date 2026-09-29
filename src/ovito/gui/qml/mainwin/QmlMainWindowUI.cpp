@@ -5,6 +5,7 @@
 #include <ovito/gui/qml/mainwin/QmlViewportController.h>
 #include <ovito/gui/qml/mainwin/QmlViewportLayout.h>
 #include <ovito/gui/base/actions/ActionManager.h>
+#include <ovito/gui/base/actions/Command.h>
 #include <ovito/core/app/Application.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
@@ -41,6 +42,8 @@ static void registerQmlTypes()
             QStringLiteral("There is one viewport controller per workbench window."));
         qmlRegisterUncreatableType<QmlWorkbenchController>("Ovito.Qml", 1, 0, "WorkbenchController",
             QStringLiteral("There is one workbench controller per workbench window."));
+        qmlRegisterUncreatableType<Command>("Ovito.Qml", 1, 0, "Command",
+            QStringLiteral("Commands are created by the frontend through the command manager."));
         return true;
     }();
     Q_UNUSED(registered);
@@ -98,6 +101,11 @@ void QmlMainWindowUI::initializeWindow()
     view->rootContext()->setContextProperty(QStringLiteral("workbenchController"), _workbenchController);
     view->rootContext()->setContextProperty(QStringLiteral("viewportController"), _qmlController);
     view->rootContext()->setContextProperty(QStringLiteral("viewportLayout"), _viewportLayout);
+
+    // The commands of the user interface are the same objects the classic frontend presents as QActions, so both
+    // frontends share their state, their shortcuts and their handlers.
+    if(ActionManager* manager = actionManager())
+        view->rootContext()->setContextProperty(QStringLiteral("commandManager"), manager);
 
     // Create a default dataset if no dataset has been loaded yet, so that the workbench has viewports to display.
     initializeDataset();

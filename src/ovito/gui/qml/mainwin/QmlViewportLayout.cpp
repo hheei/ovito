@@ -7,8 +7,8 @@
 #include <ovito/core/dataset/DataSetContainer.h>
 #include <ovito/core/viewport/Viewport.h>
 #include <ovito/core/viewport/ViewportConfiguration.h>
-#include <ovito/core/viewport/ViewportSettings.h>
 #include <ovito/gui/base/app/GuiTaskScope.h>
+#include <ovito/gui/base/actions/ActionManager.h>
 #include "QmlViewportLayout.h"
 
 #include <algorithm>
@@ -513,18 +513,16 @@ void QmlViewportLayout::toggleMaximize(int viewportIndex)
         return;
 
     _ui.handleExceptions([&]() {
-        if(config->maximizedViewport() == viewport) {
-            config->setMaximizedViewport(nullptr);
-        }
-        else {
-            config->setMaximizedViewport(viewport);
-            // The toolbar action of the classic frontend applies to the active viewport, so a pane that is maximized
-            // with the mouse becomes the active one as well.
+        // Restore the pane that is currently maximized if the user asked for a different one. Maximizing itself is the
+        // job of the shared command, which also remembers the maximized viewport across program sessions.
+        if(config->maximizedViewport() && config->maximizedViewport() != viewport)
+            _ui.actionManager()->triggerCommand(ACTION_VIEWPORT_MAXIMIZE);
+
+        // The command acts on the active viewport, so the pane the user clicked becomes the active one.
+        if(config->maximizedViewport() != viewport)
             config->setActiveViewport(viewport);
-        }
-        // Remember which viewport was maximized across program sessions, like the classic frontend does.
-        ViewportSettings::getSettings().setDefaultMaximizedViewportType(config->maximizedViewport() ? config->maximizedViewport()->viewType() : Viewport::VIEW_NONE);
-        ViewportSettings::getSettings().save();
+
+        _ui.actionManager()->triggerCommand(ACTION_VIEWPORT_MAXIMIZE);
     });
 }
 

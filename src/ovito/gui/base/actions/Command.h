@@ -54,7 +54,8 @@ public:
             const QKeySequence& shortcut = {},
             QObject* parent = nullptr);
 
-    /// Returns the unique identifier of this command.
+    /// Returns the unique identifier of this command. It is empty for a command that is not registered with an
+    /// ActionManager; a registered command must have a non-empty, unique identifier (see ActionManager::addCommand()).
     const QString& id() const { return _id; }
 
     /// Returns the title of this command as it is presented to the user.

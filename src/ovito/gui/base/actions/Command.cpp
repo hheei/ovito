@@ -20,7 +20,9 @@ Command::Command(const QString& id, const QString& text, const QString& iconPath
     _iconPath(iconPath),
     _shortcut(shortcut)
 {
-    OVITO_ASSERT_MSG(!id.isEmpty(), "Command::Command()", "A command must have a non-empty identifier.");
+    // Note: the identifier may be empty here. A command that is registered with an ActionManager needs one (the
+    // ActionManager asserts that), but a command that is only wrapped by a view - the input mode command inside a
+    // ViewportModeAction of a plugin editor, for example - has no one looking it up by name.
 }
 
 /******************************************************************************

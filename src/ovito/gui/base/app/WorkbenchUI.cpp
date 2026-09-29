@@ -154,6 +154,16 @@ void WorkbenchUI::runFileImport(FileImporter& importer, Scene* scene, std::vecto
 }
 
 /******************************************************************************
+* Destructor.
+******************************************************************************/
+WorkbenchUI::~WorkbenchUI()
+{
+    // The progress list lives in this class, so its invariant is checked here - for every workbench, not only for the
+    // classic one. If this fails, a task is still running that should have ended with the workbench.
+    OVITO_ASSERT(!_progressTasksHead && !_progressTasksTail);
+}
+
+/******************************************************************************
 * Registers a new task progress record with this user interface.
 ******************************************************************************/
 std::mutex* WorkbenchUI::taskProgressBegin(TaskProgress* progress)

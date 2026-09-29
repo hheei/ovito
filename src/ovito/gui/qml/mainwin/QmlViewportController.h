@@ -11,9 +11,10 @@ namespace Ovito {
 /**
  * \brief Exposes the C++ side of the Qt Quick frontend to the QML scene.
  *
- * This class is registered as the "viewportController" context property of the QML engine. It creates the viewport
- * items that the QML layout asks for and exposes the operations on them, i.e. the undo stack of the workbench. The
- * state of the window itself - the status line, the task progress and the dialogs - belongs to QmlWorkbenchController.
+ * This class is registered as the "viewportController" context property of the QML engine. It creates and owns the
+ * viewport items that the QML layout asks for. The state of the window itself - the status line, the task progress and
+ * the dialogs - belongs to QmlWorkbenchController, and the commands of the workbench (including Undo and Redo, which
+ * act on the shared undo stack) come from the command layer that is exposed as "commandManager".
  *
  * The viewports are those of the current dataset. Whenever that dataset is replaced, the controller discards its
  * viewport items and emits viewportConfigurationChanged(), which tells the QML scene to ask for viewport items again -
@@ -25,18 +26,6 @@ class OVITO_GUIQML_EXPORT QmlViewportController : public QObject
 
     /// The number of viewports of the current dataset, i.e. the number of viewport items the QML scene should have.
     Q_PROPERTY(int viewportCount READ viewportCount NOTIFY viewportConfigurationChanged)
-
-    /// The label of the operation the Undo command would revert, or an empty string if there is nothing to undo.
-    Q_PROPERTY(QString undoText READ undoText NOTIFY undoAvailableChanged)
-
-    /// The label of the operation the Redo command would reapply.
-    Q_PROPERTY(QString redoText READ redoText NOTIFY undoAvailableChanged)
-
-    /// Whether there is an operation to undo.
-    Q_PROPERTY(bool canUndo READ canUndo NOTIFY undoAvailableChanged)
-
-    /// Whether there is an operation to redo.
-    Q_PROPERTY(bool canRedo READ canRedo NOTIFY undoAvailableChanged)
 
 public:
 
@@ -57,31 +46,10 @@ public:
     /// Gives the input focus to the viewport item displaying the given viewport.
     void setViewportInputFocus(Viewport* viewport);
 
-    /// Reverts the last operation of the undo stack, e.g. the last change of the pane sizes.
-    Q_INVOKABLE void undo();
-
-    /// Reapplies the operation that was reverted last.
-    Q_INVOKABLE void redo();
-
-    /// Returns whether there is an operation to undo.
-    bool canUndo() const;
-
-    /// Returns whether there is an operation to redo.
-    bool canRedo() const;
-
-    /// Returns the label of the operation the Undo command would revert.
-    QString undoText() const;
-
-    /// Returns the label of the operation the Redo command would reapply.
-    QString redoText() const;
-
 Q_SIGNALS:
 
     /// Is emitted when the current dataset or its set of viewports has changed.
     void viewportConfigurationChanged();
-
-    /// Is emitted when the undo stack changed, i.e. when the Undo/Redo commands became (un)available or changed their label.
-    void undoAvailableChanged();
 
 private:
 

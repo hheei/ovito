@@ -18,8 +18,22 @@ Rectangle {
 
     Theme { id: theme }
 
-    // Commands of the shell. The command layer of Phase 3 replaces them with the regular action system; until then these
-    // are the commands the shell owes the user, and the ones the design specifies as keyboard shortcuts.
+    // The commands of the workbench are the same objects the classic frontend presents as QActions, so both frontends
+    // share their title, their shortcut, their enabled state and their handler. The title of the Undo command already
+    // carries the name of the operation it would revert.
+    readonly property Command undoCommand: commandManager.command("EditUndo")
+    readonly property Command redoCommand: commandManager.command("EditRedo")
+
+    Component.onCompleted: {
+        // A command that the shell uses but the frontend does not provide would silently disable its keyboard
+        // shortcut or its button, so report it once instead of failing quietly.
+        [undoCommand, redoCommand, commandManager.command("EditDelete"), commandManager.command("ViewportMaximize")].forEach(command => {
+            if(!command)
+                console.warn("The workbench expects a command that the frontend does not provide")
+        })
+    }
+
+    // The commands the design specifies as keyboard shortcuts for the shell.
     Shortcut {
         sequences: [StandardKey.Open]
         onActivated: workbenchController.showImportDialog()
@@ -27,14 +41,14 @@ Rectangle {
 
     Shortcut {
         sequences: [StandardKey.Undo]
-        enabled: viewportController.canUndo
-        onActivated: viewportController.undo()
+        enabled: workbench.undoCommand.enabled
+        onActivated: commandManager.triggerCommand("EditUndo")
     }
 
     Shortcut {
         sequences: [StandardKey.Redo]
-        enabled: viewportController.canRedo
-        onActivated: viewportController.redo()
+        enabled: workbench.redoCommand.enabled
+        onActivated: commandManager.triggerCommand("EditRedo")
     }
 
     Shortcut {

@@ -7,7 +7,6 @@
 #include <ovito/gui/qml/viewport/QuickViewportItem.h>
 #include <ovito/gui/qml/viewport/QuickViewportWindow.h>
 #include <ovito/gui/base/app/GuiTaskScope.h>
-#include <ovito/core/app/undo/UndoStack.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
 #include <ovito/core/viewport/Viewport.h>
@@ -30,13 +29,6 @@ QmlViewportController::QmlViewportController(QmlMainWindowUI& ui, QObject* paren
         Q_EMIT viewportConfigurationChanged();
     });
 
-    // Undo and redo of the workbench are the same undo stack the pipeline and property commands will use in the later
-    // phases, so the QML scene is told whenever the stack changes.
-    if(UndoStack* undoStack = ui.undoStack()) {
-        connect(undoStack, &UndoStack::indexChanged, this, &QmlViewportController::undoAvailableChanged);
-        connect(undoStack, &UndoStack::undoTextChanged, this, &QmlViewportController::undoAvailableChanged);
-        connect(undoStack, &UndoStack::redoTextChanged, this, &QmlViewportController::undoAvailableChanged);
-    }
 }
 
 /******************************************************************************
@@ -143,62 +135,6 @@ void QmlViewportController::setViewportInputFocus(Viewport* viewport)
             break;
         }
     }
-}
-
-/******************************************************************************
-* Reverts the last operation of the undo stack.
-******************************************************************************/
-void QmlViewportController::undo()
-{
-    GuiTaskScope taskScope(_ui);
-    if(UndoStack* undoStack = _ui.undoStack())
-        undoStack->undo();
-}
-
-/******************************************************************************
-* Reapplies the operation that was reverted last.
-******************************************************************************/
-void QmlViewportController::redo()
-{
-    GuiTaskScope taskScope(_ui);
-    if(UndoStack* undoStack = _ui.undoStack())
-        undoStack->redo();
-}
-
-/******************************************************************************
-* Returns whether there is an operation to undo.
-******************************************************************************/
-bool QmlViewportController::canUndo() const
-{
-    UndoStack* undoStack = _ui.undoStack();
-    return undoStack && undoStack->canUndo();
-}
-
-/******************************************************************************
-* Returns whether there is an operation to redo.
-******************************************************************************/
-bool QmlViewportController::canRedo() const
-{
-    UndoStack* undoStack = _ui.undoStack();
-    return undoStack && undoStack->canRedo();
-}
-
-/******************************************************************************
-* Returns the label of the operation the Undo command would revert.
-******************************************************************************/
-QString QmlViewportController::undoText() const
-{
-    UndoStack* undoStack = _ui.undoStack();
-    return undoStack ? undoStack->undoText() : QString();
-}
-
-/******************************************************************************
-* Returns the label of the operation the Redo command would reapply.
-******************************************************************************/
-QString QmlViewportController::redoText() const
-{
-    UndoStack* undoStack = _ui.undoStack();
-    return undoStack ? undoStack->redoText() : QString();
 }
 
 }   // End of namespace

@@ -23,6 +23,8 @@
 #include <ovito/core/dataset/animation/AnimationSettings.h>
 #include <ovito/core/dataset/scene/Scene.h>
 #include <ovito/core/dataset/scene/SelectionSet.h>
+#include <ovito/core/dataset/scene/SceneNode.h>
+#include <ovito/core/viewport/ViewportConfiguration.h>
 #include <ovito/core/viewport/Viewport.h>
 #include <ovito/core/app/Application.h>
 #include <ovito/core/utilities/Exception.h>
@@ -34,6 +36,15 @@
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <ovito/core/app/undo/UndoStack.h>
+#include <ovito/core/app/UserInterface.h>
+#include <ovito/gui/base/actions/ActionManager.h>
+#include <ovito/gui/base/actions/Command.h>
+#include <ovito/gui/base/viewport/ViewportInputManager.h>
+#include <ovito/gui/base/viewport/ViewportInputMode.h>
+#include <ovito/gui/base/app/GuiTaskScope.h>
+#include <QtQml/qqml.h>
+#include <QtQml/qqmlengine.h>
+#include <QtQml/qqmlexpression.h>
 #include <QTimer>
 
 #include <functional>
@@ -743,13 +754,13 @@ void runLayoutTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     else
         qInfo() << "LAYOUT_UNDO the drag produced the undo step" << undoStack->undoText();
 
-    ui->qmlController()->undo();
+    ui->actionManager()->triggerCommand(ACTION_EDIT_UNDO);
     if(layoutSnapshot(layout) != before)
         reportVerificationFailure(QStringLiteral("layout check: undo did not restore the pane sizes of the drag"));
-    ui->qmlController()->redo();
+    ui->actionManager()->triggerCommand(ACTION_EDIT_REDO);
     if(layoutSnapshot(layout) != afterDrag)
         reportVerificationFailure(QStringLiteral("layout check: redo did not restore the dragged pane sizes"));
-    ui->qmlController()->undo();
+    ui->actionManager()->triggerCommand(ACTION_EDIT_UNDO);
     if(layoutSnapshot(layout) != before)
         reportVerificationFailure(QStringLiteral("layout check: a second undo did not return to the layout from before the drag"));
     qInfo() << "LAYOUT_UNDO the drag was undone and redone with the pane sizes restored";
@@ -766,6 +777,166 @@ void runLayoutTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     layout->toggleMaximize(activeIndex);
     if(layoutSnapshot(layout) != before)
         reportVerificationFailure(QStringLiteral("layout check: restoring the layout did not bring the pane sizes back"));
+
+    continuation();
+}
+
+/******************************************************************************
+* Verifies the shared command layer of the two frontends.
+*
+* The commands are the frontend-neutral description of everything the user can invoke, and the classic frontend
+* presents them as QActions. This check verifies that the QML workbench sees the same commands with the same state,
+* that the state rules of the frontend (the undo stack, the animation playback, the viewport layout) drive the
+* commands, and that a command can be invoked through the QML engine.
+******************************************************************************/
+void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    ActionManager* actionManager = ui->actionManager();
+    QQuickView* view = ui->view();
+    if(!actionManager || !view || !view->rootObject()) {
+        reportVerificationFailure(QStringLiteral("command check: the workbench exposes no command layer"));
+        continuation();
+        return;
+    }
+
+    // 1. Every command the classic frontend knows about is available here, and its QAction view carries the state of
+    //    the command, which is what the menus and toolbars of the classic frontend display.
+    const QStringList ids = {
+        QStringLiteral("EditUndo"), QStringLiteral("EditRedo"), QStringLiteral("EditDelete"),
+        QStringLiteral("ViewportMaximize"), QStringLiteral("ViewportZoomSceneExtents"),
+        QStringLiteral("ViewportPan"), QStringLiteral("SelectionMode"), QStringLiteral("AnimationTogglePlayback")
+    };
+    for(const QString& id : ids) {
+        Command* command = actionManager->findCommand(id);
+        if(!command) {
+            reportVerificationFailure(QStringLiteral("command check: the command %1 does not exist").arg(id));
+            continue;
+        }
+        QAction* actionView = actionManager->actionView(command);
+        if(!actionView) {
+            reportVerificationFailure(QStringLiteral("command check: the command %1 has no QAction view").arg(id));
+            continue;
+        }
+        if(actionView->text() != command->text() || actionView->isEnabled() != command->isEnabled()
+           || actionView->isCheckable() != command->isCheckable() || actionView->isChecked() != command->isChecked()) {
+            reportVerificationFailure(QStringLiteral("command check: the QAction view of %1 does not mirror the command").arg(id));
+        }
+    }
+    qInfo() << "COMMAND_TEST the command layer provides" << actionManager->commands().size() << "commands,"
+            << "including all" << ids.size() << "commands of this check";
+
+    // 2. The QML side of the workbench sees the same objects, and can read the state of a command. The expressions are
+    //    evaluated by the QML engine, so the context property, the registered type and the properties are all covered.
+    const auto evaluateInQml = [view](const QString& expression) -> QVariant {
+        QQmlExpression evaluator(qmlContext(view->rootObject()), view->rootObject(), expression);
+        QVariant result = evaluator.evaluate();
+        if(evaluator.hasError())
+            qWarning() << "COMMAND_TEST QML error:" << evaluator.error().toString();
+        return result;
+    };
+    Command* undoCommand = actionManager->findCommand(QStringLiteral("EditUndo"));
+    const QVariant qmlUndoText = evaluateInQml(QStringLiteral("workbench.undoCommand.text"));
+    // The title of the Undo command carries the name of the operation it would revert, so only compare the prefix.
+    if(!qmlUndoText.toString().startsWith(QStringLiteral("Undo")))
+        reportVerificationFailure(QStringLiteral("command check: QML reads \"%1\" as the title of the Undo command").arg(qmlUndoText.toString()));
+    const QVariant qmlCommandCount = evaluateInQml(QStringLiteral("commandManager.commandList.length"));
+    if(qmlCommandCount.toInt() != actionManager->commands().size())
+        reportVerificationFailure(QStringLiteral("command check: QML sees %1 of %2 commands").arg(qmlCommandCount.toInt()).arg(actionManager->commands().size()));
+    qInfo() << "COMMAND_TEST QML reads the Undo command as" << qmlUndoText.toString() << "and sees" << qmlCommandCount.toInt() << "commands";
+
+    // 3. Invoking a command through the QML engine has to run the handler the two frontends share.
+    ViewportConfiguration* viewportConfig = ui->datasetContainer().activeViewportConfig();
+    if(viewportConfig) {
+        evaluateInQml(QStringLiteral("commandManager.triggerCommand('ViewportMaximize')"));
+        if(viewportConfig->maximizedViewport() != viewportConfig->activeViewport())
+            reportVerificationFailure(QStringLiteral("command check: invoking a command through QML did not run its handler"));
+        evaluateInQml(QStringLiteral("commandManager.triggerCommand('ViewportMaximize')"));
+        if(viewportConfig->maximizedViewport())
+            reportVerificationFailure(QStringLiteral("command check: invoking a command through QML did not restore the layout"));
+        qInfo() << "COMMAND_TEST QML can invoke a command and run its handler";
+    }
+
+    // 4. The state rules of the frontend drive the commands. The undo stack is the most important one: its state has to
+    //    reach the Undo/Redo commands (and their QAction views) without the frontend wiring them up again.
+    Scene* scene = ui->datasetContainer().activeScene();
+    SceneNode* node = scene && !scene->children().empty() ? scene->children().front() : nullptr;
+    if(!node) {
+        reportVerificationFailure(QStringLiteral("command check: the scene has no object to rename"));
+    }
+    else {
+        const QString originalTitle = node->objectTitle();
+        GuiTaskScope taskScope(*ui);
+        ui->performTransaction(QStringLiteral("Rename pipeline"), [&]() {
+            node->setSceneNodeName(QStringLiteral("renamed by the command check"));
+        });
+        if(node->objectTitle() != QStringLiteral("renamed by the command check"))
+            reportVerificationFailure(QStringLiteral("command check: the test transaction did not rename the object"));
+        Command* redoCommand = actionManager->findCommand(QStringLiteral("EditRedo"));
+        if(!undoCommand || !undoCommand->isEnabled() || !actionManager->actionView(undoCommand)->isEnabled())
+            reportVerificationFailure(QStringLiteral("command check: the Undo command did not become enabled after an operation"));
+        else
+            qInfo() << "COMMAND_TEST the Undo command is" << undoCommand->text();
+        actionManager->triggerCommand(QStringLiteral("EditUndo"));
+        if(node->objectTitle() != originalTitle)
+            reportVerificationFailure(QStringLiteral("command check: the Undo command did not revert the operation"));
+        if(!redoCommand || !redoCommand->isEnabled())
+            reportVerificationFailure(QStringLiteral("command check: the Redo command did not become enabled after an undo"));
+        actionManager->triggerCommand(QStringLiteral("EditRedo"));
+        if(node->objectTitle() != QStringLiteral("renamed by the command check"))
+            reportVerificationFailure(QStringLiteral("command check: the Redo command did not reapply the operation"));
+        actionManager->triggerCommand(QStringLiteral("EditUndo"));
+        qInfo() << "COMMAND_TEST the shared undo stack drives the Undo/Redo commands and their QAction views";
+    }
+
+    // 5. A checkable command that mirrors program state: starting and stopping the animation playback goes through the
+    //    command, which is what the menu entry of the classic frontend toggles.
+    if(Command* playbackCommand = actionManager->findCommand(QStringLiteral("AnimationTogglePlayback"))) {
+        playbackCommand->setChecked(true);
+        if(!ui->datasetContainer().isPlaybackActive())
+            reportVerificationFailure(QStringLiteral("command check: checking the playback command did not start the playback"));
+        playbackCommand->setChecked(false);
+        if(ui->datasetContainer().isPlaybackActive())
+            reportVerificationFailure(QStringLiteral("command check: unchecking the playback command did not stop the playback"));
+        qInfo() << "COMMAND_TEST the playback command controls the animation playback";
+    }
+
+    // 6. Viewport input modes are commands as well, including the rule that an exclusive mode stays active.
+    ViewportInputManager* inputManager = ui->viewportInputManager();
+    Command* panCommand = actionManager->findCommand(QStringLiteral("ViewportPan"));
+    Command* selectionCommand = actionManager->findCommand(QStringLiteral("SelectionMode"));
+    if(!inputManager || !panCommand || !selectionCommand) {
+        reportVerificationFailure(QStringLiteral("command check: the viewport input modes are not available as commands"));
+    }
+    else {
+        panCommand->trigger();
+        if(inputManager->activeMode() != inputManager->panMode() || !panCommand->isChecked())
+            reportVerificationFailure(QStringLiteral("command check: invoking the pan command did not activate the pan mode"));
+        panCommand->trigger();
+        if(inputManager->activeMode() == inputManager->panMode() || panCommand->isChecked())
+            reportVerificationFailure(QStringLiteral("command check: invoking the pan command again did not deactivate the mode"));
+        selectionCommand->trigger();
+        if(inputManager->activeMode() != inputManager->selectionMode() || !selectionCommand->isChecked())
+            reportVerificationFailure(QStringLiteral("command check: invoking the selection command did not activate the selection mode"));
+        // The selection mode is exclusive: the user cannot turn it off, so it stays active and stays checked.
+        selectionCommand->trigger();
+        if(inputManager->activeMode() != inputManager->selectionMode() || !selectionCommand->isChecked())
+            reportVerificationFailure(QStringLiteral("command check: the exclusive selection mode was deactivated"));
+        qInfo() << "COMMAND_TEST the viewport input modes are commands, including the exclusive selection mode";
+    }
+
+    // 7. Maximizing the active viewport is the same command the classic frontend has in its toolbar.
+    if(Command* maximizeCommand = actionManager->findCommand(QStringLiteral("ViewportMaximize"))) {
+        ViewportConfiguration* config = ui->datasetContainer().activeViewportConfig();
+        if(config) {
+            maximizeCommand->trigger();
+            if(config->maximizedViewport() != config->activeViewport() || !maximizeCommand->isChecked())
+                reportVerificationFailure(QStringLiteral("command check: the maximize command did not maximize the active viewport"));
+            maximizeCommand->trigger();
+            if(config->maximizedViewport() || maximizeCommand->isChecked())
+                reportVerificationFailure(QStringLiteral("command check: the maximize command did not restore the layout"));
+            qInfo() << "COMMAND_TEST the maximize command toggles the maximized viewport";
+        }
+    }
 
     continuation();
 }
@@ -888,6 +1059,8 @@ protected:
         parser.addOption(QCommandLineOption(QStringLiteral("qml-resize"),
             tr("Resize the workbench window to the given size (WxH) and verify that rendering and picking recover."),
             QStringLiteral("WxH")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-command-check"),
+            tr("Verify the shared command layer: the commands the QML workbench sees, their state rules and their handlers.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-layout-check"),
             tr("Verify the viewport layout: pane geometry, undoable splitter drags and maximizing a viewport.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-import-check"),
@@ -974,6 +1147,7 @@ protected:
         const int frameStatsDuration = cmdLineParser().value(QStringLiteral("qml-frame-stats")).toInt();
         const bool hideShowTest = cmdLineParser().isSet(QStringLiteral("qml-hide-show"));
         const bool layoutCheck = cmdLineParser().isSet(QStringLiteral("qml-layout-check"));
+        const bool commandCheck = cmdLineParser().isSet(QStringLiteral("qml-command-check"));
         const bool importCheck = cmdLineParser().isSet(QStringLiteral("qml-import-check"));
         const int lifecycleCycles = cmdLineParser().value(QStringLiteral("qml-lifecycle-cycles")).toInt();
         QSize resizeSize;
@@ -987,7 +1161,7 @@ protected:
         const int holdMs = cmdLineParser().value(QStringLiteral("qml-hold-ms")).toInt();
 
         // Interactive mode: without a verification option, keep the window open.
-        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck)
+        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck && !commandCheck)
             return;
 
         int delay = cmdLineParser().value(QStringLiteral("qml-startup-delay")).toInt();
@@ -1033,6 +1207,11 @@ protected:
         if(frameStatsDuration > 0) {
             _verificationSteps.push_back([ui = mainWinUI, frameStatsDuration](std::function<void()> next) {
                 measureFrameRate(ui, frameStatsDuration, std::move(next));
+            });
+        }
+        if(commandCheck) {
+            _verificationSteps.push_back([ui = mainWinUI](std::function<void()> next) {
+                runCommandTest(ui, std::move(next));
             });
         }
         if(layoutCheck) {

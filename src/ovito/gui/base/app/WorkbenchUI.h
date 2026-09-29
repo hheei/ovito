@@ -51,6 +51,11 @@ public:
     /// Turns auto-key animation recording on or off. The frontend connects this to the control that lets the user toggle it.
     void setAutoKeyModeEnabled(bool enabled) { _autoKeyModeOn = enabled; }
 
+    /// Destructor. Every task of the workbench must have finished by the time the workbench is destroyed.
+    /// Note: OVITO objects are never destroyed through a base class pointer, so this destructor is deliberately not
+    /// marked \c override (the base class of UserInterface has no virtual destructor).
+    ~WorkbenchUI();
+
     /// Registers a new task progress record with this user interface.
     /// This method gets called when a new TaskProgress instance is created from a running task.
     virtual std::mutex* taskProgressBegin(TaskProgress* progress) override;

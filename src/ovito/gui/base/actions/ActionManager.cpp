@@ -231,12 +231,14 @@ void ActionManager::deleteAction(QAction* action)
 Command* ActionManager::addCommand(Command* command)
 {
     OVITO_CHECK_POINTER(command);
+    OVITO_ASSERT_MSG(!command->id().isEmpty(), "ActionManager::addCommand()", "A registered command must have a non-empty identifier.");
     OVITO_ASSERT_MSG(findCommand(command->id()) == nullptr, "ActionManager::addCommand()", qPrintable(QStringLiteral("There is already a command with the same ID: %1").arg(command->id())));
 
     command->setParent(this);
     _commands.push_back(command);
     _commandsById.insert(command->id(), command);
     createActionView(command);
+    Q_EMIT commandsChanged();
     return command;
 }
 

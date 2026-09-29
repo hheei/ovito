@@ -77,7 +77,6 @@ void MainWindowUI::initializeObject()
 MainWindowUI::~MainWindowUI()
 {
     OVITO_ASSERT(_mainWindow == nullptr);
-    OVITO_ASSERT(!_progressTasksHead && !_progressTasksTail);
 }
 
 /******************************************************************************
