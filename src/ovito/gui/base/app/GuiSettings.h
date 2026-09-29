@@ -148,6 +148,13 @@ private:
     /// integration.
     void observeSystemColorScheme();
 
+    /// Is called when the operating system reports a different color scheme.
+    void systemColorSchemeChanged();
+
+    /// Whether the icon theme of the process matches the current color scheme. The icons of both frontends come from
+    /// the same pair of icon themes (IconTheme), and this is the one place that decides which of the two is current.
+    void applyIconTheme();
+
     /// Whether the color scheme of the platform is watched for changes already.
     bool _observingColorScheme = false;
 

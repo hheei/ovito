@@ -113,6 +113,9 @@ Rectangle {
             // The first stop of the keyboard focus chain: the command that brings data into the workbench.
             focus: true
             text: workbench.importCommand ? workbench.importCommand.text : qsTr("Import Data…")
+            // The button carries the icon of the command it runs, taken from the shared icon set.
+            icon.source: (workbench.importCommand && workbench.importCommand.iconPath.length) ? Icons.url(workbench.importCommand.iconPath) : ""
+
             enabled: workbench.importCommand ? workbench.importCommand.enabled : true
             Accessible.name: qsTr("Import data files into the current scene")
             onClicked: workbenchController.showImportDialog()

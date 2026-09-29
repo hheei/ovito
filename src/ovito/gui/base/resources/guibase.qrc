@@ -48,6 +48,7 @@
 	<file>icons/ovito-light/actions/edit_in_external_editor.svg</file>
 
 	<file>icons/ovito-light/actions/viewport_maximize.svg</file>
+	<file>icons/ovito-light/actions/viewport_restore.svg</file>
 	<file>icons/ovito-light/actions/viewport_zoom_scene_extents.svg</file>
 	<file>icons/ovito-light/actions/viewport_mode_zoom.svg</file>
 	<file>icons/ovito-light/actions/viewport_mode_pan.svg</file>
@@ -178,6 +179,7 @@
 	<file>icons/ovito-dark/actions/edit_in_external_editor.svg</file>
 
 	<file>icons/ovito-dark/actions/viewport_maximize.svg</file>
+	<file>icons/ovito-dark/actions/viewport_restore.svg</file>
 	<file>icons/ovito-dark/actions/viewport_zoom_scene_extents.svg</file>
 	<file>icons/ovito-dark/actions/viewport_mode_zoom.svg</file>
 	<file>icons/ovito-dark/actions/viewport_mode_pan.svg</file>

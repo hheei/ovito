@@ -3,6 +3,8 @@
 
 #include "GuiSettings.h"
 
+#include <ovito/gui/base/app/IconTheme.h>
+
 #include <QCoreApplication>
 #include <QGuiApplication>
 #include <QSettings>
@@ -71,9 +73,29 @@ void GuiSettings::observeSystemColorScheme()
     if(_observingColorScheme)
         return;
     if(QGuiApplication* app = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
-        connect(app->styleHints(), &QStyleHints::colorSchemeChanged, this, &GuiSettings::changed);
+        connect(app->styleHints(), &QStyleHints::colorSchemeChanged, this, &GuiSettings::systemColorSchemeChanged);
         _observingColorScheme = true;
+        applyIconTheme();
     }
+}
+
+/******************************************************************************
+* Is called when the operating system reports a different color scheme.
+******************************************************************************/
+void GuiSettings::systemColorSchemeChanged()
+{
+    applyIconTheme();
+    Q_EMIT changed();
+}
+
+/******************************************************************************
+* Makes the icon theme of the process match the current color scheme.
+******************************************************************************/
+void GuiSettings::applyIconTheme()
+{
+    // Both frontends take their icons from the same icon set, so the decision which of its two themes is the current one
+    // belongs here next to the color scheme it is derived from.
+    IconTheme::apply(usingDarkTheme());
 }
 
 /******************************************************************************
@@ -102,6 +124,7 @@ void GuiSettings::setFollowsSystemColorScheme(bool enable)
         settings.setValue(AutomaticColorSchemeKey, true);
     else
         settings.remove(AutomaticColorSchemeKey);
+    applyIconTheme();
     Q_EMIT changed();
 }
 

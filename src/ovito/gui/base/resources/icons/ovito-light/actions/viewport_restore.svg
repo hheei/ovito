@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Four arrows pointing into the viewport, i.e. the counterpart of viewport_maximize.svg. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" version="1.1">
+  <title>Restore the viewport size</title>
+  <path d="M 3.2,4.8 4.8,3.2 8.8,7.2 11,5 11,11 5,11 7.2,8.8 Z" style="fill:#505050" />
+  <path d="M 19.2,3.2 20.8,4.8 16.8,8.8 19,11 13,11 13,5 15.2,7.2 Z" style="fill:#505050" />
+  <path d="M 20.8,19.2 19.2,20.8 15.2,16.8 13,19 13,13 19,13 16.8,15.2 Z" style="fill:#505050" />
+  <path d="M 4.8,20.8 3.2,19.2 7.2,15.2 5,13 11,13 11,19 8.8,16.8 Z" style="fill:#505050" />
+</svg>

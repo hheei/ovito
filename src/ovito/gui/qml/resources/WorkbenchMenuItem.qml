@@ -22,6 +22,9 @@ MenuItem {
     property Command command
 
     text: command ? command.text : ""
+    // The icon of the command comes from the shared icon set, the same one the QAction of the classic frontend shows;
+    // commands without an icon simply leave the entry without one.
+    icon.source: (command && command.iconPath.length) ? Icons.url(command.iconPath) : ""
     enabled: command ? command.enabled : false
     checkable: command ? command.checkable : false
     checked: command ? command.checked : false

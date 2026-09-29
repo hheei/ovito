@@ -94,39 +94,20 @@ Item {
 
         Behavior on opacity { NumberAnimation { duration: 100 } }
 
-        // The icon is drawn from rectangles instead of using a font glyph, so that it does not depend on which
-        // characters the font of the platform provides: one frame for "maximize", two overlapping frames for "restore".
-        Rectangle {
-            visible: !paneItem.pane.maximized
-            x: 5
-            y: 5
-            width: 10
-            height: 10
-            color: "transparent"
-            border.width: 1
-            border.color: theme.textPrimary
-        }
-
-        Rectangle {
-            visible: paneItem.pane.maximized
-            x: 5
-            y: 7
-            width: 8
-            height: 7
-            color: "transparent"
-            border.width: 1
-            border.color: theme.textPrimary
-        }
-
-        Rectangle {
-            visible: paneItem.pane.maximized
-            x: 8
-            y: 4
-            width: 8
-            height: 7
-            color: maximizeButton.color
-            border.width: 1
-            border.color: theme.textPrimary
+        // The icons come from the shared icon set of the two frontends (Icons, see IconTheme in gui/base), in the theme
+        // that matches the current color scheme - the same arrow-icon pair the classic frontend uses for its viewport
+        // maximize command, plus the counterpart the shell needs for the way back.
+        Image {
+            anchors.centerIn: parent
+            source: Icons.url(paneItem.pane.maximized ? "viewport_restore" : "viewport_maximize")
+            sourceSize.width: 16
+            sourceSize.height: 16
+            fillMode: Image.PreserveAspectFit
+            // The image provider of the icons has the same lifetime as the engine, so the icon is there; a missing one
+            // is reported instead of silently leaving an empty button.
+            onStatusChanged: if(status === Image.Error)
+                console.warn("The maximize button could not load its icon from the shared icon set")
+            Accessible.ignored: true
         }
 
         MouseArea {

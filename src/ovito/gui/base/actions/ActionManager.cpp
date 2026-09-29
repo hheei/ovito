@@ -15,6 +15,8 @@
 #include <ovito/gui/base/actions/Command.h>
 #include "ActionManager.h"
 
+#include <ovito/gui/base/app/IconTheme.h>
+
 namespace Ovito {
 
 /******************************************************************************
@@ -319,7 +321,7 @@ void ActionManager::updateActionView(Command* command, QAction* action)
     action->setVisible(command->isVisible());
     const QString& iconPath = command->iconPath();
     if(!iconPath.isEmpty())
-        action->setIcon(iconPath.startsWith(QLatin1Char(':')) ? QIcon(iconPath) : QIcon::fromTheme(iconPath));
+        action->setIcon(IconTheme::icon(iconPath));
 }
 
 /******************************************************************************

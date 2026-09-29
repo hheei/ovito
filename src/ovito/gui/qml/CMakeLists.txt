@@ -10,6 +10,7 @@ OVITO_STANDARD_PLUGIN(GuiQml
         app/QmlFrontend.cpp
         app/QmlFrontendService.cpp
         mainwin/QmlMainWindowUI.cpp
+        mainwin/QmlIcons.cpp
         mainwin/QmlViewportController.cpp
         mainwin/QmlViewportLayout.cpp
         mainwin/QmlWorkbenchController.cpp

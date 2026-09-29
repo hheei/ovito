@@ -40,8 +40,8 @@ GuiApplication::GuiApplication()
     // Register Qt resources.
     ::registerQtResources();
 
-    // Activate our icon theme.
-    QIcon::setFallbackThemeName("ovito-light");
+    // Note: the icon theme of the process is set by the settings facade (GuiSettings::applyIconTheme()), because both
+    // frontends take their icons from the same icon set.
 
     // Make the classic main window available as a selectable frontend. It is the default frontend, so the usual
     // 'ovito' invocation keeps starting it; the QML frontend registers itself under a different name when it is part
@@ -174,17 +174,8 @@ MainThreadOperation GuiApplication::startupApplication()
         // Set up Qt event loop.
         createQtApplication(true);
 
-        // Activate icon theme that matches the current UI theme.
-        bool darkTheme = usingDarkTheme();
-        QIcon::setThemeName(darkTheme ? QStringLiteral("ovito-dark") : QStringLiteral("ovito-light"));
-
-        if(automaticallyEnableDarkMode()) {
-            // Install handler to get notified whenever the system color scheme is changed by the user.
-            connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, [](Qt::ColorScheme scheme) {
-                // Adjust OVITO's icon theme to match the UI color scheme.
-                QIcon::setThemeName(scheme == Qt::ColorScheme::Dark ? QStringLiteral("ovito-dark") : QStringLiteral("ovito-light"));
-            });
-        }
+        // The icon theme of the process follows the current color scheme; the settings facade applies it and keeps it
+        // in sync with the operating system (see GuiSettings::applyIconTheme()).
 
         // Set the application icon.
         QIcon mainWindowIcon;

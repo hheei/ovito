@@ -24,6 +24,8 @@
 #include <algorithm>
 #include "QmlMainWindowUI.h"
 
+#include "QmlIcons.h"
+
 namespace Ovito {
 
 IMPLEMENT_CREATABLE_OVITO_CLASS(QmlMainWindowUI);
@@ -51,6 +53,9 @@ static void registerQmlTypes()
             QStringLiteral("There is one viewport context menu per workbench window."));
         qmlRegisterUncreatableType<Command>("Ovito.Qml", 1, 0, "Command",
             QStringLiteral("Commands are created by the frontend through the command manager."));
+        // The icons of the shared icon set, which every component of the shell can reach as 'Icons'. The icons live in
+        // the process, not in a window, so the singleton instance is the process-wide one.
+        qmlRegisterSingletonInstance("Ovito.Qml", 1, 0, "Icons", &QmlIcons::instance());
         return true;
     }();
     Q_UNUSED(registered);
@@ -116,6 +121,9 @@ void QmlMainWindowUI::initializeWindow()
     // Make the C++ side of the frontend available to QML. The types have to be registered before the QML file that uses
     // them is loaded.
     registerQmlTypes();
+    // The icons of the shell are Qt resources of the shared icon set, which the QML engine reaches through the image
+    // provider of QmlIcons ('Icons.url(...)' in QML).
+    QmlIcons::registerImageProvider(*view->engine());
     view->rootContext()->setContextProperty(QStringLiteral("workbenchController"), _workbenchController);
     view->rootContext()->setContextProperty(QStringLiteral("viewportController"), _qmlController);
     view->rootContext()->setContextProperty(QStringLiteral("viewportLayout"), _viewportLayout);

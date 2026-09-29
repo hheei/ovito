@@ -15,6 +15,8 @@
 #include <ovito/gui/qml/mainwin/QmlMainWindowUI.h>
 #include <ovito/gui/base/app/TaskProgressModel.h>
 #include <ovito/gui/base/app/GuiSettings.h>
+#include <ovito/gui/base/app/IconTheme.h>
+
 #include <ovito/gui/base/mainwin/RecentFilesList.h>
 #include <ovito/gui/base/mainwin/PipelineListModel.h>
 #include <ovito/gui/base/mainwin/OverlayListModel.h>
@@ -1142,6 +1144,130 @@ void runLibraryTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     continuation();
 }
 
+/// One icon image the QML scene of the workbench currently displays.
+struct IconImage
+{
+    QUrl source;
+    int status = 0;
+};
+
+/// QQuickImageBase::Status: the image is loaded and ready to be displayed.
+constexpr int ImageStatusReady = 1;
+
+/// Returns the icon images of the shell, i.e. the plain QML Image items whose source is an icon of the given image
+/// provider. The source and the load status are read through the meta object of the item, which keeps this independent of
+/// Qt Quick's private headers.
+static QVector<IconImage> shellIconImages(QmlMainWindowUI* ui, const QString& host)
+{
+    QVector<IconImage> images;
+    QQuickItem* root = ui->view() ? ui->view()->rootObject() : nullptr;
+    if(!root)
+        return images;
+
+    std::function<void(QQuickItem*)> collect = [&](QQuickItem* parent) {
+        for(QQuickItem* child : parent->childItems()) {
+            if(child->inherits("QQuickImage")) {
+                const QUrl source = child->property("source").toUrl();
+                if(source.host() == host)
+                    images.push_back({source, child->property("status").toInt()});
+            }
+            collect(child);
+        }
+    };
+    collect(root);
+    return images;
+}
+
+/******************************************************************************
+* Verifies that the shell shows the icons of the shared icon set.
+*
+* Both frontends take their icons from the same pair of icon themes of the shared GUI layer (IconTheme), and the Qt Quick
+* frontend reaches them through the image provider of QmlIcons. The check verifies both halves: that the shared rule
+* resolves the icons the shell and its commands name, in either color scheme, and that the QML side really displays one.
+******************************************************************************/
+void runIconTest(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    // 1. The shared rule resolves the icons of the icon set itself and those the commands of the shell carry.
+    const QString themeName = IconTheme::currentThemeName();
+    const QString expectedTheme = IconTheme::themeName(GuiSettings::instance().usingDarkTheme());
+    if(themeName != expectedTheme)
+        reportVerificationFailure(QStringLiteral("the icon theme of the process is \"%1\" while the color scheme calls for \"%2\"")
+            .arg(themeName, expectedTheme));
+
+    QStringList iconPaths = {QStringLiteral("viewport_maximize"), QStringLiteral("viewport_restore")};
+    for(const QString& commandId : {QStringLiteral("FileImport"), QStringLiteral("EditDelete"), QStringLiteral("ViewportMaximize")}) {
+        if(Command* command = ui->actionManager() ? ui->actionManager()->findCommand(commandId) : nullptr) {
+            if(!command->iconPath().isEmpty())
+                iconPaths.push_back(command->iconPath());
+        }
+    }
+    for(const QString& iconPath : iconPaths) {
+        const QImage image = IconTheme::image(iconPath, QSize(16, 16), 1);
+        if(image.isNull() || image.size() != QSize(16, 16))
+            reportVerificationFailure(QStringLiteral("the shared icon set does not resolve \"%1\" (%2x%3 px)")
+                .arg(iconPath).arg(image.size().width()).arg(image.size().height()));
+    }
+
+    // 2. The other theme of the set resolves them as well: both frontends follow the color scheme, so both themes have
+    // to hold the icons the shell uses.
+    IconTheme::apply(true);
+    for(const QString& iconPath : iconPaths) {
+        if(IconTheme::image(iconPath, QSize(16, 16), 1).isNull())
+            reportVerificationFailure(QStringLiteral("the dark icon theme does not hold \"%1\"").arg(iconPath));
+    }
+    IconTheme::apply(GuiSettings::instance().usingDarkTheme());
+
+    // 3. The QML side: the singleton reports the theme of the shared layer and builds URLs of its image provider.
+    const QVariant reportedTheme = evaluateInQml(ui, QStringLiteral("Icons.themeName"));
+    if(reportedTheme.toString() != themeName)
+        reportVerificationFailure(QStringLiteral("QML sees the icon theme \"%1\" while the process uses \"%2\"")
+            .arg(reportedTheme.toString(), themeName));
+    const QUrl restoreUrl = evaluateInQml(ui, QStringLiteral("Icons.url(\"viewport_restore\").toString()")).toString();
+    const QUrl maximizeUrl = evaluateInQml(ui, QStringLiteral("Icons.url(\"viewport_maximize\").toString()")).toString();
+
+    // 4. The icons of the shell are displayed: the maximize button of every pane shows the icon of the state of its pane,
+    //    and no icon of the shell failed to load.
+    QVector<IconImage> images = shellIconImages(ui, restoreUrl.host());
+    int paneButtons = 0;
+    for(const IconImage& image : images) {
+        if(image.status != ImageStatusReady)
+            reportVerificationFailure(QStringLiteral("the shell could not load its icon \"%1\"").arg(image.source.toString()));
+        if(image.source == restoreUrl || image.source == maximizeUrl)
+            paneButtons++;
+    }
+    if(images.isEmpty())
+        reportVerificationFailure(QStringLiteral("the shell displays no icon of the shared icon set"));
+    if(paneButtons == 0)
+        reportVerificationFailure(QStringLiteral("the maximize button of no pane shows an icon of the shared icon set"));
+
+    // 5. Maximizing a viewport switches the button of that pane to the restore icon, which is the asset this frontend
+    //    needed and the classic icon set did not have; the layout is put back before the check is done.
+    if(!evaluateInQml(ui, QStringLiteral("viewportLayout.maximizable")).toBool()) {
+        reportVerificationFailure(QStringLiteral("no viewport of the workbench can be maximized"));
+        continuation();
+        return;
+    }
+    evaluateInQml(ui, QStringLiteral("viewportLayout.toggleMaximize(viewportLayout.activeViewportIndex)"));
+
+    pollUntil(ui, 50, 5000,
+        [ui, restoreUrl]() {
+            return std::ranges::any_of(shellIconImages(ui, restoreUrl.host()),
+                [&restoreUrl](const IconImage& image) { return image.source == restoreUrl && image.status == ImageStatusReady; });
+        },
+        [ui, continuation = std::move(continuation), restoreUrl, themeName, iconPaths = iconPaths, paneButtons](bool restored) {
+
+        if(!restored) {
+            reportVerificationFailure(QStringLiteral("the maximize button of a maximized pane does not show the restore icon \"%1\"")
+                .arg(restoreUrl.toString()));
+        }
+        evaluateInQml(ui, QStringLiteral("viewportLayout.toggleMaximize(viewportLayout.activeViewportIndex)"));
+
+        qInfo() << "ICON_TEST theme" << themeName << "resolved" << iconPaths.size() << "icons," << "pane buttons"
+                << paneButtons << "of which switched to the restore icon:" << restored;
+        continuation();
+    });
+}
+
 /******************************************************************************
 * Verifies that the frontend notices when its platform plugin provides no graphics device.
 *
@@ -1887,6 +2013,8 @@ protected:
             tr("Verify the import path of the shell: a multi-frame trajectory, an unsupported file and a cancelled import.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-library-check"),
             tr("Verify the modifier and viewport layer libraries, whose entries are commands of the shared command layer.")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-icon-check"),
+            QStringLiteral("Verify that the shell shows the icons of the shared icon set.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-device-check"),
             tr("Verify that the frontend reports a missing graphics device, which depends on the platform plugin.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-parity-check"),
@@ -1979,6 +2107,7 @@ protected:
         const bool importCheck = cmdLineParser().isSet(QStringLiteral("qml-import-check"));
         const bool parityCheck = cmdLineParser().isSet(QStringLiteral("qml-parity-check"));
         const bool deviceCheck = cmdLineParser().isSet(QStringLiteral("qml-device-check"));
+        const bool iconCheck = cmdLineParser().isSet(QStringLiteral("qml-icon-check"));
         const bool libraryCheck = cmdLineParser().isSet(QStringLiteral("qml-library-check"));
         const int lifecycleCycles = cmdLineParser().value(QStringLiteral("qml-lifecycle-cycles")).toInt();
         QSize resizeSize;
@@ -1992,7 +2121,7 @@ protected:
         const int holdMs = cmdLineParser().value(QStringLiteral("qml-hold-ms")).toInt();
 
         // Interactive mode: without a verification option, keep the window open.
-        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck && !commandCheck && !sessionCheck && !settingsCheck && !parityCheck && !deviceCheck && !libraryCheck)
+        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck && !commandCheck && !sessionCheck && !settingsCheck && !parityCheck && !deviceCheck && !libraryCheck && !iconCheck)
             return;
 
         int delay = cmdLineParser().value(QStringLiteral("qml-startup-delay")).toInt();
@@ -2071,6 +2200,12 @@ protected:
             // which graphics device.
             _verificationSteps.push_back([ui = mainWinUI](std::function<void()> next) {
                 runDeviceTest(ui, std::move(next));
+            });
+        }
+        if(iconCheck) {
+            // Reads the state of the shell only, so it can run before the checks that change the scene.
+            _verificationSteps.push_back([ui = mainWinUI](std::function<void()> next) {
+                runIconTest(ui, std::move(next));
             });
         }
         if(verifyPicking) {
