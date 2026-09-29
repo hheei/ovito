@@ -382,9 +382,19 @@ jobs:
       - name: Smoke test the Qt Quick frontend (Direct3D 12 via WARP)
         shell: pwsh
         env:
-          QSG_RHI_BACKEND: d3d12
           QSG_RHI_PREFER_SOFTWARE_RENDERER: '1'
         run: |
+          # OVITO's build tree contains a qt.conf that points at a plugins/ directory - the layout of an installed
+          # package. Qt's own plugins and its QML modules therefore have to be pointed at explicitly, or the
+          # "windows" platform plugin and the QtQuick.Controls module cannot be found (UI_TEST_ENV.md 5.5).
+          # QSG_RHI_BACKEND is deliberately not set: the frontend selects Direct3D 12 itself on Windows, and this
+          # step is the regression check for that.
+          $qtPrefix = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $env:Qt6_DIR))
+          $env:QT_PLUGIN_PATH = "$qtPrefix\plugins"
+          $env:QT_QPA_PLATFORM_PLUGIN_PATH = "$qtPrefix\plugins\platforms"
+          $env:QML_IMPORT_PATH = "$qtPrefix\qml"
+          $env:QML2_IMPORT_PATH = "$qtPrefix\qml"
+
           $dataset = Join-Path $env:RUNNER_TEMP "lattice_512.xyz"
           # The comment line must not contain the word "atoms" (see the Linux jobs above).
           $lines = @("512", "simple cubic lattice, a=3.6")
