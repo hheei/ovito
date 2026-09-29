@@ -98,18 +98,24 @@ import-mode dialog (`AddToScene`/`ReplaceSelected`/`ResetScene`). The QML fronte
 silent* — a `.xyz` file that autodetects as "LAMMPS Data" (see F6 in UI_PHASE1_SPIKE.md) simply loads an empty scene.
 
 Recommendation: keep the simple path, but make it *visible* (log the detected format and frame count into the status
-line) until §4/A6 provides the option model.
+line) until §4/A6 provides the option model. **Assignment**: the visible part belongs to Phase 2.5 of
+[UI_PLAN.md](UI_PLAN.md) (the status-line notice plus a check for the misdetected `.xyz` case, defect F6), and the option
+model of A6 is Phase 7 — the gap between the two is exactly the silent-failure risk this note is about, so it must not
+stay unowned.
 
 ### 3.4 Status bar, tasks and errors
 
 | | Classic | Qt Quick |
 | --- | --- | --- |
-| Task progress | `TaskDisplayWidget`: one progress bar **per running task**, cancellable individually | single task text + progress + Cancel (the first running task) |
+| Task progress | `TaskDisplayWidget`: **one aggregate** progress bar, fed by `TaskProgressModel::activeText()`/`activeValue()`; no per-task cancellation | single task text + progress + Cancel (the first running task) |
 | Errors | collected in `MainWindow::_errorList`, shown as a modal list with details, plus first line in the status bar | first line in the status bar, rest in a modal QML dialog |
 | Message boxes | blocking `QMessageBox`, animation playback stopped | blocking nested event loop on a QML dialog (same semantics, documented in UI_PHASE0_AUDIT.md D20) |
 
 Multiple concurrent tasks already occur (pipeline evaluation + offscreen render + import), so the QML status bar
-should be fed by a shared task model rather than by `visitRunningTasks()` formatting in each frontend (§4, A5).
+should be fed by a shared task model rather than by `visitRunningTasks()` formatting in each frontend (§4, A5) — **done**
+as `TaskProgressModel`, which both frontends read. Presenting the rows individually is therefore a *new* capability of the
+Qt Quick frontend (Phase 2.5 of UI_PLAN.md), not the restoration of a classic behaviour, and per-task cancellation is not
+achievable without a handle to a task, which `TaskProgress` does not provide.
 
 ### 3.5 Per-viewport UI
 
@@ -164,8 +170,9 @@ problem is its representation:
 * `ActionManager`, `ViewportModeAction` and the models that a UI is supposed to consume
   (`PipelineListModel`, `AvailableModifiersModel`, `AvailableOverlaysModel`) hand out **`QAction*`** (QtWidgets), and
   `GuiQml` links `GuiBase` and therefore QtWidgets transitively.
-* `gui/qml` references **0** `ACTION_*` ids: the QML frontend re-implements the handful of commands it has
-  (undo/redo, maximize, import) instead of reusing 51 existing definitions.
+* *(pre-A1 snapshot — the status note at the end of this section is the current state)* `gui/qml` referenced **0**
+  `ACTION_*` ids: the QML frontend re-implemented the handful of commands it had (undo/redo, maximize, import) instead of
+  reusing the 51 existing definitions.
 
 **Proposal.** Introduce a frontend-neutral command description in gui/base — id, text, shortcut(s), checkable,
 checked/enabled/visible state, trigger — with:
@@ -221,8 +228,13 @@ added a framework, not removed duplication. The genuinely frontend-neutral part 
 * The per-viewport window *bookkeeping* stays where it is: `ViewportsPanel` keeps its `_windowCreationErrorOccurred`
   state machine and its window list, and `QmlViewportController`/`QmlViewportLayout` keep the item-per-pane rule.
   Re-creating a viewport item after a fatal error is unnecessary in the Qt Quick frontend because the items live in
-  the scene graph and not behind a render-thread window; Phase 4's insert/delete-viewport work is where the remaining
-  overlap (creating and tearing down a viewport's window as the layout changes) will be unified.
+  the scene graph and not behind a render-thread window. What remains to be unified is therefore **not** the window
+  objects — this section explicitly does not propose a shared window manager — but the *rules* around them, and Phase 4 is
+  where it happens (Phase 2.5 of UI_PLAN.md assigns the layout mutation there): split/remove viewport through the shared
+  layout rules and undo transactions (the classic reference is `ViewportsPanel::showSplitterContextMenu`), the
+  active/maximized viewport state, and the point in a layout change at which a viewport's window or item is created and
+  destroyed — each verified in both frontends. Per-viewport window creation and the renderer-failure recovery stay with
+  each frontend.
 
 ### A3 — One asynchronous pick API (P1, ~2–4 days, touches core)
 
@@ -236,24 +248,33 @@ buffer-size validation) are implemented separately in both frontends.
 or delivering via a callback) and move the "which buffer is current / refresh when stale / validate geometry" policy
 next to `ObjectPickingBuffer` in core. `SelectionMode`, `NavigationModes` and `XFormModes` then consume the async path
 in both frontends; the classic blocking behaviour can be kept temporarily as a synchronous wait *on top of* the same
-code path, if changing classic behaviour is not acceptable yet.
+code path, if changing classic behaviour is not acceptable yet — but only where that wait is provably safe. A pick future
+whose completion is delivered through the GUI event loop (the Qt Quick implementation resumes its coroutine on
+`ObjectExecutor(this)`) can never be awaited on the GUI thread: the wait would block the very loop that has to deliver the
+result. This design therefore has to name the completion thread and the dispatch rule, and Phase 5 of UI_PLAN.md carries
+the hover-pick deadlock test that both frontends must pass.
 
 **Payoff.** Removes the classic frontend's per-hover-move stall and ends the second picking implementation.
 
 ### A4 — Offscreen rendering service (P1–P2, ~1–2 days)
 
-**Evidence.** Three consumers drive `RenderThread` themselves, each with its own lifetime and flag handling:
+**Evidence.** Four consumers drive `RenderThread` themselves, each with its own lifetime and flag handling:
 
 * `RenderSettings.cpp:272,378` (render output) — `createOffscreenTarget(size * supersampling)` + `renderOffscreenFrame`
 * `WidgetViewportWindow.cpp:216,220` (`grabViewportImage`) — offscreen target + render + CPU readback
 * `QuickViewportWindow.cpp:276,282` (picking) — `createOffscreenTarget(size, forPickingOnly)` + `renderPickingFrame`
+* `particles/modifier/visualization/AmbientOcclusionModifier.cpp:145,208` (ambient-occlusion sampling) —
+  `createOffscreenTarget(resolution, true)` + `renderAOFrame()`, awaited on a thread pool rather than on the GUI thread
 
 with four near-identical entry points (`createOffscreenTarget`, `renderOffscreenFrame`, `renderAOFrame`,
 `renderPickingFrame`) whose misuse is asserted at runtime rather than prevented by types.
 
 **Proposal.** One core-facing service ("render this frame graph offscreen and give me an image / picking buffers / AO
-samples") that owns target creation, supersampling, readback and reuse, plus a shared `PickingBufferTarget`. The QML
-render output planned for Phase 7 and the classic render output would then use identical code.
+samples") that owns target creation, the `forPickingOnly`/AO flag, supersampling, readback and reuse. It deliberately does
+**not** re-introduce a shared `PickingBufferTarget`: that duplication (audit item O7) is already gone, because the Qt Quick
+frontend picks through `RenderThread::renderPickingFrame()` and `ObjectPickingBuffer`. What is still duplicated is the
+offscreen *target lifecycle* around those calls, including the AO path that creates and awaits its target from a work
+thread. The QML render output planned for Phase 7 and the classic render output would then use identical code.
 
 ### A5 — Workbench state models (P2, ~2–3 days) — **partly implemented**
 
@@ -303,7 +324,10 @@ must reproduce (UI_DESIGN.md already commits to units/bounds/controller semantic
 
 **Proposal.** Build the frontend-neutral part first: property *field* enumeration per object kind, plus an editor
 registry keyed by property descriptor/type producing an entry model (label, type, value, unit, range, read-only,
-resettable, animated). Desktop keeps `PropertiesPanel` as one rendering of that model; QML gets a second.
+resettable, animated). Desktop keeps `PropertiesPanel` as one rendering of that model; QML gets a second. Consuming the
+model on the desktop side is part of the deliverable and not an optional follow-up: while only QML reads it, the knowledge
+still exists twice. UI_PLAN.md places A7 as deliverable 0 of Phase 4, with an exit criterion that both frontends show the
+same fields, units and bounds for the same object.
 
 **Payoff.** Prevents the largest single duplication of the migration; without it, Phases 4 and 6 will re-derive these
 rules in QML.
@@ -335,15 +359,19 @@ data inspector, command panel / modifier library, viewport toolbar with view mod
 insert/delete and the rest of `ViewportMenu`, `AdjustView` and render-preview mode, snippet import/export, settings
 dialogs, Python console (when the Python plugin is built).
 
-Deliberately out of scope (documented in UI_DESIGN.md/UI_PLAN.md): menu-bar-driven workflow, multiple windows,
-session files (until A5), plugin-specific dialogs, and the desktop's widget-based property editors.
+Deliberately out of scope (documented in UI_DESIGN.md/UI_PLAN.md): multiple windows, plugin-specific dialogs, and the
+desktop's widget-based property editors. Two entries that used to be listed here are scheduled now: the **menu-bar-driven
+workflow** is Phase 2.5 of UI_PLAN.md (bound to the commands whose handlers already exist; the rest are disabled
+placeholders naming their phase) and the **session file UI** is Phase 3 deliverable 6, on the shared session workflow of
+audit decision D28.
 
-Not previously listed anywhere, and worth an explicit decision:
+Previously unscheduled and now assigned by Phase 2.5 of UI_PLAN.md (kept here so this review's own list stays complete):
 
-* right-click context menu in the viewport (3.5) — currently a no-op;
-* undo/redo discoverability (shortcuts exist, no menu item/tooltip);
-* per-task progress display (3.4);
-* "About"/"Quit"/"Preferences" reachability on macOS (3.7).
+* right-click context menu in the viewport (3.5) — currently a no-op; Phase 2.5 ships the sub-items that exist today
+  (Show Grid, Constrain Rotation, View Type, Maximize) and leaves the rest as disabled placeholders for Phase 4/5;
+* undo/redo discoverability (shortcuts exist, no menu item/tooltip) — Phase 2.5, together with the menu bar;
+* per-task progress display (3.4) — Phase 2.5, as a new capability rather than restored classic behaviour;
+* "About"/"Quit"/"Preferences" reachability on macOS (3.7) — Phase 2.5, through the same menu bar.
 
 ---
 
