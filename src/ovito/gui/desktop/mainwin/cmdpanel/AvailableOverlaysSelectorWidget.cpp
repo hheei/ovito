@@ -57,7 +57,7 @@ void AvailableOverlaysSelectorWidget::showPopup()
 void AvailableOverlaysSelectorWidget::onGetMoreLayersFromPopup()
 {
     // Open the extensions gallery or website.
-    if(QAction* action = actionManager()->getAction(ACTION_SCRIPTING_EXTENSIONS_GALLERY_OVERLAYS))
+    if(QAction* action = actionManager()->findAction(ACTION_SCRIPTING_EXTENSIONS_GALLERY_OVERLAYS))
         action->trigger();
     else
         QDesktopServices::openUrl(QStringLiteral("https://www.ovito.org/extensions/"));

@@ -58,7 +58,7 @@ void UtilityCommandPage::onOpenUtility(int index)
         _propertiesPanel->close();
     }
     else if(index == _utilityListModel->getMoreExtensionsItemIndex()) {
-        if(QAction* action = actionManager()->getAction(ACTION_SCRIPTING_EXTENSIONS_GALLERY_UTILITIES))
+        if(QAction* action = actionManager()->findAction(ACTION_SCRIPTING_EXTENSIONS_GALLERY_UTILITIES))
             action->trigger();
         else
             QDesktopServices::openUrl(QStringLiteral("https://www.ovito.org/extensions/"));
