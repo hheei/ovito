@@ -923,6 +923,28 @@ Traps of this round:
    leaves the step runner waiting until the process timeout (`EXIT=124`) and prints no `VERIFICATION_DONE`, which looks
    like a crash of the feature under test. Check the step's exit path first.
 
+### 9.2.5 Testing the icons of the shared icon set
+
+`--qml-icon-check` verifies the icon path end to end: `IconTheme::image()` resolves the icons the shell and its commands
+name (both in the current and in the other icon theme), the QML singleton `Icons` reports the same theme name as the C++
+layer and builds URLs of the `ovito-icon` image provider, every QML `Image` of the shell whose source comes from that
+provider has reached `Image.Ready`, the four pane buttons show the maximize icon, and maximizing a viewport switches the
+button of that pane to the new `viewport_restore.svg` (the layout is put back afterwards).
+
+Traps of this round:
+
+1. **A new verification option that is not in the interactive-mode guard never runs.** The prototype keeps the window open
+   when no verification option is given, and it decides that from a hand-written list of options
+   (`Main.cpp`, "Interactive mode: without a verification option, keep the window open"). A new option that is missing
+   from that list makes the run hang until the timeout without printing anything, which looks like a broken feature rather
+   than a broken test. Add the option in both places.
+2. **Reading QML items without Qt Quick's private headers.** The check inspects the `Image` items of the shell through the
+   meta object (`child->inherits("QQuickImage")` plus `property("source")`/`property("status")`), because the private
+   header `QtQuick/private/qquickimage_p.h` needs `Qt6::QuickPrivate`, which this target does not link.
+3. **The icon theme is process-global.** `IconTheme::apply()` changes what every icon lookup returns, so a check that
+   switches the theme for its own purposes has to put the previous one back (it reads it from
+   `GuiSettings::instance().usingDarkTheme()`), or the rest of the run renders with the wrong icons.
+
 ### 9.5 The CI smoke test and its render loop
 
 The Qt Quick smoke test of the GitHub workflow (`.github/workflows/ci.yml`) runs with `QSG_RENDER_LOOP=basic` on the

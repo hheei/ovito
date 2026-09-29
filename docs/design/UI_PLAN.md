@@ -420,9 +420,17 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        path of the library rows is *not* exercised by the spike: inserting a viewport layer switches the viewport into
        render preview mode, which the Qt Quick viewport does not implement yet (Phase 5), and inserting a modifier needs a
        selected pipeline in the list model, which only a selection operation of the frontend establishes.
-  5. **Shared presentation assets (review item A9)**: publish the classic icon set
-     (`gui/base/resources/icons/ovito-dark|light`) and its tint rule for QML use, replacing the drawn glyphs the shell
-     uses today, so both frontends speak one visual language.
+  5. **Shared presentation assets (review item A9) — done**: the classic icon set
+     (`gui/base/resources/icons/ovito-dark|light`) is published for QML use and the drawn glyphs of the shell are gone, so
+     both frontends speak one visual language. `gui/base/app/IconTheme` owns the rule that answers which of the two themes
+     is current (it turned out that there is no tint step to share) and how an icon path is resolved, `GuiSettings` applies
+     it next to the color scheme, and the Qt Quick frontend publishes the icons through `QmlIcons` (`Icons.url(...)`, the
+     `ovito-icon` image provider); the maximize/restore button of a pane, the entries of the menu bar and the Import button
+     take their icons from it. The set gained `viewport_restore.svg` in both themes, because the classic frontend never
+     needed a way back from a maximized viewport. *Verified* by the new `--qml-icon-check` (both themes resolve the icons of
+     the shell and of its commands, the QML singleton reports the theme of the shared layer, every icon image is loaded, and
+     a maximized pane switches its button to the restore icon), in the release and the assert-enabled build, plus a classic
+     run whose toolbar still shows its icons after the theme wiring moved. Evidence: `docs/design/evidence/phase25_icons.png`.
   6. **Offscreen rendering service (review item A4)**: one core-facing service over the four `RenderThread` offscreen
      entry points (`createOffscreenTarget`, `renderOffscreenFrame`, `renderAOFrame`, `renderPickingFrame`), owning target
      creation, the `forPickingOnly`/AO flag, supersampling, readback and reuse, used by the classic viewport grab, the QML

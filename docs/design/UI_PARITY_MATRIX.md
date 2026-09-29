@@ -212,7 +212,7 @@ The scope of this area is defined by the audited editors, not by reflection over
 | Capability | Classic reference | Qt Quick | Phase | Acceptance case |
 |---|---|---|---|---|
 | Light and dark appearance following the OS | `OvitoStyle` plus `GuiApplication::usingDarkTheme()` | ✅ the shell's `Theme.qml` resolves the scheme through the shared `GuiSettings`, so both frontends follow one rule | 2.5 (done) | with the platform reporting a dark scheme the shell is dark and with a light one it is light; a platform that reports none counts as light in both frontends |
-| Same icon set as the classic frontend | `gui/base/resources/icons` (shared assets) | ▶ Phase 2.5 d5 (the shell currently draws its own glyphs for maximize/restore) | 2.5 | the shell's buttons use the shared icon resources; a capture shows the same glyphs as the classic toolbar |
+| Same icon set as the classic frontend | `gui/base/resources/icons` (shared assets) | ✅ the shell takes every icon from the shared set through `Icons` (`QmlIcons`): the maximize/restore button of a pane, the entries of its menu bar and the Import button, in the icon theme that matches the color scheme | 2.5 (done) | `--qml-icon-check`: the shell resolves the icons of the set and of its commands in both themes, the QML singleton reports the theme of the shared layer, every icon image of the shell is loaded, and the button of a pane switches to the restore icon when the pane is maximized |
 | Theme and font selection | `GeneralSettingsPage`, `FontSelectionDialog` | ▶ Phase 7 (settings dialog) | 7 | switch the theme and the font size; the shell follows |
 | Viewport mode cursors | `gui/base/resources/cursor` (shared) | ✅ through the shared modes | 1 (done) | each mode shows its cursor |
 

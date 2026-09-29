@@ -351,11 +351,13 @@ rules in QML.
 
 ### A9 — Icons and theme assets (P3, ~1 day)
 
-The classic frontend ships two icon themes (`gui/base/resources/icons/ovito-dark|light`, SVG, with a common
-`CommandIcon`-style tinting in the desktop widgets). The QML shell draws its own glyphs (the maximize button is made
-of `Rectangle`s). Sharing the SVG set and the tint rule keeps toolbar/menu/command-palette visuals identical across
-frontends instead of inventing a second icon language.
-
+**Status: implemented in Phase 2.5 (deliverable 5).** One correction to the premise above: the classic frontend has no
+tinting step. It ships two themed SVG sets (`ovito-dark`/`ovito-light`) and selects one by name through
+`QIcon::setThemeName()`. The rule that is now shared is therefore the theme selection plus the resolution of an icon path,
+which lives in `gui/base/app/IconTheme`; the desktop frontend's `QAction`s and the Qt Quick frontend's new `Icons` image
+provider both go through it. The theme decision moved from `GuiApplication` into `GuiSettings`, next to the color scheme it
+is derived from, and the shell's drawn glyph was replaced by the icons of the set — including a new
+`viewport_restore.svg`, because the classic set never needed a way back from a maximized viewport.
 ---
 
 ## 5. (C) Not implemented yet — the parity gap as of this review
