@@ -3,6 +3,7 @@
 
 #include <ovito/gui/desktop/GUI.h>
 #include <ovito/gui/desktop/mainwin/MainWindow.h>
+#include <ovito/gui/base/app/TaskProgressModel.h>
 #include <ovito/gui/desktop/widgets/general/ElidedTextLabel.h>
 #include "TaskDisplayWidget.h"
 
@@ -40,24 +41,17 @@ TaskDisplayWidget::TaskDisplayWidget(MainWindow* mainWindow) : _mainWindow(mainW
 ******************************************************************************/
 void TaskDisplayWidget::updateIndicator()
 {
-    QString activeText;
-    int activeValue;
-    int activeMaximum;
-
-    // Visit all in-progress tasks and pick the one that should be displayed in the status bar.
-    _mainWindow->ui().visitRunningTasks([&](const QString& text, int progressValue, int progressMaximum) {
-        if(!text.isEmpty() && activeText.isEmpty()) {
-            activeText = text;
-            activeValue = progressValue;
-            activeMaximum = progressMaximum;
-        }
-    });
+    // Which task the status bar shows and how far it is comes from the workbench's task progress model, which the
+    // Qt Quick frontend's status line reads as well; this widget only decides how to display it.
+    TaskProgressModel* model = _mainWindow->ui().taskProgressModel();
+    const QString activeText = model ? model->activeText() : QString();
 
     // Update display.
     _progressTextDisplay->setText(activeText);
     if(!activeText.isEmpty()) {
-        _progressBar->setRange(0, activeMaximum);
-        _progressBar->setValue(activeValue);
+        // A task that cannot report progress (maximum zero) is displayed as an indeterminate progress bar.
+        _progressBar->setRange(0, model->activeMaximum());
+        _progressBar->setValue(model->activeValue());
         show();
     }
     else {

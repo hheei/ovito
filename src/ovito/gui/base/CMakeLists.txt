@@ -6,6 +6,7 @@ OVITO_STANDARD_PLUGIN(GuiBase
     SOURCES
         app/GuiFrontendRegistry.cpp
         app/WorkbenchUI.cpp
+        app/TaskProgressModel.cpp
         actions/ActionManager.cpp
         actions/Command.cpp
         actions/ViewportModeAction.cpp
@@ -16,6 +17,7 @@ OVITO_STANDARD_PLUGIN(GuiBase
         mainwin/OverlayListModel.cpp
         mainwin/OverlayListItem.cpp
         mainwin/PipelineListModel.cpp
+        mainwin/RecentFilesList.cpp
         mainwin/PipelineListItem.cpp
         mainwin/UtilityObject.cpp
         mainwin/templates/ModifierTemplates.cpp

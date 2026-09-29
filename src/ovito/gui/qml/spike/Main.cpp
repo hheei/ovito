@@ -13,6 +13,7 @@
 
 #include <ovito/gui/qml/QmlFrontend.h>
 #include <ovito/gui/qml/mainwin/QmlMainWindowUI.h>
+#include <ovito/gui/base/app/TaskProgressModel.h>
 #include <ovito/gui/qml/viewport/QuickViewportItem.h>
 #include <ovito/gui/qml/viewport/QuickViewportWindow.h>
 #include <ovito/core/app/StandaloneApplication.h>
@@ -97,6 +98,26 @@ QList<QuickViewportItem*> viewportItems(QmlMainWindowUI* ui)
         collect(root);
     }
     return items;
+}
+
+/// Evaluates an expression in the QML context of the workbench root object, i.e. against the context properties the
+/// shell is built on (workbenchController, commandManager, taskProgress, ...). Returns an invalid QVariant and logs the
+/// error if the expression cannot be evaluated, so an unbound or misspelled property is visible in the log.
+QVariant evaluateInQml(QmlMainWindowUI* ui, const QString& expression)
+{
+    QQuickView* view = ui->view();
+    QQuickItem* rootObject = view ? view->rootObject() : nullptr;
+    if(!rootObject) {
+        reportVerificationFailure(QStringLiteral("the workbench has no QML scene"));
+        return {};
+    }
+    QQmlExpression evaluator(qmlContext(rootObject), rootObject, expression);
+    QVariant result = evaluator.evaluate();
+    if(evaluator.hasError()) {
+        reportVerificationFailure(QStringLiteral("the QML expression \"%1\" failed: %2").arg(expression, evaluator.error().toString()));
+        return {};
+    }
+    return result;
 }
 
 /// The outcome of probing the picking buffer at a set of positions.
@@ -535,6 +556,35 @@ const FileSource* firstFileSource(QmlMainWindowUI* ui)
     return pipeline ? dynamic_object_cast<FileSource>(pipeline->source()) : nullptr;
 }
 
+/// Compares the workbench's task progress model with the same data as the QML scene sees it. The status line of the
+/// shell is bound to the model, so a model that is not reachable from QML (or a broken binding) has to be caught here
+/// rather than by looking at a screenshot. Called while an operation runs and after it has finished.
+void reportTaskProgress(QmlMainWindowUI* ui, const QString& when)
+{
+    TaskProgressModel* model = ui->taskProgressModel();
+    if(!model) {
+        reportVerificationFailure(QStringLiteral("the workbench has no task progress model"));
+        return;
+    }
+
+    qInfo() << "TASK_TEST" << when << ":" << model->rowCount() << "task(s), busy =" << model->isBusy()
+            << ", displayed" << model->activeText() << model->activeValue() << "of" << model->activeMaximum();
+
+    // The QML side must see the same model. Both values are read from the model object the scene binds to.
+    const QVariant qmlBusy = evaluateInQml(ui, QStringLiteral("taskProgress.busy"));
+    const QVariant qmlCount = evaluateInQml(ui, QStringLiteral("taskProgress.count"));
+    const QVariant qmlText = evaluateInQml(ui, QStringLiteral("taskProgress.text"));
+    if(qmlBusy.toBool() != model->isBusy())
+        reportVerificationFailure(QStringLiteral("the QML scene sees a busy state of %1 while the task model reports %2")
+            .arg(qmlBusy.toBool()).arg(model->isBusy()));
+    if(qmlCount.toInt() != model->rowCount())
+        reportVerificationFailure(QStringLiteral("the QML scene sees %1 tasks while the task model has %2 rows")
+            .arg(qmlCount.toInt()).arg(model->rowCount()));
+    if(qmlText.toString() != model->activeText())
+        reportVerificationFailure(QStringLiteral("the QML scene displays the task \"%1\" while the model reports \"%2\"")
+            .arg(qmlText.toString(), model->activeText()));
+}
+
 /// Step 3 of the import check: imports a large file and cancels the operation as soon as it is running, verifying that
 /// the shell reports the cancellation and that the data set contains no partially loaded pipeline afterwards.
 void verifyCancelledImport(QmlMainWindowUI* ui, std::function<void()> continuation)
@@ -543,25 +593,36 @@ void verifyCancelledImport(QmlMainWindowUI* ui, std::function<void()> continuati
     const int objectsBefore = sceneObjectCount(ui);
 
     const QString poscarFile = QDir::tempPath() + QStringLiteral("/ovito-qml-import-test/large.poscar");
-    if(writePoscarFile(poscarFile, 80).isEmpty()) {
+    if(writePoscarFile(poscarFile, 140).isEmpty()) {
         continuation();
         return;
     }
 
-    // The import blocks the main thread while it loads the data, but it keeps processing events, so the cancellation is
-    // requested from a timer that fires while the import is running.
+    // The import blocks the main thread while it loads the data, but it keeps processing events, so a timer observes the
+    // running operation and requests its cancellation. The file is large enough for the workbench to start displaying
+    // the progress of the import (which happens 100 ms after a task starts) before the cancellation is requested.
+    auto observedProgress = std::make_shared<bool>(false);
+    QElapsedTimer elapsed;
+    elapsed.start();
     auto* timer = new QTimer(ui->view());
-    QObject::connect(timer, &QTimer::timeout, controller, [controller, timer]() {
-        if(controller->cancellable()) {
+    QObject::connect(timer, &QTimer::timeout, controller, [controller, timer, ui, elapsed, observedProgress]() {
+        // The operation reports its progress through a TaskProgress record, so the workbench's task model must have a
+        // row for it while it runs - that model is what the status line of the shell displays.
+        if(TaskProgressModel* model = ui->taskProgressModel()) {
+            if(model->isBusy()) {
+                if(!*observedProgress)
+                    reportTaskProgress(ui, QStringLiteral("while the import is running"));
+                *observedProgress = true;
+            }
+        }
+        if(controller->cancellable() && (elapsed.elapsed() >= 200 || *observedProgress)) {
             timer->stop();
             qInfo() << "IMPORT_TEST requesting the cancellation of the running import";
             controller->cancelCurrentOperation();
         }
     });
-    timer->start(20);
+    timer->start(10);
 
-    QElapsedTimer elapsed;
-    elapsed.start();
     controller->importFiles(QVariantList{ QUrl::fromLocalFile(poscarFile) });
     const qint64 duration = elapsed.elapsed();
     timer->stop();
@@ -569,6 +630,10 @@ void verifyCancelledImport(QmlMainWindowUI* ui, std::function<void()> continuati
 
     qInfo() << "IMPORT_TEST canceled import: took" << duration << "ms," << sceneObjectCount(ui) << "object(s) in the scene"
             << "(was" << objectsBefore << "before), status" << controller->statusMessage();
+    // The workbench starts displaying the progress of a task after 100 ms, so a file that is read faster than that is
+    // deliberately not reported - the model can only be expected to report this import when it lasted longer.
+    if(duration > 150 && !*observedProgress)
+        reportVerificationFailure(QStringLiteral("the task progress model did not report an import that took %1 ms").arg(duration));
     // The cancelled import must not leave its own pipeline behind. (A ResetScene import deletes the previous objects
     // before it creates the new pipeline, so they are gone by then - the same order of events the classic frontend's
     // import follows; what matters is that no pipeline with a data source that was never filled remains.)
@@ -576,7 +641,19 @@ void verifyCancelledImport(QmlMainWindowUI* ui, std::function<void()> continuati
         reportVerificationFailure(QStringLiteral("the canceled import left a partially loaded pipeline in the scene"));
     if(!controller->statusMessage().startsWith(QStringLiteral("Import cancelled")))
         reportVerificationFailure(QStringLiteral("the canceled import did not report the cancelled state (status: %1)").arg(controller->statusMessage()));
-    continuation();
+
+    // The workbench refreshes the model at most every 100 ms, so the row of the canceled import can still be there right
+    // after the import has returned. It has to disappear once the operation has wound down - a progress record that
+    // stayed behind would keep the status line busy forever.
+    pollUntil(ui, 50, 2000, [ui]() {
+        TaskProgressModel* model = ui->taskProgressModel();
+        return !model || !model->isBusy();
+    }, [ui, continuation = std::move(continuation)](bool idle) {
+        if(!idle)
+            reportVerificationFailure(QStringLiteral("the task progress model still reports the canceled import"));
+        reportTaskProgress(ui, QStringLiteral("after the cancelled import"));
+        continuation();
+    });
 }
 
 /// Step 2 of the import check: imports a file of an unsupported format, which must report an error and leave the scene
@@ -827,19 +904,12 @@ void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 
     // 2. The QML side of the workbench sees the same objects, and can read the state of a command. The expressions are
     //    evaluated by the QML engine, so the context property, the registered type and the properties are all covered.
-    const auto evaluateInQml = [view](const QString& expression) -> QVariant {
-        QQmlExpression evaluator(qmlContext(view->rootObject()), view->rootObject(), expression);
-        QVariant result = evaluator.evaluate();
-        if(evaluator.hasError())
-            qWarning() << "COMMAND_TEST QML error:" << evaluator.error().toString();
-        return result;
-    };
     Command* undoCommand = actionManager->findCommand(QStringLiteral("EditUndo"));
-    const QVariant qmlUndoText = evaluateInQml(QStringLiteral("workbench.undoCommand.text"));
+    const QVariant qmlUndoText = evaluateInQml(ui, QStringLiteral("workbench.undoCommand.text"));
     // The title of the Undo command carries the name of the operation it would revert, so only compare the prefix.
     if(!qmlUndoText.toString().startsWith(QStringLiteral("Undo")))
         reportVerificationFailure(QStringLiteral("command check: QML reads \"%1\" as the title of the Undo command").arg(qmlUndoText.toString()));
-    const QVariant qmlCommandCount = evaluateInQml(QStringLiteral("commandManager.commandList.length"));
+    const QVariant qmlCommandCount = evaluateInQml(ui, QStringLiteral("commandManager.commandList.length"));
     if(qmlCommandCount.toInt() != actionManager->commands().size())
         reportVerificationFailure(QStringLiteral("command check: QML sees %1 of %2 commands").arg(qmlCommandCount.toInt()).arg(actionManager->commands().size()));
     qInfo() << "COMMAND_TEST QML reads the Undo command as" << qmlUndoText.toString() << "and sees" << qmlCommandCount.toInt() << "commands";
@@ -847,10 +917,10 @@ void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     // 3. Invoking a command through the QML engine has to run the handler the two frontends share.
     ViewportConfiguration* viewportConfig = ui->datasetContainer().activeViewportConfig();
     if(viewportConfig) {
-        evaluateInQml(QStringLiteral("commandManager.triggerCommand('ViewportMaximize')"));
+        evaluateInQml(ui, QStringLiteral("commandManager.triggerCommand('ViewportMaximize')"));
         if(viewportConfig->maximizedViewport() != viewportConfig->activeViewport())
             reportVerificationFailure(QStringLiteral("command check: invoking a command through QML did not run its handler"));
-        evaluateInQml(QStringLiteral("commandManager.triggerCommand('ViewportMaximize')"));
+        evaluateInQml(ui, QStringLiteral("commandManager.triggerCommand('ViewportMaximize')"));
         if(viewportConfig->maximizedViewport())
             reportVerificationFailure(QStringLiteral("command check: invoking a command through QML did not restore the layout"));
         qInfo() << "COMMAND_TEST QML can invoke a command and run its handler";

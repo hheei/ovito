@@ -30,7 +30,7 @@
 #include <ovito/core/viewport/ViewportWindow.h>
 #include <ovito/core/utilities/concurrent/TaskProgress.h>
 #include "MainWindow.h"
-#include "RecentFilesList.h"
+#include <ovito/gui/base/mainwin/RecentFilesList.h>
 #include "ViewportsPanel.h"
 #include "TaskDisplayWidget.h"
 #include "cmdpanel/CommandPanel.h"

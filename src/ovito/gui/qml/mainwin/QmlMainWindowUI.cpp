@@ -5,6 +5,7 @@
 #include <ovito/gui/qml/mainwin/QmlViewportController.h>
 #include <ovito/gui/qml/mainwin/QmlViewportLayout.h>
 #include <ovito/gui/base/actions/ActionManager.h>
+#include <ovito/gui/base/app/TaskProgressModel.h>
 #include <ovito/gui/base/actions/Command.h>
 #include <ovito/core/app/Application.h>
 #include <ovito/core/dataset/DataSet.h>
@@ -102,6 +103,11 @@ void QmlMainWindowUI::initializeWindow()
     view->rootContext()->setContextProperty(QStringLiteral("viewportController"), _qmlController);
     view->rootContext()->setContextProperty(QStringLiteral("viewportLayout"), _viewportLayout);
 
+    // The running tasks and their progress are presented by the workbench's shared task progress model, which the
+    // status line of the shell binds to.
+    if(TaskProgressModel* model = taskProgressModel())
+        view->rootContext()->setContextProperty(QStringLiteral("taskProgress"), static_cast<QObject*>(model));
+
     // The commands of the user interface are the same objects the classic frontend presents as QActions, so both
     // frontends share their state, their shortcuts and their handlers.
     if(ActionManager* manager = actionManager())
@@ -186,8 +192,10 @@ bool QmlMainWindowUI::shutdown()
 ******************************************************************************/
 void QmlMainWindowUI::progressTasksChanged()
 {
+    // The progress itself is displayed from the workbench's task progress model; the controller only has to notice
+    // that an operation it started is over (which can change the empty state of the scene).
     if(_workbenchController)
-        _workbenchController->updateTaskState();
+        _workbenchController->updateOperationState();
 }
 
 /******************************************************************************

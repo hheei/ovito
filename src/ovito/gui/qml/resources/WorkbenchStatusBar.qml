@@ -6,7 +6,8 @@ import QtQuick.Controls
 import Ovito.Qml
 
 // The status line at the bottom of the workbench window: the message the frontend last reported, and the progress of
-// the operations that are running. The Cancel command cancels the operation the shell started on behalf of the user
+// the operations that are running. The progress of a task comes from the workbench's task progress model, which is the
+// same data the status bar of the classic frontend displays. The Cancel command cancels the operation the shell started on behalf of the user
 // (currently the import), which is the same operation the classic frontend's progress dialog offers to cancel.
 Item {
     id: statusBar
@@ -36,12 +37,12 @@ Item {
         anchors.rightMargin: theme.spacing
         anchors.verticalCenter: parent.verticalCenter
         spacing: theme.spacing
-        visible: statusBar.controller.busy
+        visible: taskProgress.busy
 
         Text {
             anchors.verticalCenter: parent.verticalCenter
             visible: text.length > 0
-            text: statusBar.controller.taskText
+            text: taskProgress.text
             color: theme.textSecondary
             font.pixelSize: theme.fontSize
             elide: Text.ElideRight
@@ -51,10 +52,10 @@ Item {
         ProgressBar {
             anchors.verticalCenter: parent.verticalCenter
             // An operation that does not know its extent shows an indeterminate bar.
-            indeterminate: statusBar.controller.taskMaximum <= 0
+            indeterminate: taskProgress.maximum <= 0
             from: 0
-            to: Math.max(1, statusBar.controller.taskMaximum)
-            value: statusBar.controller.taskProgress
+            to: Math.max(1, taskProgress.maximum)
+            value: taskProgress.value
             Accessible.name: qsTr("Import progress")
 
             palette.highlight: theme.accentPrimary

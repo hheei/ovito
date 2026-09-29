@@ -3,6 +3,7 @@
 
 #include <ovito/gui/base/GUIBase.h>
 #include <ovito/gui/base/actions/ActionManager.h>
+#include <ovito/gui/base/app/TaskProgressModel.h>
 #include <ovito/gui/base/viewport/ViewportInputManager.h>
 #include <ovito/core/app/undo/UndoStack.h>
 #include <ovito/core/dataset/DataSet.h>
@@ -32,6 +33,9 @@ void WorkbenchUI::initializeWorkbench(QObject* parent)
 
     // Create the actions, which is how the frontends and the plugins expose commands to the user.
     setActionManager(createActionManager(parent));
+
+    // Create the model that presents the running tasks of this workbench (the progress indicator of the status bar).
+    _taskProgressModel = new TaskProgressModel(*this, parent);
 
     // Keep track of the auto-key mode, which stores animation keys automatically while the user edits parameters.
     if(Command* autoKeyModeCommand = actionManager()->findCommand(ACTION_AUTO_KEY_MODE_TOGGLE)) {
@@ -216,6 +220,10 @@ void WorkbenchUI::notifyProgressTasksChanged()
     if(!_progressUpdateScheduled.exchange(true)) {
         QTimer::singleShot(100, QCoreApplication::instance(), [self = OORef<WorkbenchUI>(this)]() {
             self->_progressUpdateScheduled.store(false);
+            // The model is the data the frontends display; the frontend overrides of progressTasksChanged() only
+            // react to it.
+            if(self->_taskProgressModel)
+                self->_taskProgressModel->refresh();
             self->progressTasksChanged();
         });
     }

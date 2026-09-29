@@ -27,6 +27,7 @@ namespace Ovito
     class BaseViewportWindow;
     class ActionManager;
     class Command;
+    class TaskProgressModel;
     class ViewportInputManager;
     class ViewportInputMode;
     class ViewportGizmo;

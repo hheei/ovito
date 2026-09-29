@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
-#include <ovito/gui/desktop/GUI.h>
+#include <ovito/gui/base/GUIBase.h>
 #include <ovito/core/oo/OvitoClass.h>
 #include <ovito/core/dataset/io/FileImporter.h>
 #include "RecentFilesList.h"

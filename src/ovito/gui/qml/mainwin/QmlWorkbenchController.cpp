@@ -4,6 +4,7 @@
 #include <ovito/gui/qml/QmlFrontend.h>
 #include <ovito/gui/base/app/GuiTaskScope.h>
 #include <ovito/gui/base/app/WorkbenchUI.h>
+#include <ovito/gui/base/app/TaskProgressModel.h>
 #include <ovito/core/app/Application.h>
 #include <ovito/core/app/UserInterface.h>
 #include <ovito/core/dataset/DataSet.h>
@@ -93,39 +94,20 @@ void QmlWorkbenchController::setStatusMessage(const QString& message)
 /******************************************************************************
 * Updates the state derived from the registered task progress records.
 ******************************************************************************/
-void QmlWorkbenchController::updateTaskState()
+void QmlWorkbenchController::updateOperationState()
 {
-    bool busy = false;
-    QString taskText;
-    int progress = 0;
-    int maximum = 0;
-
-    // The status bar shows the first operation that describes itself. Operations that do not report any text are
-    // counted as running work but are not displayed, because there is nothing to display.
-    _ui.visitRunningTasks([&](const QString& text, int progressValue, int progressMaximum) {
-        busy = true;
-        if(taskText.isEmpty() && !text.isEmpty()) {
-            taskText = text;
-            progress = progressValue;
-            maximum = progressMaximum;
-        }
-    });
-
     const bool cancellable = _runningOperation && !_runningOperation->isFinished();
     if(!cancellable)
         _cancelling = false;
-    if(_busy != busy || _taskText != taskText || _taskProgress != progress || _taskMaximum != maximum
-            || _cancellable != cancellable) {
-        _busy = busy;
-        _taskText = taskText;
-        _taskProgress = progress;
-        _taskMaximum = maximum;
+    if(_cancellable != cancellable) {
         _cancellable = cancellable;
         Q_EMIT taskStateChanged();
     }
 
-    // A finished operation may have added or removed objects, so the empty state has to be re-evaluated with it.
-    if(!busy)
+    // A finished operation may have added or removed objects, so the empty state is re-evaluated with it. The
+    // running tasks themselves are presented by the workbench's task progress model.
+    TaskProgressModel* model = _ui.taskProgressModel();
+    if(!model || !model->isBusy())
         refreshDataSetState();
 }
 
@@ -136,7 +118,7 @@ void QmlWorkbenchController::setRunningOperation(TaskPtr task)
 {
     _runningOperation = std::move(task);
     _cancelling = false;
-    updateTaskState();
+    updateOperationState();
 }
 
 /******************************************************************************
@@ -191,7 +173,7 @@ void QmlWorkbenchController::importFiles(const QVariantList& urls)
         _ui.reportError(ex);
     }
     refreshDataSetState();
-    updateTaskState();
+    updateOperationState();
 }
 
 /******************************************************************************

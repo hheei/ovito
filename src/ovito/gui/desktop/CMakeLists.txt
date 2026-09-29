@@ -14,7 +14,6 @@ OVITO_STANDARD_PLUGIN(Gui
     SOURCES
         mainwin/MainWindow.cpp
         mainwin/MainWindowUI.cpp
-        mainwin/RecentFilesList.cpp
         mainwin/ViewportsPanel.cpp
         mainwin/TaskDisplayWidget.cpp
         mainwin/cmdpanel/CommandPanel.cpp

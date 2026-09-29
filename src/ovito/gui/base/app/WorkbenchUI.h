@@ -70,6 +70,11 @@ public:
     /// Lets the caller visit all registered tasks that are still in progress.
     void visitRunningTasks(const std::function<void(const QString& text, int progressValue, int progressMaximum)>& visitor);
 
+    /// Returns the model that lists the running tasks of this workbench and their progress, as the frontend displays
+    /// them.
+    /// \return The task progress model, or null before the workbench has been initialized (see initializeWorkbench()).
+    TaskProgressModel* taskProgressModel() const { return _taskProgressModel; }
+
     /// Displays an error message to the user.
     virtual void reportError(const Exception& ex, bool blocking = false) override;
 
@@ -90,6 +95,8 @@ protected:
     virtual void displayErrorMessage(const Exception& ex, bool blocking) = 0;
 
     /// Is called when the progress state of the registered tasks has changed, at most once every 100 milliseconds.
+    /// The task progress model of the workbench has been refreshed by the time an override of this method runs, so a
+    /// frontend only has to react to it if it presents the progress in a way of its own.
     virtual void progressTasksChanged() {}
 
     /// Shows the frontend's user interface that lets the user select the files to import.
@@ -127,6 +134,9 @@ private:
 
     /// Indicates whether the user has activated auto-key animation mode.
     bool _autoKeyModeOn = false;
+
+    /// Lists the running tasks of this workbench for the frontend. Owned by the object passed to initializeWorkbench().
+    TaskProgressModel* _taskProgressModel = nullptr;
 
     /// Head of doubly-linked list of all registered task progress records.
     TaskProgress* _progressTasksHead = nullptr;

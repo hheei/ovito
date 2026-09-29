@@ -38,16 +38,6 @@ class OVITO_GUIQML_EXPORT QmlWorkbenchController : public QObject
     /// Whether the current scene contains any data to display. False means the shell shows its empty state.
     Q_PROPERTY(bool hasData READ hasData NOTIFY hasDataChanged)
 
-    /// Whether an operation that reports its progress is running.
-    Q_PROPERTY(bool busy READ busy NOTIFY taskStateChanged)
-
-    /// The description of the running operation, or an empty string if it does not describe itself.
-    Q_PROPERTY(QString taskText READ taskText NOTIFY taskStateChanged)
-
-    /// The progress value of the running operation, and its maximum. A maximum of zero means the progress is unknown.
-    Q_PROPERTY(int taskProgress READ taskProgress NOTIFY taskStateChanged)
-    Q_PROPERTY(int taskMaximum READ taskMaximum NOTIFY taskStateChanged)
-
     /// Whether the operation that is currently running can be cancelled by the user.
     Q_PROPERTY(bool cancellable READ cancellable NOTIFY taskStateChanged)
 
@@ -81,18 +71,6 @@ public:
 
     /// Returns whether the current scene contains data to display.
     bool hasData() const { return _hasData; }
-
-    /// Returns whether an operation that reports its progress is running.
-    bool busy() const { return _busy; }
-
-    /// Returns the description of the running operation.
-    QString taskText() const { return _taskText; }
-
-    /// Returns the progress value of the running operation.
-    int taskProgress() const { return _taskProgress; }
-
-    /// Returns the progress maximum of the running operation, or zero if the progress is unknown.
-    int taskMaximum() const { return _taskMaximum; }
 
     /// Returns whether the running operation can be cancelled by the user.
     bool cancellable() const { return _cancellable; }
@@ -137,9 +115,10 @@ public:
     /// Called by the frontend when the data set changes or an operation that may have changed it has finished.
     void refreshDataSetState();
 
-    /// Updates the state derived from the registered task progress records. Called by the frontend's
-    /// progressTasksChanged() hook.
-    void updateTaskState();
+    /// Updates the state of the operation the shell started: whether it can still be cancelled and whether its
+    /// finishing changed the scene. Called by the frontend's progressTasksChanged() hook and when the operation is set.
+    /// The progress of the running tasks themselves is presented by the workbench's TaskProgressModel.
+    void updateOperationState();
 
     /// Makes the given task the operation that the Cancel command cancels, or clears it when passing a null task.
     /// Called by the frontend while it runs an operation on behalf of the user.
@@ -197,14 +176,10 @@ private:
     bool _hasData = false;
 
     /// Whether an operation that reports its progress is running.
-    bool _busy = false;
 
     /// The description of the running operation.
-    QString _taskText;
 
     /// The progress value and maximum of the running operation.
-    int _taskProgress = 0;
-    int _taskMaximum = 0;
 
     /// Whether the running operation can be cancelled by the user, and whether its cancellation was requested.
     bool _cancellable = false;

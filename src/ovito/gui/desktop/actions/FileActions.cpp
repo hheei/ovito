@@ -4,7 +4,7 @@
 #include <ovito/gui/desktop/GUI.h>
 #include <ovito/gui/desktop/actions/WidgetActionManager.h>
 #include <ovito/gui/desktop/mainwin/MainWindow.h>
-#include <ovito/gui/desktop/mainwin/RecentFilesList.h>
+#include <ovito/gui/base/mainwin/RecentFilesList.h>
 #include <ovito/gui/desktop/dialogs/ApplicationSettingsDialog.h>
 #include <ovito/gui/desktop/dialogs/ImportFileDialog.h>
 #include <ovito/gui/desktop/dialogs/ImportRemoteFileDialog.h>

@@ -6,7 +6,7 @@
 #include <ovito/gui/desktop/mainwin/MainWindow.h>
 #include <ovito/gui/desktop/mainwin/MainWindowUI.h>
 #include <ovito/gui/desktop/mainwin/OvitoStyle.h>
-#include <ovito/gui/desktop/mainwin/RecentFilesList.h>
+#include <ovito/gui/base/mainwin/RecentFilesList.h>
 #include <ovito/gui/desktop/dialogs/MessageDialog.h>
 #include <ovito/gui/base/actions/ActionManager.h>
 #include <ovito/gui/base/app/GuiFrontend.h>

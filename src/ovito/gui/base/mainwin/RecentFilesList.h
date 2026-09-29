@@ -4,7 +4,7 @@
 #pragma once
 
 
-#include <ovito/gui/desktop/GUI.h>
+#include <ovito/gui/base/GUIBase.h>
 
 namespace Ovito {
 
@@ -13,8 +13,11 @@ namespace Ovito {
  *
  * Persists to QSettings under the "file/mru" group. Emits listChanged() whenever
  * the list is modified so that all MainWindow instances can update their menus.
+ *
+ * The list holds data only (URLs, importer class and the format the user selected), not widgets, and it lives in the
+ * shared gui/base layer so that the Qt Quick frontend can offer the same recent files as the classic one.
  */
-class OVITO_GUI_EXPORT RecentFilesList : public QObject
+class OVITO_GUIBASE_EXPORT RecentFilesList : public QObject
 {
     Q_OBJECT
 
