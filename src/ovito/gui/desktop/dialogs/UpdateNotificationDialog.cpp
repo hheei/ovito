@@ -130,12 +130,11 @@ void UpdateNotificationService::applicationStarting()
     if(Application::runMode() != Application::AppMode)
         return;
 
-    // Get a pointer to the current main window. Note that the running user interface is not necessarily the
-    // classic desktop frontend; the Qt Quick frontend, for instance, has no MainWindow to attach this dialog to.
-    const MainWindowUI* ui = dynamic_object_cast<MainWindowUI>(this_task::ui().get());
-    if(ui == nullptr)
+    // The update notice is a desktop feature: it shows the news page in the command panel and opens a window of
+    // its own, neither of which another frontend has. MainWindow::activeMainWindow() returns null then.
+    _mainWindow = MainWindow::activeMainWindow();
+    if(_mainWindow == nullptr)
         return;
-    _mainWindow = ui->mainWindow();
 
     // Get operating system
 #if !defined(OVITO_BUILD_APPSTORE_VERSION)

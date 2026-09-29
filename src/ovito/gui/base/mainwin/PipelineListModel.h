@@ -309,11 +309,11 @@ private:
     /// Action that groups or splits selected visual elements.
     Command* _shareOrSplitVisualElementsCommand;
 
-    /// Action that exports the selected modifier(s) as text snippet.
-    Command* _exportModifierSnippetCommand;
+    /// The command that exports the selected modifier(s) as a text snippet, or null if the frontend does not offer it.
+    Command* _exportModifierSnippetCommand = nullptr;
 
-    /// Action that imports modifier(s) from a text snippet.
-    Command* _importModifierSnippetCommand;
+    /// The command that imports modifier(s) from a text snippet, or null if the frontend does not offer it.
+    Command* _importModifierSnippetCommand = nullptr;
 };
 
 }   // End of namespace

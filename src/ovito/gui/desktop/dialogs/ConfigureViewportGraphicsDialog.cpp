@@ -11,7 +11,7 @@
 #include <ovito/gui/desktop/properties/PropertiesPanel.h>
 #include <ovito/gui/desktop/app/GuiApplication.h>
 #include <ovito/gui/base/actions/ActionManager.h>
-#include <ovito/core/rendering/RenderThread.h>
+#include <ovito/core/rendering/GraphicsApi.h>
 #include "ConfigureViewportGraphicsDialog.h"
 
 namespace Ovito {
@@ -43,12 +43,12 @@ ConfigureViewportGraphicsDialog::ConfigureViewportGraphicsDialog(MainWindowUI& u
     adapterLayout->addWidget(_gpuAdapterCombo, 0, 0, 1, 2);
 
     // Enumerate available adapters (supported for Vulkan, D3D11, D3D12).
-    QRhi::Implementation graphicsApi = RenderThread::pickGraphicsApi();
-    QList<QRhiDriverInfo> adapters = RenderThread::enumerateAdapters(graphicsApi);
+    QRhi::Implementation graphicsApi = GraphicsApi::preferred();
+    QList<QRhiDriverInfo> adapters = GraphicsApi::enumerateAdapters(graphicsApi);
     QString noteText;
     if(!adapters.isEmpty()) {
         _gpuAdapterCombo->addItem(tr("(Default)"), QByteArray());
-        QByteArray currentSelection = RenderThread::selectedAdapterName();
+        QByteArray currentSelection = GraphicsApi::selectedAdapterName();
         int selectedIndex = 0;
         for(int i = 0; i < adapters.size(); i++) {
             const QRhiDriverInfo& info = adapters[i];
@@ -200,11 +200,11 @@ void ConfigureViewportGraphicsDialog::adapterSelectionChanged()
     if(!_gpuAdapterCombo)
         return;
     QByteArray newAdapterName = _gpuAdapterCombo->currentData().toByteArray();
-    if(newAdapterName == RenderThread::selectedAdapterName())
+    if(newAdapterName == GraphicsApi::selectedAdapterName())
         return;
 
     QSettings settings;
-    settings.setValue(QLatin1String(RenderThread::adapterSettingsKey()), newAdapterName);
+    settings.setValue(QLatin1String(GraphicsApi::adapterSettingsKey()), newAdapterName);
 
     // Recreate all viewport windows to restart all RenderThreads and reinitialize the QRhi instances.
     MainWindow::visitMainWindows([&](MainWindow* mainWindow) {

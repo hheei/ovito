@@ -57,7 +57,6 @@ void GuiApplication::registerCommandLineParameters(QCommandLineParser& parser)
     StandaloneApplication::registerCommandLineParameters(parser);
 
     parser.addOption(QCommandLineOption(QStringList{{"nogui"}}, tr("Run in console mode without displaying a graphical user interface.")));
-    parser.addOption(QCommandLineOption(QStringList{{"noviewports"}}, tr("Do not create any viewports (for debugging purposes only).")));
     parser.addOption(QCommandLineOption(QStringList{{"gui"}}, tr("Selects the user interface frontend to start, e.g. 'qml'."), tr("NAME"), QStringLiteral("qt-widgets")));
 }
 

@@ -36,10 +36,12 @@ class OVITO_GUIQML_EXPORT QmlWorkbenchController : public QObject
     /// the mouse leaves a viewport, exactly like the classic frontend does.
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
 
-    /// What the last import did with the file it was given: which format it was read as and how many source frames it
-    /// holds. Unlike the status message this survives user interaction and is only replaced by the next import, because
-    /// it is the only visible hint of a file that was read as an unexpected format (see defect F6).
-    Q_PROPERTY(QString importNotice READ importNotice NOTIFY importNoticeChanged)
+    /// The one thing the workbench wants the user to know beyond the current status: what the last import did with the
+    /// file it was given (which format it was read as, how many source frames it holds), or that the viewports cannot
+    /// be rendered at all. Unlike the status message this survives user interaction and is replaced only by the next
+    /// such report, because it is the only visible hint of a file that was read as an unexpected format (defect F6) or
+    /// of a platform plugin that provides no graphics device.
+    Q_PROPERTY(QString notice READ notice NOTIFY noticeChanged)
 
     /// Whether the current scene contains any data to display. False means the shell shows its empty state.
     Q_PROPERTY(bool hasData READ hasData NOTIFY hasDataChanged)
@@ -87,11 +89,11 @@ public:
     /// Replaces the message shown in the status line.
     void setStatusMessage(const QString& message);
 
-    /// Returns the report about the last import.
-    QString importNotice() const { return _importNotice; }
+    /// Returns the report the workbench keeps showing until the next one replaces it.
+    QString notice() const { return _notice; }
 
-    /// Replaces the report about the last import.
-    void setImportNotice(const QString& notice);
+    /// Replaces the report the workbench keeps showing until the next one replaces it.
+    void setNotice(const QString& notice);
 
     /// Returns whether the current scene contains data to display.
     bool hasData() const { return _hasData; }
@@ -175,7 +177,7 @@ Q_SIGNALS:
     void statusMessageChanged();
 
     /// Is emitted when the report about the last import has changed.
-    void importNoticeChanged();
+    void noticeChanged();
 
     /// Is emitted when the current scene became empty or gained its first object.
     void hasDataChanged();
@@ -218,7 +220,7 @@ private:
     QString _statusMessage;
 
     /// The report about the last import, shown in the status line while no other message is displayed.
-    QString _importNotice;
+    QString _notice;
 
     /// Whether the current scene contains data to display.
     bool _hasData = false;

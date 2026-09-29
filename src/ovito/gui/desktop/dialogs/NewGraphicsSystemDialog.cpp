@@ -4,7 +4,7 @@
 #include <ovito/gui/desktop/GUI.h>
 #include <ovito/gui/base/app/GuiSettings.h>
 #include <ovito/core/app/Application.h>
-#include <ovito/core/rendering/RenderThread.h>
+#include <ovito/core/rendering/GraphicsApi.h>
 #include <ovito/gui/desktop/mainwin/MainWindow.h>
 #include <ovito/gui/desktop/mainwin/ViewportsPanel.h>
 #include "NewGraphicsSystemDialog.h"
@@ -53,8 +53,8 @@ public:
         mainLayout->addSpacing(8);
 
         // Enumerate available adapters (supported for Vulkan, D3D11, D3D12).
-        QRhi::Implementation graphicsApi = RenderThread::pickGraphicsApi();
-        QList<QRhiDriverInfo> adapters = RenderThread::enumerateAdapters(graphicsApi);
+        QRhi::Implementation graphicsApi = GraphicsApi::preferred();
+        QList<QRhiDriverInfo> adapters = GraphicsApi::enumerateAdapters(graphicsApi);
 
         QHBoxLayout* adapterRowLayout = new QHBoxLayout();
         adapterRowLayout->addWidget(new QLabel(tr("Selected GPU adapter:"), this));
@@ -65,7 +65,7 @@ public:
         QString noteText;
         if(!adapters.isEmpty()) {
             _gpuAdapterCombo->addItem(tr("(Default)"), QByteArray());
-            QByteArray currentSelection = RenderThread::selectedAdapterName();
+            QByteArray currentSelection = GraphicsApi::selectedAdapterName();
             int selectedIndex = 0;
             for(int i = 0; i < adapters.size(); i++) {
                 const QRhiDriverInfo& info = adapters[i];
@@ -149,19 +149,19 @@ void NewGraphicsSystemService::applicationStarting()
     if(GuiSettings::instance().graphicsAdapterSetupDone())
         return;
 
-    // Get a pointer to the current main window. Note that the running user interface is not necessarily the
-    // classic desktop frontend; the Qt Quick frontend, for instance, has no MainWindow to attach this dialog to.
-    const MainWindowUI* ui = dynamic_object_cast<MainWindowUI>(this_task::ui().get());
-    if(ui == nullptr)
+    // A first-run adapter choice is a desktop feature: it needs a main window to attach the dialog to and to
+    // rebuild the viewport windows afterwards. When another frontend is running (the Qt Quick one has no main
+    // window, and console mode has no dialogs at all), there is nothing to configure.
+    MainWindow* mainWindow = MainWindow::activeMainWindow();
+    if(mainWindow == nullptr)
         return;
-    MainWindow* mainWindow = ui->mainWindow();
 
     // Show the first-run GPU adapter selection dialog modally.
     NewGraphicsSystemDialog dialog(mainWindow);
     if(dialog.exec() == QDialog::Accepted) {
         // Save the selected adapter and mark setup as confirmed.
         QSettings writeSettings;
-        writeSettings.setValue(QLatin1String(RenderThread::adapterSettingsKey()), dialog.selectedAdapterName());
+        writeSettings.setValue(QLatin1String(GraphicsApi::adapterSettingsKey()), dialog.selectedAdapterName());
         GuiSettings::instance().setGraphicsAdapterSetupDone(true);
 
         // Recreate all viewport windows so RenderThreads pick up the new adapter.

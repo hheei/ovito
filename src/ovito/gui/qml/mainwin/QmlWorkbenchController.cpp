@@ -94,11 +94,11 @@ void QmlWorkbenchController::setStatusMessage(const QString& message)
 /******************************************************************************
 * Replaces the report about the last import.
 ******************************************************************************/
-void QmlWorkbenchController::setImportNotice(const QString& notice)
+void QmlWorkbenchController::setNotice(const QString& notice)
 {
-    if(_importNotice != notice) {
-        _importNotice = notice;
-        Q_EMIT importNoticeChanged();
+    if(_notice != notice) {
+        _notice = notice;
+        Q_EMIT noticeChanged();
     }
 }
 

@@ -29,7 +29,7 @@ Item {
         anchors.right: taskArea.left
         anchors.rightMargin: theme.spacing
         text: statusBar.controller.statusMessage.length > 0 ? statusBar.controller.statusMessage
-            : (statusBar.controller.importNotice.length > 0 ? statusBar.controller.importNotice : qsTr("Ready"))
+            : (statusBar.controller.notice.length > 0 ? statusBar.controller.notice : qsTr("Ready"))
         color: theme.textSecondary
         font.pixelSize: theme.fontSize
         elide: Text.ElideRight

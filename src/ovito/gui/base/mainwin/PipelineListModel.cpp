@@ -72,8 +72,10 @@ QT_WARNING_POP
     _renamePipelineItemCommand = actionManager()->createCommand(ACTION_PIPELINE_RENAME_ITEM, tr("Rename..."), "edit_rename_pipeline_item", tr("Rename the selected pipeline entry."));
     _shareOrSplitVisualElementsCommand = actionManager()->createCommand(ACTION_PIPELINE_GROUP_VIS_ELEMENTS, tr("Replace With Shared Element"), nullptr, tr("Combine several visual elements into one."));
     connect(_shareOrSplitVisualElementsCommand, &Command::triggered, this, &PipelineListModel::shareOrSplitVisualElements);
-    _exportModifierSnippetCommand = actionManager()->getCommand(ACTION_MODIFIER_EXPORT_SNIPPET);
-    _importModifierSnippetCommand = actionManager()->getCommand(ACTION_MODIFIER_IMPORT_SNIPPET);
+    // The snippet commands belong to the frontend that offers the dialogs behind them; a frontend without them (the
+    // Qt Quick one, whose snippet UI is still to come) simply has no entries to enable here.
+    _exportModifierSnippetCommand = actionManager()->findCommand(ACTION_MODIFIER_EXPORT_SNIPPET);
+    _importModifierSnippetCommand = actionManager()->findCommand(ACTION_MODIFIER_IMPORT_SNIPPET);
 
     updateActions();
 }
@@ -904,11 +906,14 @@ void PipelineListModel::updateActions()
         return dynamic_object_cast<PipelineNode>(obj) || dynamic_object_cast<ModifierGroup>(obj);
     }));
 
-    _exportModifierSnippetCommand->setEnabled(!objects.empty() && std::ranges::all_of(objects, [](RefTarget* obj) {
-        return dynamic_object_cast<ModificationNode>(obj) || dynamic_object_cast<ModifierGroup>(obj);
-    }));
+    if(_exportModifierSnippetCommand) {
+        _exportModifierSnippetCommand->setEnabled(!objects.empty() && std::ranges::all_of(objects, [](RefTarget* obj) {
+            return dynamic_object_cast<ModificationNode>(obj) || dynamic_object_cast<ModifierGroup>(obj);
+        }));
+    }
 
-    _importModifierSnippetCommand->setEnabled(selectedPipeline() != nullptr);
+    if(_importModifierSnippetCommand)
+        _importModifierSnippetCommand->setEnabled(selectedPipeline() != nullptr);
 
     _renamePipelineItemCommand->setEnabled(ModificationNode::OOClass().isMember(currentObject) || ModifierGroup::OOClass().isMember(currentObject) || DataVis::OOClass().isMember(currentObject));
 

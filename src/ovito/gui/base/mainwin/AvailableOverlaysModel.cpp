@@ -13,51 +13,38 @@
 namespace Ovito {
 
 /******************************************************************************
-* Constructs an action for a built-in viewport layer class.
+* Constructor.
+******************************************************************************/
+OverlayAction::OverlayAction(const QString& id, const QString& text, const QString& iconPath, const QString& statusTip)
+    : Command(id, text, iconPath, statusTip)
+{
+}
+
+/******************************************************************************
+* Constructs the command for a built-in viewport layer class.
 ******************************************************************************/
 OverlayAction* OverlayAction::createForClass(const ViewportOverlay::OOMetaClass* clazz)
 {
-    OverlayAction* action = new OverlayAction();
+    OverlayAction* action = new OverlayAction(QStringLiteral("InsertViewportLayer.%1.%2").arg(clazz->pluginId(), clazz->name()),
+        clazz->displayName(), QStringLiteral("overlay_action_icon"), clazz->descriptionString());
     action->_layerClass = clazz;
     action->_category = clazz->viewportOverlayCategory();
 
-    // Generate a unique identifier for the action:
-    action->setObjectName(QStringLiteral("InsertViewportLayer.%1.%2").arg(clazz->pluginId(), clazz->name()));
-
-    // Set the action's UI display name.
-    action->setText(clazz->displayName());
-
-    // Give the overlay a status bar text.
-    QString description = clazz->descriptionString();
-    action->setStatusTip(!description.isEmpty() ? std::move(description) : tr("Insert this viewport layer."));
-
-    // Give the action an icon.
-    static QIcon icon = QIcon::fromTheme("overlay_action_icon");
-    action->setIcon(icon);
+    // Layers without a description fall back to a generic status bar text.
+    if(action->statusTip().isEmpty())
+        action->setStatusTip(tr("Insert this viewport layer."));
 
     return action;
 }
 
 /******************************************************************************
-* Constructs an action for a viewport layer template.
+* Constructs the command for a viewport layer template.
 ******************************************************************************/
 OverlayAction* OverlayAction::createForTemplate(const QString& templateName)
 {
-    OverlayAction* action = new OverlayAction();
+    OverlayAction* action = new OverlayAction(QStringLiteral("InsertViewportLayerTemplate.%1").arg(templateName),
+        templateName, QStringLiteral("overlay_action_icon"), tr("Insert this viewport layer template."));
     action->_templateName = templateName;
-
-    // Generate a unique identifier for the action:
-    action->setObjectName(QStringLiteral("InsertViewportLayerTemplate.%1").arg(templateName));
-
-    // Set the action's UI display name.
-    action->setText(templateName);
-
-    // Give the modifier a status bar text.
-    action->setStatusTip(tr("Insert this viewport layer template."));
-
-    // Give the action an icon.
-    static QIcon icon = QIcon::fromTheme("overlay_action_icon");
-    action->setIcon(icon);
 
     return action;
 }
@@ -77,62 +64,52 @@ AvailableOverlaysModel::AvailableOverlaysModel(QObject* parent, UserInterface& u
         if(clazz->viewportOverlayCategory() == QStringLiteral("-"))
             continue;
 
-        // Create action for the viewport layer class.
+        // Create the command for the viewport layer class.
         OverlayAction* action = OverlayAction::createForClass(clazz);
 
-        // Register it with the global ActionManager.
-        actionManager()->addAction(action);
+        // Register it with the global ActionManager, which creates its QAction view.
+        actionManager()->addCommand(action);
         OVITO_ASSERT(action->parent() == actionManager());
 
-        // Handle the insertion action.
-        connect(action, &QAction::triggered, this, &AvailableOverlaysModel::insertViewportLayer);
+        // Handle the insertion command.
+        connect(action, &Command::triggered, this, &AvailableOverlaysModel::insertViewportLayer);
 
-        // Sort action into categories.
+        // Sort the command into categories.
         const QString& category = !action->category().isEmpty() ? action->category() : tr("Standard layers");
         auto categoryIter = std::ranges::find(_categoryNames, category);
         int categoryIndex = std::distance(_categoryNames.begin(), categoryIter);
         if(categoryIter == _categoryNames.end()) {
             // New category.
             _categoryNames.push_back(category);
-            _actionsPerCategory.emplace_back();
+            _commandsPerCategory.emplace_back();
         }
-        _actionsPerCategory[categoryIndex].push_back(action);
+        _commandsPerCategory[categoryIndex].push_back(action);
     }
 
-    // Sort actions by name within each category.
-    for(std::vector<QAction*>& categoryActions : _actionsPerCategory) {
-        std::sort(categoryActions.begin(), categoryActions.end(), [](QAction* a, QAction* b) { return QString::localeAwareCompare(a->text(), b->text()) < 0; });
+    // Sort commands by name within each category.
+    for(std::vector<Command*>& categoryCommands : _commandsPerCategory) {
+        std::sort(categoryCommands.begin(), categoryCommands.end(), [](Command* a, Command* b) { return QString::localeAwareCompare(a->text(), b->text()) < 0; });
     }
 
-    // Create category for viewport layer templates.
+    // Create the category for the saved viewport layer templates, which holds the commands for the templates themselves
+    // and the command that opens the dialog for managing them.
     _categoryNames.push_back(tr("Layer templates"));
-    _actionsPerCategory.emplace_back();
+    _commandsPerCategory.emplace_back();
+    _manageTemplatesCommand = actionManager()->findCommand(ACTION_VIEWPORT_MANAGE_OVERLAY_TEMPLATES);
     for(const QString& templateName : OverlayTemplates::get()->templateList()) {
-        // Create action for the template.
+        // Create the command for the template.
         OverlayAction* action = OverlayAction::createForTemplate(templateName);
-        _actionsPerCategory.back().push_back(action);
+        _commandsPerCategory.back().push_back(action);
 
-        // Register it with the global ActionManager.
-        actionManager()->addAction(action);
+        // Register it with the global ActionManager, which creates its QAction view.
+        actionManager()->addCommand(action);
         OVITO_ASSERT(action->parent() == actionManager());
 
-        // Handle the action.
-        connect(action, &QAction::triggered, this, &AvailableOverlaysModel::insertViewportLayer);
+        // Handle the command.
+        connect(action, &Command::triggered, this, &AvailableOverlaysModel::insertViewportLayer);
     }
-
-    // Create "Manage templates..." action for later templates, which wraps the global one.
-    // This is done to override the global action's text.
-    QAction* manageTemplatesAction = actionManager()->getAction(ACTION_VIEWPORT_MANAGE_OVERLAY_TEMPLATES);
-    _manageTemplatesAction = new QAction(this);
-    _manageTemplatesAction->setText(tr("Manage templates..."));
-    _manageTemplatesAction->setStatusTip(manageTemplatesAction->statusTip());
-    _manageTemplatesAction->setIcon(manageTemplatesAction->icon());
-    // Give this action an italic font to visually distinguish it.
-    QFont font = manageTemplatesAction->font();
-    font.setItalic(true);
-    _manageTemplatesAction->setFont(font);
-    connect(_manageTemplatesAction, &QAction::triggered, manageTemplatesAction, &QAction::trigger);
-    _actionsPerCategory.back().push_back(_manageTemplatesAction);
+    if(_manageTemplatesCommand)
+        _commandsPerCategory.back().push_back(_manageTemplatesCommand);
 
     // Listen for changes to the underlying modifier template list.
     connect(OverlayTemplates::get(), &QAbstractItemModel::rowsInserted, this, &AvailableOverlaysModel::refreshTemplates);
@@ -160,8 +137,8 @@ QModelIndex AvailableOverlaysModel::index(int row, int column, const QModelIndex
     else if(parent.internalId() == quintptr(-1)) {
         // Child level: overlays within a category
         int categoryIndex = parent.row();
-        if(categoryIndex >= 0 && categoryIndex < (int)_actionsPerCategory.size()) {
-            if(row >= 0 && row < (int)_actionsPerCategory[categoryIndex].size())
+        if(categoryIndex >= 0 && categoryIndex < (int)_commandsPerCategory.size()) {
+            if(row >= 0 && row < (int)_commandsPerCategory[categoryIndex].size())
                 return createIndex(row, 0, quintptr(categoryIndex));
         }
     }
@@ -200,8 +177,8 @@ int AvailableOverlaysModel::rowCount(const QModelIndex& parent) const
     else if(parent.internalId() == quintptr(-1)) {
         // Category level: number of overlays in this category
         int categoryIndex = parent.row();
-        if(categoryIndex >= 0 && categoryIndex < (int)_actionsPerCategory.size())
-            return (int)_actionsPerCategory[categoryIndex].size();
+        if(categoryIndex >= 0 && categoryIndex < (int)_commandsPerCategory.size())
+            return (int)_commandsPerCategory[categoryIndex].size();
     }
     // Overlays don't have children.
     return 0;
@@ -236,16 +213,18 @@ QVariant AvailableOverlaysModel::data(const QModelIndex& index, int role) const
         // Overlay item.
         int categoryIndex = (int)index.internalId();
         int overlayIndex = index.row();
-        if(categoryIndex < 0 || categoryIndex >= (int)_actionsPerCategory.size())
+        if(categoryIndex < 0 || categoryIndex >= (int)_commandsPerCategory.size())
             return {};
-        if(overlayIndex < 0 || overlayIndex >= (int)_actionsPerCategory[categoryIndex].size())
+        if(overlayIndex < 0 || overlayIndex >= (int)_commandsPerCategory[categoryIndex].size())
             return {};
 
-        QAction* action = _actionsPerCategory[categoryIndex][overlayIndex];
+        Command* command = _commandsPerCategory[categoryIndex][overlayIndex];
         if(role == Qt::DisplayRole)
-            return action->text();
-        else if(role == Qt::UserRole)
-            return QVariant::fromValue(static_cast<QObject*>(action));
+            return command->text();
+        else if(role == ActionRole)
+            return QVariant::fromValue(static_cast<QObject*>(actionManager()->actionView(command)));
+        else if(role == CommandRole)
+            return QVariant::fromValue(static_cast<QObject*>(command));
     }
     return {};
 }
@@ -264,9 +243,8 @@ Qt::ItemFlags AvailableOverlaysModel::flags(const QModelIndex& index) const
     }
     else {
         // Overlay item.
-        QAction* action = actionFromIndex(index);
-        if(action)
-            return action->isEnabled() ? (Qt::ItemIsEnabled | Qt::ItemIsSelectable) : Qt::NoItemFlags;
+        if(Command* command = commandFromIndex(index))
+            return command->isEnabled() ? (Qt::ItemIsEnabled | Qt::ItemIsSelectable) : Qt::NoItemFlags;
     }
     return Qt::NoItemFlags;
 }
@@ -274,26 +252,26 @@ Qt::ItemFlags AvailableOverlaysModel::flags(const QModelIndex& index) const
 /******************************************************************************
 * Returns the action for an overlay at a given category and row.
 ******************************************************************************/
-QAction* AvailableOverlaysModel::actionAt(int categoryIndex, int overlayIndex) const
+Command* AvailableOverlaysModel::commandAt(int categoryIndex, int overlayIndex) const
 {
-    if(categoryIndex >= 0 && categoryIndex < (int)_actionsPerCategory.size()) {
-        if(overlayIndex >= 0 && overlayIndex < (int)_actionsPerCategory[categoryIndex].size())
-            return _actionsPerCategory[categoryIndex][overlayIndex];
+    if(categoryIndex >= 0 && categoryIndex < (int)_commandsPerCategory.size()) {
+        if(overlayIndex >= 0 && overlayIndex < (int)_commandsPerCategory[categoryIndex].size())
+            return _commandsPerCategory[categoryIndex][overlayIndex];
     }
     return nullptr;
 }
 
 /******************************************************************************
-* Returns the action for an overlay from a model index.
+* Returns the command for an overlay from a model index.
 ******************************************************************************/
-QAction* AvailableOverlaysModel::actionFromIndex(const QModelIndex& index) const
+Command* AvailableOverlaysModel::commandFromIndex(const QModelIndex& index) const
 {
     if(!index.isValid() || index.internalId() == quintptr(-1))
         return nullptr;
 
     int categoryIndex = (int)index.internalId();
     int overlayIndex = index.row();
-    return actionAt(categoryIndex, overlayIndex);
+    return commandAt(categoryIndex, overlayIndex);
 }
 
 /******************************************************************************
@@ -301,35 +279,34 @@ QAction* AvailableOverlaysModel::actionFromIndex(const QModelIndex& index) const
 ******************************************************************************/
 void AvailableOverlaysModel::refreshTemplates()
 {
-    std::vector<QAction*>& templateActions = _actionsPerCategory[templatesCategory()];
+    std::vector<Command*>& templateCommands = _commandsPerCategory[templatesCategory()];
 
-    // Discard old list of actions.
-    if(!templateActions.empty()) {
-        for(QAction* action : templateActions) {
-            if(OverlayAction* overlayAction = qobject_cast<OverlayAction*>(action)) {
-                actionManager()->deleteAction(overlayAction);
-            }
-        }
-        templateActions.clear();
+    // Discard the old commands of the templates. The command that manages the templates is not one of them; it belongs
+    // to the frontend and outlives this list.
+    for(Command* command : templateCommands) {
+        if(qobject_cast<OverlayAction*>(command))
+            actionManager()->deleteCommand(command);
     }
+    templateCommands.clear();
 
-    // Create new actions for the templates.
+    // Create new commands for the templates.
     int count = OverlayTemplates::get()->templateList().size();
     if(count != 0) {
         for(const QString& templateName : OverlayTemplates::get()->templateList()) {
-            // Create action for the template.
+            // Create the command for the template.
             OverlayAction* action = OverlayAction::createForTemplate(templateName);
-            templateActions.push_back(action);
+            templateCommands.push_back(action);
 
-            // Register it with the ActionManager.
-            actionManager()->addAction(action);
+            // Register it with the ActionManager, which creates its QAction view.
+            actionManager()->addCommand(action);
             OVITO_ASSERT(action->parent() == actionManager());
 
-            // Handle the action.
-            connect(action, &QAction::triggered, this, &AvailableOverlaysModel::insertViewportLayer);
+            // Handle the command.
+            connect(action, &Command::triggered, this, &AvailableOverlaysModel::insertViewportLayer);
         }
     }
-    templateActions.push_back(_manageTemplatesAction);
+    if(_manageTemplatesCommand)
+        templateCommands.push_back(_manageTemplatesCommand);
 
     // Notify views that the model has been reset.
     beginResetModel();
@@ -389,7 +366,8 @@ void AvailableOverlaysModel::insertViewportLayer()
         vp->setRenderPreviewMode(true);
 
         // Show the overlays tab of the command panel.
-        actionManager()->getAction(ACTION_COMMAND_PANEL_OVERLAYS)->trigger();
+        if(Command* overlaysCommand = actionManager()->findCommand(ACTION_COMMAND_PANEL_OVERLAYS))
+            overlaysCommand->trigger();
     });
 }
 
@@ -408,23 +386,23 @@ void AvailableOverlaysModel::extensionClassAdded(OvitoClassPtr cls)
     if(clazz->viewportOverlayCategory() == QStringLiteral("-"))
         return;
 
-    // Create action for the viewport layer class.
+    // Create the command for the viewport layer class.
     OverlayAction* action = OverlayAction::createForClass(clazz);
 
-    // Register it with the global ActionManager.
-    actionManager()->addAction(action);
+    // Register it with the global ActionManager, which creates its QAction view.
+    actionManager()->addCommand(action);
 
-    // Handle the insertion action.
-    connect(action, &QAction::triggered, this, &AvailableOverlaysModel::insertViewportLayer);
+    // Handle the insertion command.
+    connect(action, &Command::triggered, this, &AvailableOverlaysModel::insertViewportLayer);
 
-    // Insert action into the right category. Or create a new category if necessary.
+    // Insert the command into the right category. Or create a new category if necessary.
     auto categoryIter = std::ranges::find(_categoryNames, action->category());
     int categoryIndex = std::distance(_categoryNames.begin(), categoryIter);
     if(categoryIter == _categoryNames.end()) {
         _categoryNames.push_back(action->category());
-        _actionsPerCategory.emplace_back();
+        _commandsPerCategory.emplace_back();
     }
-    _actionsPerCategory[categoryIndex].push_back(action);
+    _commandsPerCategory[categoryIndex].push_back(action);
 
     // Notify views that the model has been reset.
     beginResetModel();

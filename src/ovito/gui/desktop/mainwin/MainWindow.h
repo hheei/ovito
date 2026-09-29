@@ -95,6 +95,11 @@ public:
     /// This method will prompt the user the first time it is called (for each ovito version). Returns true on non macOS.
     bool checkAccessibilityAccess(QWidget* parent = nullptr) const;
 
+    /// Returns the main window of the classic desktop frontend the current task belongs to, or null if the
+    /// running frontend has no main window (the Qt Quick frontend, or a console run). Services that exist to
+    /// drive the desktop workbench ask for this instead of downcasting the UserInterface themselves.
+    static MainWindow* activeMainWindow();
+
     /// Invokes a visitor function for every MainWindow instance of the application.
     template<typename Visitor>
     static void visitMainWindows(Visitor&& visitor) {

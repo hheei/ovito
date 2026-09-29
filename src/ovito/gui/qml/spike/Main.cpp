@@ -16,6 +16,10 @@
 #include <ovito/gui/base/app/TaskProgressModel.h>
 #include <ovito/gui/base/app/GuiSettings.h>
 #include <ovito/gui/base/mainwin/RecentFilesList.h>
+#include <ovito/gui/base/mainwin/PipelineListModel.h>
+#include <ovito/gui/base/mainwin/OverlayListModel.h>
+#include <ovito/gui/base/mainwin/AvailableModifiersModel.h>
+#include <ovito/gui/base/mainwin/AvailableOverlaysModel.h>
 #include <ovito/gui/qml/viewport/QuickViewportItem.h>
 #include <ovito/gui/qml/viewport/QmlViewportMenu.h>
 #include <ovito/gui/qml/viewport/QuickViewportWindow.h>
@@ -1035,9 +1039,9 @@ void verifyImportNotice(QmlMainWindowUI* ui, std::function<void()> continuation)
     }
 
     controller->importFiles({QUrl::fromLocalFile(path)});
-    pollUntil(ui, 100, 10000, [controller]() { return controller->importNotice().contains(QStringLiteral("source frame")); },
+    pollUntil(ui, 100, 10000, [controller]() { return controller->notice().contains(QStringLiteral("source frame")); },
         [ui, controller, continuation](bool reported) {
-            const QString message = controller->importNotice();
+            const QString message = controller->notice();
             const FileSource* fileSource = firstFileSource(ui);
             const QString formatUsed = fileSource && fileSource->importer() ? fileSource->importer()->objectTitle() : QString();
             qInfo() << "PARITY_TEST the import notice reads:" << message
@@ -1052,6 +1056,139 @@ void verifyImportNotice(QmlMainWindowUI* ui, std::function<void()> continuation)
                 qInfo() << "PARITY_TEST the notice is the only visible outcome of that import: the scene holds no object";
             continuation();
         });
+}
+
+/******************************************************************************
+* Verifies the modifier and viewport layer libraries, whose entries are Commands of the shared command layer.
+*
+* The entries used to be plain QActions that were registered as such; they are now commands registered with the
+* ActionManager, which gives every frontend access to them and keeps the QAction as the view of the widgets frontend.
+* This check builds both library models, walks their rows and verifies that each row offers a registered command and
+* the QAction that presents it.
+******************************************************************************/
+void runLibraryTest(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    // Creating the models instantiates OVITO objects, which requires a task context when this runs from a Qt callback.
+    GuiTaskScope taskScope(*ui);
+
+    auto* pipelineListModel = new PipelineListModel(*ui, ui->view());
+    auto* modifiersModel = new AvailableModifiersModel(ui->view(), *ui, pipelineListModel);
+    auto* overlayListModel = new OverlayListModel(ui->view(), *ui);
+    auto* overlaysModel = new AvailableOverlaysModel(ui->view(), *ui, overlayListModel);
+
+    int entries = 0;
+    int categories = 0;
+    for(AvailableModifiersModel* model : { modifiersModel }) {
+        for(int category = 0; category < model->rowCount(); category++) {
+            categories++;
+            const QModelIndex categoryIndex = model->index(category, 0);
+            for(int row = 0; row < model->rowCount(categoryIndex); row++) {
+                const QModelIndex index = model->index(row, 0, categoryIndex);
+                entries++;
+                Command* command = model->data(index, AvailableModifiersModel::CommandRole).value<Command*>();
+                if(command == nullptr) {
+                    reportVerificationFailure(QStringLiteral("the modifier library row %1/%2 has no command").arg(category).arg(row));
+                    continue;
+                }
+                if(command->id().isEmpty() || command->text().isEmpty())
+                    reportVerificationFailure(QStringLiteral("the modifier library command of row %1/%2 is incomplete").arg(category).arg(row));
+                if(ui->actionManager()->findCommand(command->id()) != command)
+                    reportVerificationFailure(QStringLiteral("the modifier library command \"%1\" is not registered with the action manager").arg(command->id()));
+                QAction* actionView = model->data(index, AvailableModifiersModel::ActionRole).value<QAction*>();
+                if(actionView == nullptr || actionView != ui->actionManager()->actionView(command))
+                    reportVerificationFailure(QStringLiteral("the modifier library row \"%1\" does not present the QAction view of its command").arg(command->id()));
+            }
+        }
+    }
+    qInfo() << "LIBRARY_TEST modifier library:" << categories << "categories," << entries << "commands";
+
+    int overlayEntries = 0;
+    int overlayCategories = 0;
+    // The viewport layer library enumerates the layer classes of the plugins that are loaded in this run.
+    for(int category = 0; category < overlaysModel->rowCount(); category++) {
+        overlayCategories++;
+        const QModelIndex categoryIndex = overlaysModel->index(category, 0);
+        for(int row = 0; row < overlaysModel->rowCount(categoryIndex); row++) {
+            const QModelIndex index = overlaysModel->index(row, 0, categoryIndex);
+            overlayEntries++;
+            Command* command = overlaysModel->data(index, AvailableOverlaysModel::CommandRole).value<Command*>();
+            if(command == nullptr || command->id().isEmpty())
+                reportVerificationFailure(QStringLiteral("the viewport layer library row %1/%2 has no command").arg(category).arg(row));
+            else if(ui->actionManager()->findCommand(command->id()) != command)
+                reportVerificationFailure(QStringLiteral("the viewport layer command \"%1\" is not registered with the action manager").arg(command->id()));
+        }
+    }
+    qInfo() << "LIBRARY_TEST viewport layer library:" << overlayCategories << "categories," << overlayEntries << "commands";
+
+    if(entries == 0)
+        reportVerificationFailure(QStringLiteral("the modifier library is empty, so nothing was verified"));
+
+    // The flags of a row follow the enabled state of its command, which is what the views of the libraries present.
+    if(Command* first = modifiersModel->commandAt(0, 0)) {
+        const QModelIndex firstIndex = modifiersModel->index(0, 0, modifiersModel->index(0, 0));
+        const bool enabled = modifiersModel->flags(firstIndex).testFlag(Qt::ItemIsEnabled);
+        if(enabled != first->isEnabled())
+            reportVerificationFailure(QStringLiteral("the row flags of \"%1\" do not follow the state of its command").arg(first->id()));
+    }
+
+    // The insert commands of both libraries run inside performTransaction and are reached through Command::triggered, as
+    // the classic frontend does when the user picks an entry. That path is not exercised here: inserting a viewport
+    // layer switches the viewport into render preview mode, which the Qt Quick viewport does not implement yet (it is
+    // an open item of Phase 5), and inserting a modifier needs a selected pipeline in the pipeline list model, which
+    // only a selection operation of the frontend establishes.
+
+    // Note: the library models are parented to the window and their commands stay registered with the action manager,
+    // exactly as the frontends use them; unregistering them again would mean reimplementing the tool that owns them.
+    continuation();
+}
+
+/******************************************************************************
+* Verifies that the frontend notices when its platform plugin provides no graphics device.
+*
+* Which device is available depends on the platform plugin the run was started with, so this check prescribes no
+* outcome. It prescribes that the frontend's answer matches the scene graph of the window, and that the error path
+* tells the user which platform plugin is at fault. A run with QT_QPA_PLATFORM=offscreen takes that path: Qt's
+* offscreen plugin provides no QRhi, so the viewports of such a run stay empty.
+******************************************************************************/
+void runDeviceTest(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    pollUntil(ui, 100, 10000, [ui]() { return ui->hasGraphicsDevice().has_value(); },
+        [ui, continuation = std::move(continuation)](bool answered) {
+
+        QQuickWindow* window = ui->view();
+        if(!answered || !window) {
+            reportVerificationFailure(QStringLiteral("the frontend did not report whether it has a graphics device"));
+            continuation();
+            return;
+        }
+
+        const bool available = (window->rhi() != nullptr);
+        const bool reportedAvailable = *ui->hasGraphicsDevice();
+        const QString platformName = QGuiApplication::platformName();
+
+        QString apiName;
+        if(available)
+            apiName = QString::fromUtf8(QRhi::backendName(window->rhi()->backend()));
+        qInfo() << "DEVICE_TEST platform plugin" << platformName << "graphics device"
+                << (available ? "available" : "missing") << "reported"
+                << (reportedAvailable ? "available" : "missing") << "api" << apiName;
+
+        if(available != reportedAvailable) {
+            reportVerificationFailure(QStringLiteral("the frontend reported a graphics device as %1 while the window "
+                "has %2").arg(reportedAvailable ? QStringLiteral("available") : QStringLiteral("missing"),
+                               available ? QStringLiteral("one") : QStringLiteral("none")));
+        }
+        if(!available) {
+            // The user-visible half of the error path: the workbench must say what is wrong instead of leaving four
+            // empty panes, and it must name the platform plugin that failed to provide the device.
+            const QString notice = ui->workbenchController() ? ui->workbenchController()->notice() : QString();
+            if(!notice.contains(platformName)) {
+                reportVerificationFailure(QStringLiteral("the frontend did not report the missing graphics device "
+                    "with the platform plugin's name (notice: \"%1\")").arg(notice));
+            }
+        }
+        continuation();
+    });
 }
 
 /// Verifies the features the shell gained for parity with the classic frontend: the menus of the workbench present the
@@ -1719,10 +1856,6 @@ protected:
     void registerCommandLineParameters(QCommandLineParser& parser) override
     {
         StandaloneApplication::registerCommandLineParameters(parser);
-        // Note: the classic frontend defines this option as well. It will move to the frontend-neutral
-        // application class when the runtime frontend selection is implemented (Phase 2).
-        parser.addOption(QCommandLineOption(QStringLiteral("noviewports"),
-            tr("Do not create any viewports (for debugging purposes only).")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-hold-ms"),
             tr("Keep the workbench window open for the given number of milliseconds after the verification steps, "
                "so that a screenshot can be taken of it, and then quit."), QStringLiteral("MS")));
@@ -1752,6 +1885,10 @@ protected:
             tr("Verify the viewport layout: pane geometry, undoable splitter drags and maximizing a viewport.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-import-check"),
             tr("Verify the import path of the shell: a multi-frame trajectory, an unsupported file and a cancelled import.")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-library-check"),
+            tr("Verify the modifier and viewport layer libraries, whose entries are commands of the shared command layer.")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-device-check"),
+            tr("Verify that the frontend reports a missing graphics device, which depends on the platform plugin.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-parity-check"),
             tr("Verify the shell features added for parity: the menus, the viewport context menu, the task rows, the window state and the import notice.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-hide-show"),
@@ -1841,6 +1978,8 @@ protected:
         const bool sessionCheck = cmdLineParser().isSet(QStringLiteral("qml-session-check"));
         const bool importCheck = cmdLineParser().isSet(QStringLiteral("qml-import-check"));
         const bool parityCheck = cmdLineParser().isSet(QStringLiteral("qml-parity-check"));
+        const bool deviceCheck = cmdLineParser().isSet(QStringLiteral("qml-device-check"));
+        const bool libraryCheck = cmdLineParser().isSet(QStringLiteral("qml-library-check"));
         const int lifecycleCycles = cmdLineParser().value(QStringLiteral("qml-lifecycle-cycles")).toInt();
         QSize resizeSize;
         const QStringList resizeArguments = cmdLineParser().value(QStringLiteral("qml-resize")).split(QLatin1Char('x'));
@@ -1853,7 +1992,7 @@ protected:
         const int holdMs = cmdLineParser().value(QStringLiteral("qml-hold-ms")).toInt();
 
         // Interactive mode: without a verification option, keep the window open.
-        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck && !commandCheck && !sessionCheck && !settingsCheck && !parityCheck)
+        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck && !commandCheck && !sessionCheck && !settingsCheck && !parityCheck && !deviceCheck && !libraryCheck)
             return;
 
         int delay = cmdLineParser().value(QStringLiteral("qml-startup-delay")).toInt();
@@ -1927,6 +2066,13 @@ protected:
                 runResizeTest(ui, resizeSize, probePos, std::move(next));
             });
         }
+        if(deviceCheck) {
+            // First of all checks: it only reads the state of the window and reports which platform plugin provides
+            // which graphics device.
+            _verificationSteps.push_back([ui = mainWinUI](std::function<void()> next) {
+                runDeviceTest(ui, std::move(next));
+            });
+        }
         if(verifyPicking) {
             _verificationSteps.push_back([ui = mainWinUI, pickPos = *pickPosition](std::function<void()> next) {
                 runPickTest(ui, pickPos, std::move(next));
@@ -1936,6 +2082,13 @@ protected:
             // Before the checks that change the scene: this one only reads and writes the settings store.
             _verificationSteps.push_back([ui = mainWinUI](std::function<void()> next) {
                 runSettingsTest(ui, std::move(next));
+            });
+        }
+        if(libraryCheck) {
+            // Before the checks that change the scene in earnest: the trigger case below inserts a modifier and undoes
+            // it again, so the scene is left as it was found.
+            _verificationSteps.push_back([ui = mainWinUI](std::function<void()> next) {
+                runLibraryTest(ui, std::move(next));
             });
         }
         if(sessionCheck) {

@@ -39,6 +39,15 @@ public:
     /// Creates the Qt Quick window and loads the workbench UI.
     void initializeWindow();
 
+    /// Checks whether the scene graph of the workbench window could create a graphics device and reports the
+    /// consequence when it could not: Qt's offscreen platform plugin, for instance, provides no QRhi, which would
+    /// leave the user with empty viewport panes and no explanation. Does nothing once the answer is known.
+    void checkGraphicsDevice();
+
+    /// Tells the user that the viewports cannot be rendered, naming the platform plugin that provides no graphics
+    /// device and the way to run the frontend without a display server.
+    void reportMissingGraphicsDevice();
+
     /// Returns the Qt Quick window displaying the workbench.
     QQuickView* view() const { return _view; }
 
@@ -53,6 +62,10 @@ public:
 
     /// Returns the model of the viewport context menu.
     QmlViewportMenu* viewportMenu() const { return _contextMenu; }
+
+    /// Reports whether the workbench window has a graphics device to render its viewports with. Returns no value while
+    /// the scene graph of the window has not been initialized yet (see checkGraphicsDevice()).
+    std::optional<bool> hasGraphicsDevice() const { return _graphicsDevice; }
 
     /// Restores the window size, the window position and the maximized state the user left behind, in so far as they were
     /// remembered (see GuiSettings). Called while the window is created; it can be called again whenever the window has
@@ -127,7 +140,10 @@ private:
     /// Keeps the continuation alive that completes the import notice with the number of source frames of the imported
     /// file. A future nobody awaits cancels the continuation it carries, and the frame list of a file source is only
     /// known once the pipeline has been evaluated, which happens after the import call has returned.
-    Future<void> _importNoticeFuture;
+    Future<void> _noticeFuture;
+
+    /// Whether the scene graph of the window has a graphics device. Empty until the scene graph was initialized.
+    std::optional<bool> _graphicsDevice;
 };
 
 }   // End of namespace

@@ -243,6 +243,29 @@ Command* ActionManager::addCommand(Command* command)
 }
 
 /******************************************************************************
+* Unregisters a command and deletes it together with its QAction view.
+******************************************************************************/
+void ActionManager::deleteCommand(Command* command)
+{
+    OVITO_CHECK_POINTER(command);
+    OVITO_ASSERT_MSG(command->parent() == this, "ActionManager::deleteCommand()", "The command is not owned by the ActionManager.");
+    OVITO_ASSERT_MSG(_commands.contains(command), "ActionManager::deleteCommand()", "The command has not been registered with the ActionManager.");
+
+    // Remove the QAction that presents the command. It is the view the classic frontend and the widgets built from it
+    // hold on to, so it has to go first.
+    if(QAction* action = _actionViews.value(command, nullptr)) {
+        _actionViews.remove(command);
+        _commandOfAction.remove(action);
+        deleteAction(action);
+    }
+
+    _commands.removeOne(command);
+    _commandsById.remove(command->id());
+    delete command;
+    Q_EMIT commandsChanged();
+}
+
+/******************************************************************************
 * Creates and registers a new command with the ActionManager.
 ******************************************************************************/
 Command* ActionManager::createCommand(const QString& id, const QString& title, const char* iconPath, const QString& statusTip, const QKeySequence& shortcut)

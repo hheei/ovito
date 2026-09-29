@@ -44,6 +44,21 @@
 namespace Ovito {
 
 /******************************************************************************
+* Returns the main window of the classic desktop frontend the current task belongs to.
+******************************************************************************/
+MainWindow* MainWindow::activeMainWindow()
+{
+    MainWindow* result = nullptr;
+    if(const UserInterface* ui = this_task::ui().get()) {
+        visitMainWindows([ui, &result](MainWindow* mainWindow) {
+            if(&mainWindow->ui() == ui)
+                result = mainWindow;
+        });
+    }
+    return result;
+}
+
+/******************************************************************************
 * Initializes the main window.
 ******************************************************************************/
 void MainWindow::initializeWindow()

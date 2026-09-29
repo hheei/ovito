@@ -5,15 +5,21 @@
 
 
 #include <ovito/gui/base/GUIBase.h>
+#include <ovito/gui/base/actions/Command.h>
 #include <ovito/core/viewport/overlays/ViewportOverlay.h>
 
 namespace Ovito {
 
 class OverlayListModel; // Defined in OverlayListModel.h
 
-class OVITO_GUIBASE_EXPORT OverlayAction : public QAction
+class OVITO_GUIBASE_EXPORT OverlayAction : public Command
 {
     Q_OBJECT
+
+public:
+
+    /// Constructor. Instances are created by the two factory functions below, which know the class or the template.
+    OverlayAction(const QString& id, const QString& text, const QString& iconPath, const QString& statusTip);
 
 public:
 
@@ -84,17 +90,25 @@ public:
     /// Returns the name of the category at the given index.
     const QString& categoryName(int categoryIndex) const { return _categoryNames[categoryIndex]; }
 
-    /// Returns the list of overlay actions for the given category.
-    const std::vector<QAction*>& categoryActions(int categoryIndex) const { return _actionsPerCategory[categoryIndex]; }
+    /// The roles this model offers to the views that present it.
+    enum Roles {
+        /// The QAction that presents the command of the row in a widgets-based frontend.
+        ActionRole = Qt::UserRole,
+        /// The Command of the row, which every frontend can present and invoke.
+        CommandRole,
+    };
 
-    /// Returns the action for an overlay at a given category and row.
-    QAction* actionAt(int categoryIndex, int overlayIndex) const;
+    /// Returns the list of viewport layer commands for the given category.
+    const std::vector<Command*>& categoryCommands(int categoryIndex) const { return _commandsPerCategory[categoryIndex]; }
 
-    /// Returns the action for an overlay from a model index.
-    QAction* actionFromIndex(const QModelIndex& index) const;
+    /// Returns the command for an overlay at a given category and row.
+    Command* commandAt(int categoryIndex, int overlayIndex) const;
+
+    /// Returns the command for an overlay from a model index.
+    Command* commandFromIndex(const QModelIndex& index) const;
 
     /// Returns the category index for the viewport layer templates.
-    int templatesCategory() const { return (int)_actionsPerCategory.size() - 1; }
+    int templatesCategory() const { return (int)_commandsPerCategory.size() - 1; }
 
 private Q_SLOTS:
 
@@ -109,8 +123,8 @@ private Q_SLOTS:
 
 private:
 
-    /// The list of viewport layer actions, sorted by category.
-    std::vector<std::vector<QAction*>> _actionsPerCategory;
+    /// The list of viewport layer commands, sorted by category.
+    std::vector<std::vector<Command*>> _commandsPerCategory;
 
     /// The list of viewport layer categories.
     std::vector<QString> _categoryNames;
@@ -121,7 +135,9 @@ private:
     /// The list of directories searched for user-defined viewport layer scripts.
     QVector<QDir> _layerScriptDirectories;
 
-    /// Wrapper action for managing layer templates.
-    QAction* _manageTemplatesAction = nullptr;};
+    /// The command that opens the dialog for managing the saved viewport layer templates. It is created by the
+    /// frontend that owns the dialog and is presented here as an entry of the templates category.
+    QPointer<Command> _manageTemplatesCommand;
+};
 
 }   // End of namespace

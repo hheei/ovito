@@ -248,6 +248,11 @@ public:
     /// \returns The registered command.
     Command* addCommand(Command* command);
 
+    /// \brief Unregisters a command and deletes it together with its QAction view.
+    /// Used for the commands of the modifier and viewport layer libraries, which appear and disappear while the
+    /// application runs (see AvailableModifiersModel::refreshTemplates).
+    void deleteCommand(Command* command);
+
     /// \brief Creates and registers a new command with the ActionManager. All state changes go through the returned command.
     Command* createCommand(const QString& id,
                         const QString& title,

@@ -5,36 +5,41 @@
 
 
 #include <ovito/gui/base/GUIBase.h>
+#include <ovito/gui/base/actions/Command.h>
 
 namespace Ovito {
 
 class PipelineListModel;    // Defined in PipelineListModel.h
 
-class OVITO_GUIBASE_EXPORT ModifierAction : public QAction
+class OVITO_GUIBASE_EXPORT ModifierAction : public Command
 {
     Q_OBJECT
 
 public:
 
-    /// Constructs an action for a built-in modifier class.
+    /// Constructs the command for a built-in modifier class.
     static ModifierAction* createForClass(ModifierClassPtr clazz);
 
-    /// Constructs an action for a modifier template.
+    /// Constructs the command for a modifier template.
     static ModifierAction* createForTemplate(const QString& templateName);
 
     /// Returns the modifier's category.
     const QString& category() const { return _category; }
 
-    /// Returns the modifier class descriptor if this action represents a built-in modifier.
+    /// Returns the modifier class descriptor if this command inserts a built-in modifier.
     ModifierClassPtr modifierClass() const { return _modifierClass; }
 
-    /// The name of the modifier template if this action represents a saved modifier template.
+    /// The name of the modifier template if this command inserts a saved modifier template.
     const QString& templateName() const { return _templateName; }
 
-    /// Updates the actions enabled/disabled state depending on the current data pipeline.
+    /// Updates the command's enabled/disabled state depending on the current data pipeline.
+    /// Returns true if the state changed.
     bool updateState(const PipelineFlowState& input);
 
 private:
+
+    /// Constructor. Instances are created by the two factory functions above, which know the class or the template.
+    ModifierAction(const QString& id, const QString& text, const QString& iconPath, const QString& statusTip);
 
     /// The Ovito class descriptor of the modifier subclass.
     ModifierClassPtr _modifierClass = nullptr;
@@ -80,17 +85,25 @@ public:
     /// Returns the name of the category at the given index.
     const QString& categoryName(int categoryIndex) const { return _categoryNames[categoryIndex]; }
 
-    /// Returns the list of modifier actions for the given category.
-    const std::vector<QAction*>& categoryActions(int categoryIndex) const { return _actionsPerCategory[categoryIndex]; }
+    /// The roles this model offers to the views that present it.
+    enum Roles {
+        /// The QAction that presents the command of the row in a widgets-based frontend.
+        ActionRole = Qt::UserRole,
+        /// The Command of the row, which every frontend can present and invoke.
+        CommandRole,
+    };
 
-    /// Returns the action for a modifier at a given category and row.
-    QAction* actionAt(int categoryIndex, int modifierIndex) const;
+    /// Returns the list of modifier commands for the given category.
+    const std::vector<Command*>& categoryCommands(int categoryIndex) const { return _commandsPerCategory[categoryIndex]; }
 
-    /// Returns the action for a modifier from a model index.
-    QAction* actionFromIndex(const QModelIndex& index) const;
+    /// Returns the command for a modifier at a given category and row.
+    Command* commandAt(int categoryIndex, int modifierIndex) const;
+
+    /// Returns the command for a modifier from a model index.
+    Command* commandFromIndex(const QModelIndex& index) const;
 
     /// Returns the category index for the modifier templates.
-    int templatesCategory() const { return (int)_actionsPerCategory.size() - 1; }
+    int templatesCategory() const { return (int)_commandsPerCategory.size() - 1; }
 
 public Q_SLOTS:
 
@@ -110,8 +123,8 @@ private Q_SLOTS:
 
 private:
 
-    /// The list of modifier actions, sorted by category.
-    std::vector<std::vector<QAction*>> _actionsPerCategory;
+    /// The list of modifier commands, sorted by category.
+    std::vector<std::vector<Command*>> _commandsPerCategory;
 
     /// The list of modifier categories.
     std::vector<QString> _categoryNames;
@@ -119,8 +132,9 @@ private:
     /// Model representing the current data pipeline.
     PipelineListModel* _pipelineListModel;
 
-    /// Wrapper action for managing modifier templates.
-    QAction* _manageTemplatesAction = nullptr;
+    /// The command that opens the dialog for managing the saved modifier templates. It is created by the frontend
+    /// that owns the dialog and is presented here as an entry of the templates category.
+    QPointer<Command> _manageTemplatesCommand;
 };
 
 }   // End of namespace

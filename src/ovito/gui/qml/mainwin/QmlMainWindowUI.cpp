@@ -167,11 +167,56 @@ void QmlMainWindowUI::initializeWindow()
     QObject::connect(view, &QWindow::windowStateChanged, view, scheduleSave);
     QObject::connect(qApp, &QCoreApplication::aboutToQuit, view, [this]() { saveWindowState(); });
 
+    // A window whose scene graph provides no graphics device cannot display viewports at all. Qt's offscreen platform
+    // plugin, for instance, provides no QRhi; without this check the user would be left with empty panes. The scene
+    // graph is initialized when the window is shown and on the render thread, which is why the check is deferred to
+    // the GUI thread's event loop.
+    QObject::connect(view, &QQuickWindow::sceneGraphInitialized, view, [this, view]() {
+        QTimer::singleShot(0, view, [this]() { checkGraphicsDevice(); });
+    });
+
     // Open the window. One that was maximized when it was closed opens maximized again.
     if(GuiSettings::instance().isWorkbenchWindowMaximized())
         view->showMaximized();
     else
         view->show();
+}
+
+/******************************************************************************
+* Checks whether the workbench window has a graphics device to render viewports with.
+******************************************************************************/
+void QmlMainWindowUI::checkGraphicsDevice()
+{
+    // The answer is known already (or the window is gone, or its scene graph has not been initialized yet, in which
+    // case there is nothing to report yet).
+    if(_view == nullptr || _graphicsDevice.has_value() || !_view->isSceneGraphInitialized())
+        return;
+
+    _graphicsDevice = (_view->rhi() != nullptr);
+    if(!*_graphicsDevice)
+        reportMissingGraphicsDevice();
+}
+
+/******************************************************************************
+* Tells the user that the viewports cannot be rendered.
+******************************************************************************/
+void QmlMainWindowUI::reportMissingGraphicsDevice()
+{
+    // Name the platform plugin: it is the one that failed to provide a graphics API, and the name is the first thing
+    // a support request needs.
+    const QString platformName = QGuiApplication::platformName();
+
+    // The recipe goes to the terminal, the message to the workbench, where it stays visible like an import report.
+    qWarning().noquote() << tr(
+        "The viewports of the Qt Quick frontend cannot be rendered, because the graphics device could not be created. "
+        "Qt is running with the \"%1\" platform plugin, which provides no graphics API.\n"
+        "On a machine without a display server, give the frontend a virtual display:\n"
+        "    xvfb-run -a --server-args='-screen 0 1400x900x24' env QT_QPA_PLATFORM=xcb ovito --gui=qml <data file>")
+        .arg(platformName);
+
+    if(_workbenchController)
+        _workbenchController->setNotice(tr("The viewports cannot be rendered: the \"%1\" platform plugin provides "
+            "no graphics device.").arg(platformName));
 }
 
 /******************************************************************************
@@ -370,12 +415,12 @@ void QmlMainWindowUI::runFileImport(FileImporter& importer, Scene* scene, std::v
     // expected (see defect F6 in docs/design/UI_PHASE1_SPIKE.md) otherwise just produces an empty scene.
     const QString formatName = importer.objectTitle();
     if(!formatName.isEmpty())
-        _workbenchController->setImportNotice(tr("Imported \"%1\" as %2.").arg(fileName, formatName));
+        _workbenchController->setNotice(tr("Imported \"%1\" as %2.").arg(fileName, formatName));
 
     // The frame list of the source is scanned lazily, i.e. after the import call returned (FileSourceImporter::importFileSet
     // only configures the FileSource), so the number of frames is reported as soon as the source knows it.
     if(OORef<FileSource> source = pipeline ? dynamic_object_cast<FileSource>(pipeline->source()) : nullptr) {
-        _importNoticeFuture = source->requestFrameList(false).then(ObjectExecutor(this), [this, fileName, formatName](const QVector<FileSourceImporter::Frame>& frames) {
+        _noticeFuture = source->requestFrameList(false).then(ObjectExecutor(this), [this, fileName, formatName](const QVector<FileSourceImporter::Frame>& frames) {
             // The frame list arrives in a task of its own; give that task the context of this user interface, so that
             // OVITO objects may be created and messages reported from here.
             GuiTaskScope taskScope(*this);
@@ -386,7 +431,7 @@ void QmlMainWindowUI::runFileImport(FileImporter& importer, Scene* scene, std::v
                 return;
             }
             const QString frameCountText = frames.size() == 1 ? tr("1 source frame") : tr("%1 source frames").arg(frames.size());
-            _workbenchController->setImportNotice(tr("Imported \"%1\" as %2 (%3).").arg(fileName, formatName, frameCountText));
+            _workbenchController->setNotice(tr("Imported \"%1\" as %2 (%3).").arg(fileName, formatName, frameCountText));
         });
     }
 }

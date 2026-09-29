@@ -14,27 +14,26 @@
 namespace Ovito {
 
 /******************************************************************************
-* Constructs an action for a built-in modifier class.
+* Constructor.
+******************************************************************************/
+ModifierAction::ModifierAction(const QString& id, const QString& text, const QString& iconPath, const QString& statusTip)
+    : Command(id, text, iconPath, statusTip)
+{
+}
+
+/******************************************************************************
+* Constructs the command for a built-in modifier class.
 ******************************************************************************/
 ModifierAction* ModifierAction::createForClass(ModifierClassPtr clazz)
 {
-    ModifierAction* action = new ModifierAction();
+    ModifierAction* action = new ModifierAction(QStringLiteral("InsertModifier.%1.%2").arg(clazz->pluginId(), clazz->name()),
+        clazz->displayName(), QStringLiteral("modify_modifier_action_icon"), clazz->descriptionString());
     action->_modifierClass = clazz;
     action->_category = clazz->modifierCategory();
 
-    // Generate a unique identifier for the action:
-    action->setObjectName(QStringLiteral("InsertModifier.%1.%2").arg(clazz->pluginId(), clazz->name()));
-
-    // Set the action's UI display name.
-    action->setText(clazz->displayName());
-
-    // Give the modifier a status bar text.
-    QString description = clazz->descriptionString();
-    action->setStatusTip(!description.isEmpty() ? std::move(description) : tr("Insert this modifier into the data pipeline."));
-
-    // Give the action an icon.
-    static QIcon icon = QIcon::fromTheme("modify_modifier_action_icon");
-    action->setIcon(icon);
+    // Modifiers without a description fall back to a generic status bar text.
+    if(action->statusTip().isEmpty())
+        action->setStatusTip(tr("Insert this modifier into the data pipeline."));
 
     // Modifiers without a category are moved into the "Other" category.
     if(action->_category.isEmpty())
@@ -44,25 +43,13 @@ ModifierAction* ModifierAction::createForClass(ModifierClassPtr clazz)
 }
 
 /******************************************************************************
-* Constructs an action for a modifier template.
+* Constructs the command for a modifier template.
 ******************************************************************************/
 ModifierAction* ModifierAction::createForTemplate(const QString& templateName)
 {
-    ModifierAction* action = new ModifierAction();
+    ModifierAction* action = new ModifierAction(QStringLiteral("InsertModifierTemplate.%1").arg(templateName),
+        templateName, QStringLiteral("modify_modifier_action_icon"), tr("Insert this modifier template into the data pipeline."));
     action->_templateName = templateName;
-
-    // Generate a unique identifier for the action:
-    action->setObjectName(QStringLiteral("InsertModifierTemplate.%1").arg(templateName));
-
-    // Set the action's UI display name.
-    action->setText(templateName);
-
-    // Give the modifier a status bar text.
-    action->setStatusTip(tr("Insert this modifier template into the data pipeline."));
-
-    // Give the action an icon.
-    static QIcon icon = QIcon::fromTheme("modify_modifier_action_icon");
-    action->setIcon(icon);
 
     return action;
 }
@@ -98,62 +85,52 @@ AvailableModifiersModel::AvailableModifiersModel(QObject* parent, UserInterface&
         if(clazz->modifierCategory() == QStringLiteral("-"))
             continue;
 
-        // Create action for the modifier class.
+        // Create the command for the modifier class.
         ModifierAction* action = ModifierAction::createForClass(clazz);
 
-        // Register it with the global ActionManager.
-        actionManager()->addAction(action);
+        // Register it with the global ActionManager, which creates its QAction view.
+        actionManager()->addCommand(action);
         OVITO_ASSERT(action->parent() == actionManager());
 
         // Handle the insertion action.
-        connect(action, &QAction::triggered, this, &AvailableModifiersModel::insertModifier);
+        connect(action, &Command::triggered, this, &AvailableModifiersModel::insertModifier);
 
-        // Sort action into categories.
+        // Sort the command into categories.
         auto categoryIter = std::find(_categoryNames.begin(), _categoryNames.end(), action->category());
         if(categoryIter == _categoryNames.end()) {
             // New category.
             _categoryNames.push_back(action->category());
-            _actionsPerCategory.emplace_back();
+            _commandsPerCategory.emplace_back();
             categoryIter = _categoryNames.end() - 1;
         }
         int categoryIndex = (int)(categoryIter - _categoryNames.begin());
-        _actionsPerCategory[categoryIndex].push_back(action);
+        _commandsPerCategory[categoryIndex].push_back(action);
     }
 
-    // Sort actions by name within each category.
-    for(std::vector<QAction*>& categoryActions : _actionsPerCategory) {
-        std::sort(categoryActions.begin(), categoryActions.end(), [](QAction* a, QAction* b) { return QString::localeAwareCompare(a->text(), b->text()) < 0; });
+    // Sort commands by name within each category.
+    for(std::vector<Command*>& categoryCommands : _commandsPerCategory) {
+        std::sort(categoryCommands.begin(), categoryCommands.end(), [](Command* a, Command* b) { return QString::localeAwareCompare(a->text(), b->text()) < 0; });
     }
 
-    // Create category for modifier templates.
+    // Create the category for the saved modifier templates, which holds the commands for the templates themselves and
+    // the command that opens the dialog for managing them.
     _categoryNames.push_back(tr("Modifier templates"));
-    _actionsPerCategory.emplace_back();
+    _commandsPerCategory.emplace_back();
+    _manageTemplatesCommand = actionManager()->findCommand(ACTION_MODIFIER_MANAGE_MODIFIER_TEMPLATES);
     for(const QString& templateName : ModifierTemplates::get()->templateList()) {
-        // Create action for the modifier template.
+        // Create the command for the modifier template.
         ModifierAction* action = ModifierAction::createForTemplate(templateName);
-        _actionsPerCategory.back().push_back(action);
+        _commandsPerCategory.back().push_back(action);
 
-        // Register it with the global ActionManager.
-        actionManager()->addAction(action);
+        // Register it with the global ActionManager, which creates its QAction view.
+        actionManager()->addCommand(action);
         OVITO_ASSERT(action->parent() == actionManager());
 
-        // Handle the action.
-        connect(action, &QAction::triggered, this, &AvailableModifiersModel::insertModifier);
+        // Handle the command.
+        connect(action, &Command::triggered, this, &AvailableModifiersModel::insertModifier);
     }
-
-    // Create "Manage templates..." action for modifier templates, which wraps the global one.
-    // This is done to override the global action's text.
-    QAction* manageTemplatesAction = actionManager()->getAction(ACTION_MODIFIER_MANAGE_MODIFIER_TEMPLATES);
-    _manageTemplatesAction = new QAction(this);
-    _manageTemplatesAction->setText(tr("Manage templates..."));
-    _manageTemplatesAction->setStatusTip(manageTemplatesAction->statusTip());
-    _manageTemplatesAction->setIcon(manageTemplatesAction->icon());
-    // Give this action an italic font to visually distinguish it.
-    QFont font = manageTemplatesAction->font();
-    font.setItalic(true);
-    _manageTemplatesAction->setFont(font);
-    connect(_manageTemplatesAction, &QAction::triggered, manageTemplatesAction, &QAction::trigger);
-    _actionsPerCategory.back().push_back(_manageTemplatesAction);
+    if(_manageTemplatesCommand)
+        _commandsPerCategory.back().push_back(_manageTemplatesCommand);
 
     // Listen for changes to the underlying modifier template list.
     connect(ModifierTemplates::get(), &QAbstractItemModel::rowsInserted, this, &AvailableModifiersModel::refreshTemplates);
@@ -181,8 +158,8 @@ QModelIndex AvailableModifiersModel::index(int row, int column, const QModelInde
     else if(parent.internalId() == quintptr(-1)) {
         // Child level: modifiers within a category
         int categoryIndex = parent.row();
-        if(categoryIndex >= 0 && categoryIndex < (int)_actionsPerCategory.size()) {
-            if(row >= 0 && row < (int)_actionsPerCategory[categoryIndex].size())
+        if(categoryIndex >= 0 && categoryIndex < (int)_commandsPerCategory.size()) {
+            if(row >= 0 && row < (int)_commandsPerCategory[categoryIndex].size())
                 return createIndex(row, 0, quintptr(categoryIndex));
         }
     }
@@ -221,8 +198,8 @@ int AvailableModifiersModel::rowCount(const QModelIndex& parent) const
     else if(parent.internalId() == quintptr(-1)) {
         // Category level: number of modifiers in this category
         int categoryIndex = parent.row();
-        if(categoryIndex >= 0 && categoryIndex < (int)_actionsPerCategory.size())
-            return (int)_actionsPerCategory[categoryIndex].size();
+        if(categoryIndex >= 0 && categoryIndex < (int)_commandsPerCategory.size())
+            return (int)_commandsPerCategory[categoryIndex].size();
     }
     // Modifiers don't have children.
     return 0;
@@ -257,16 +234,18 @@ QVariant AvailableModifiersModel::data(const QModelIndex& index, int role) const
         // Modifier item.
         int categoryIndex = (int)index.internalId();
         int modifierIndex = index.row();
-        if(categoryIndex < 0 || categoryIndex >= (int)_actionsPerCategory.size())
+        if(categoryIndex < 0 || categoryIndex >= (int)_commandsPerCategory.size())
             return {};
-        if(modifierIndex < 0 || modifierIndex >= (int)_actionsPerCategory[categoryIndex].size())
+        if(modifierIndex < 0 || modifierIndex >= (int)_commandsPerCategory[categoryIndex].size())
             return {};
 
-        QAction* action = _actionsPerCategory[categoryIndex][modifierIndex];
+        Command* command = _commandsPerCategory[categoryIndex][modifierIndex];
         if(role == Qt::DisplayRole)
-            return action->text();
-        else if(role == Qt::UserRole)
-            return QVariant::fromValue(static_cast<QObject*>(action));
+            return command->text();
+        else if(role == ActionRole)
+            return QVariant::fromValue(static_cast<QObject*>(actionManager()->actionView(command)));
+        else if(role == CommandRole)
+            return QVariant::fromValue(static_cast<QObject*>(command));
     }
     return {};
 }
@@ -285,9 +264,8 @@ Qt::ItemFlags AvailableModifiersModel::flags(const QModelIndex& index) const
     }
     else {
         // Modifier item.
-        QAction* action = actionFromIndex(index);
-        if(action)
-            return action->isEnabled() ? (Qt::ItemIsEnabled | Qt::ItemIsSelectable) : Qt::NoItemFlags;
+        if(Command* command = commandFromIndex(index))
+            return command->isEnabled() ? (Qt::ItemIsEnabled | Qt::ItemIsSelectable) : Qt::NoItemFlags;
     }
     return Qt::NoItemFlags;
 }
@@ -295,26 +273,26 @@ Qt::ItemFlags AvailableModifiersModel::flags(const QModelIndex& index) const
 /******************************************************************************
 * Returns the action for a modifier at a given category and row.
 ******************************************************************************/
-QAction* AvailableModifiersModel::actionAt(int categoryIndex, int modifierIndex) const
+Command* AvailableModifiersModel::commandAt(int categoryIndex, int modifierIndex) const
 {
-    if(categoryIndex >= 0 && categoryIndex < (int)_actionsPerCategory.size()) {
-        if(modifierIndex >= 0 && modifierIndex < (int)_actionsPerCategory[categoryIndex].size())
-            return _actionsPerCategory[categoryIndex][modifierIndex];
+    if(categoryIndex >= 0 && categoryIndex < (int)_commandsPerCategory.size()) {
+        if(modifierIndex >= 0 && modifierIndex < (int)_commandsPerCategory[categoryIndex].size())
+            return _commandsPerCategory[categoryIndex][modifierIndex];
     }
     return nullptr;
 }
 
 /******************************************************************************
-* Returns the action for a modifier from a model index.
+* Returns the command for a modifier from a model index.
 ******************************************************************************/
-QAction* AvailableModifiersModel::actionFromIndex(const QModelIndex& index) const
+Command* AvailableModifiersModel::commandFromIndex(const QModelIndex& index) const
 {
     if(!index.isValid() || index.internalId() == quintptr(-1))
         return nullptr;
 
     int categoryIndex = (int)index.internalId();
     int modifierIndex = index.row();
-    return actionAt(categoryIndex, modifierIndex);
+    return commandAt(categoryIndex, modifierIndex);
 }
 
 /******************************************************************************
@@ -322,7 +300,7 @@ QAction* AvailableModifiersModel::actionFromIndex(const QModelIndex& index) cons
 ******************************************************************************/
 void AvailableModifiersModel::insertModifier()
 {
-    // Get the action that emitted the signal.
+    // Get the command that emitted the signal.
     ModifierAction* action = qobject_cast<ModifierAction*>(sender());
     OVITO_ASSERT(action);
 
@@ -350,7 +328,8 @@ void AvailableModifiersModel::insertModifier()
         }
 
         // Show the modify tab of the command panel.
-        actionManager()->getAction(ACTION_COMMAND_PANEL_MODIFY)->trigger();
+        if(Command* modifyCommand = actionManager()->findCommand(ACTION_COMMAND_PANEL_MODIFY))
+            modifyCommand->trigger();
     });
 }
 
@@ -359,35 +338,34 @@ void AvailableModifiersModel::insertModifier()
 ******************************************************************************/
 void AvailableModifiersModel::refreshTemplates()
 {
-    std::vector<QAction*>& templateActions = _actionsPerCategory[templatesCategory()];
+    std::vector<Command*>& templateCommands = _commandsPerCategory[templatesCategory()];
 
-    // Discard old list of actions.
-    if(!templateActions.empty()) {
-        for(QAction* action : templateActions) {
-            if(ModifierAction* modAction = qobject_cast<ModifierAction*>(action)) {
-                actionManager()->deleteAction(modAction);
-            }
-        }
-        templateActions.clear();
+    // Discard the old commands of the modifier templates. The command that manages the templates is not one of them;
+    // it belongs to the frontend and outlives this list.
+    for(Command* command : templateCommands) {
+        if(qobject_cast<ModifierAction*>(command))
+            actionManager()->deleteCommand(command);
     }
+    templateCommands.clear();
 
-    // Create new actions for the modifier templates.
+    // Create new commands for the modifier templates.
     int count = ModifierTemplates::get()->templateList().size();
     if(count != 0) {
         for(const QString& templateName : ModifierTemplates::get()->templateList()) {
-            // Create action for the modifier template.
+            // Create the command for the modifier template.
             ModifierAction* action = ModifierAction::createForTemplate(templateName);
-            templateActions.push_back(action);
+            templateCommands.push_back(action);
 
-            // Register it with the ActionManager.
-            actionManager()->addAction(action);
+            // Register it with the ActionManager, which creates its QAction view.
+            actionManager()->addCommand(action);
             OVITO_ASSERT(action->parent() == actionManager());
 
-            // Handle the action.
-            connect(action, &QAction::triggered, this, &AvailableModifiersModel::insertModifier);
+            // Handle the command.
+            connect(action, &Command::triggered, this, &AvailableModifiersModel::insertModifier);
         }
     }
-    templateActions.push_back(_manageTemplatesAction);
+    if(_manageTemplatesCommand)
+        templateCommands.push_back(_manageTemplatesCommand);
 
     // Notify views that the model has been reset.
     beginResetModel();
@@ -417,10 +395,10 @@ void AvailableModifiersModel::updateActionState()
         inputState = pipeline->getCachedPipelineOutput(currentAnimationTime());
     }
 
-    // Update the actions.
-    for(int categoryIndex = 0; categoryIndex < (int)_actionsPerCategory.size(); categoryIndex++) {
-        for(int modifierIndex = 0; modifierIndex < (int)_actionsPerCategory[categoryIndex].size(); modifierIndex++) {
-            ModifierAction* action = qobject_cast<ModifierAction*>(_actionsPerCategory[categoryIndex][modifierIndex]);
+    // Update the commands.
+    for(int categoryIndex = 0; categoryIndex < (int)_commandsPerCategory.size(); categoryIndex++) {
+        for(int modifierIndex = 0; modifierIndex < (int)_commandsPerCategory[categoryIndex].size(); modifierIndex++) {
+            ModifierAction* action = qobject_cast<ModifierAction*>(_commandsPerCategory[categoryIndex][modifierIndex]);
             if(action && action->updateState(inputState)) {
                 QModelIndex idx = index(modifierIndex, 0, index(categoryIndex, 0));
                 Q_EMIT dataChanged(idx, idx);
@@ -444,23 +422,23 @@ void AvailableModifiersModel::extensionClassAdded(OvitoClassPtr cls)
     if(clazz->modifierCategory() == QStringLiteral("-"))
         return;
 
-    // Create action for the modifier class.
+    // Create the command for the modifier class.
     ModifierAction* action = ModifierAction::createForClass(clazz);
 
-    // Register it with the global ActionManager.
-    actionManager()->addAction(action);
+    // Register it with the global ActionManager, which creates its QAction view.
+    actionManager()->addCommand(action);
 
-    // Handle the insertion action.
-    connect(action, &QAction::triggered, this, &AvailableModifiersModel::insertModifier);
+    // Handle the insertion command.
+    connect(action, &Command::triggered, this, &AvailableModifiersModel::insertModifier);
 
-    // Insert action into the right category. Or create a new category if necessary.
+    // Insert the command into the right category. Or create a new category if necessary.
     auto categoryIter = std::ranges::find(_categoryNames, action->category());
     int categoryIndex = std::distance(_categoryNames.begin(), categoryIter);
     if(categoryIter == _categoryNames.end()) {
         _categoryNames.push_back(action->category());
-        _actionsPerCategory.emplace_back();
+        _commandsPerCategory.emplace_back();
     }
-    _actionsPerCategory[categoryIndex].push_back(action);
+    _commandsPerCategory[categoryIndex].push_back(action);
 
     // Notify views that the model has been reset.
     beginResetModel();
