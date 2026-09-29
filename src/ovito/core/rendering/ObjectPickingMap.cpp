@@ -17,8 +17,10 @@ uint32_t ObjectPickingMap::registerObjectId(ObjectIdAllocator::ObjectHandle base
     OVITO_ASSERT(baseObjectId);
     OVITO_ASSERT(_pickingRecords.find(baseObjectId) == _pickingRecords.end());
 
-    uint32_t id = baseObjectId;
-    _pickingRecords.emplace(std::move(baseObjectId), PickingRecord(command, std::move(subobjIndices), derivePrimitiveIdFromObjectId));
+    const uint32_t id = baseObjectId;
+    _pickingRecords.emplace(id, PickingRecord(command, std::move(subobjIndices), derivePrimitiveIdFromObjectId));
+    // Keep the ID range reserved while the commands of this pass are being recorded (see releaseObjectIds()).
+    _objectIdReservations.push_back(std::move(baseObjectId));
     return id;
 }
 

@@ -1300,6 +1300,11 @@ void RenderThread::renderPickingPass(TargetState& state, const QSize& size)
     try {
         // Record the render pass using the shared code path.
         renderFrameGraph(cb, _pickTarget.get(), state, state.lastRenderedFrameGraph.get(), *state.rendererConfig, TaskProgress::Ignore, /*isPickingPass=*/true);
+
+        // The pass has been recorded, so its object IDs are done: giving up the reservations here keeps the picking map
+        // independent of the allocator (and of this render thread), which is what allows the map to be handed to an
+        // ObjectPickingBuffer that is queried later - see ObjectPickingMap::releaseObjectIds().
+        state.pickingMap.releaseObjectIds();
     }
     catch(const OperationCanceled&) {
         // If the operation was canceled, we still need to end the offscreen frame before processing the next event.

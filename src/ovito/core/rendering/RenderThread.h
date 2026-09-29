@@ -463,6 +463,12 @@ private:
 
 	/// Per-target rendering state, keyed by handle.
 	/// Accessed only from the render thread (except via events from the GUI thread).
+	/// Allocator for unique object IDs used in rendering and object picking.
+	/// Must be declared before the render targets and the resource cache, because both may hold ObjectHandle instances
+	/// (the picking map of a render target keeps the IDs of its last pass reserved until it is reset): members declared
+	/// after this one are destroyed before it, returning all IDs while the allocator is still alive.
+	ObjectIdAllocator _objectIdAllocator;
+
 	/// Uses std::unordered_map because TargetState is move-only (contains unique_ptr).
 	std::unordered_map<RenderTargetHandle, TargetState> _targets;
 
@@ -472,11 +478,6 @@ private:
 	std::unique_ptr<QRhiTexture> _pickDepthTexture;               ///< D32F — per-pixel depth value (readable, for world-position reconstruction).
 	std::unique_ptr<QRhiTextureRenderTarget> _pickTarget;         ///< Render target for the picking pass (two color attachments + depth texture).
 	std::unique_ptr<QRhiRenderPassDescriptor> _pickRenderPassDesc;///< Render pass descriptor for the picking target.
-
-	/// Allocator for unique object IDs used in rendering and object picking.
-	/// Must be declared before _rhiResourceCache so that the resource cache (which may hold
-	/// ObjectHandle instances) is destroyed first, returning all IDs before the allocator itself is gone.
-	ObjectIdAllocator _objectIdAllocator;
 
 	/// Cache for QRhi resources such as vertex buffers and textures. Shared by all active render targets.
     std::shared_ptr<RendererResourceCache> _rhiResourceCache = std::make_shared<RendererResourceCache>();

@@ -27,7 +27,20 @@ public:
     uint32_t registerObjectId(ObjectIdAllocator::ObjectHandle baseObjectId, const FrameGraph::RenderingCommand& command, ConstDataBufferPtr subobjIndices = {}, bool derivePrimitiveIdFromObjectId = false);
 
 	/// Releases all data held by the object.
-	void reset() { _pickingRecords.clear(); }
+	void reset() { _pickingRecords.clear(); releaseObjectIds(); }
+
+	/**
+	 * Releases the object IDs registered by registerObjectId() in the allocator of the renderer service that
+	 * rendered the picking pass.
+	 *
+	 * The IDs of a pass have to stay reserved while its rendering commands are being recorded, so that two commands
+	 * of the same pass cannot be assigned the same ID. Afterwards they are of no use to the map any more: the
+	 * records it resolves are keyed by the base object ID, and a map that is handed to an ObjectPickingBuffer (or
+	 * kept in a render target state) may outlive the render thread that owns the allocator. A handle released after
+	 * the allocator is gone writes into freed memory, so the reservations are given up as soon as the pass is done
+	 * (RenderThread::renderPickingPass() does that). Calling this twice is harmless.
+	 */
+	void releaseObjectIds() { _objectIdReservations.clear(); }
 
 	/// Resolves a (objectId, primitiveId, depth) triple from the picking buffer into a PickResult.
 	/// Returns std::nullopt if the objectId is not found.
@@ -106,10 +119,11 @@ protected:
 		bool _derivePrimitiveIdFromObjectId;
 	};
 
-	/// The picking infos for the rendered graphics primitives, indexed by base object ID.
-	/// std::less<> (transparent comparator) enables heterogeneous lookup by plain uint32_t
-	/// via ObjectHandle's implicit operator uint32_t() conversion.
-	std::map<ObjectIdAllocator::ObjectHandle, PickingRecord, std::less<>> _pickingRecords;
+	/// The picking infos for the rendered graphics primitives, indexed by their base object ID.
+	std::map<uint32_t, PickingRecord> _pickingRecords;
+
+	/// The object ID ranges of the current pass, kept reserved in the allocator until the pass has been rendered.
+	std::vector<ObjectIdAllocator::ObjectHandle> _objectIdReservations;
 };
 
 }   // End of namespace
