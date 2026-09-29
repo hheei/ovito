@@ -255,13 +255,14 @@ whose completion is delivered through the GUI event loop (the Qt Quick implement
 result. This design therefore has to name the completion thread and the dispatch rule, and Phase 5 of UI_PLAN.md carries
 the hover-pick deadlock test that both frontends must pass.
 
-*Partly addressed in Phase 2.5 (deliverable 7, audit decision D35), with the pre-warm part reverted again (D36).* The Qt
-Quick viewport refreshes its picking buffer **when a pick asks for it** (`QuickViewportWindow::refreshPickingBuffer()`),
-so the one-frame staleness after a camera move or a scene change is the rule again - the automatic refresh that removed it
-was taken out because a pass that no pick asked for raced with a replacement of the data set and corrupted a release
-build's heap (defect F20 of the Phase 1 report). What this item still owns is the contract change itself: the blocking
-classic wrapper and the asynchronous QML implementation can only be unified once `pick()` can wait for a pass and cancel
-it against a scene change, and that same capability is what allows the pre-warm to come back.
+*Partly addressed in Phase 2.5 (deliverable 7, audit decisions D35/D36).* The Qt Quick viewport refreshes its picking
+buffer by itself once the view has settled (`QuickViewportWindow::pickingPrewarmTimeout()`), so the one-frame staleness
+after a camera move or a scene change is the exception rather than the rule and the first hover of a settled view is
+correct. Doing that exposed defect F20 (a picking buffer holding object ID handles of a render thread that had been
+destroyed), which was diagnosed with AddressSanitizer and fixed at the root by making the buffer independent of the
+service that rendered it. What this item still owns is the contract change itself: the blocking classic wrapper and the
+asynchronous QML implementation can only be unified once `pick()` can wait for the pass. The pre-warm is the part of A3
+that does not change the interface.
 
 **Payoff.** Removes the classic frontend's per-hover-move stall and ends the second picking implementation.
 
@@ -431,9 +432,8 @@ Open candidates, each with the measurement that must decide it:
    further win is plausible but the remaining fixed cost is now smaller.
 2. **Picking pre-warm** — refresh the picking buffer when the camera or scene changes instead of after the next hover
    pick, removing the documented one-frame staleness. Cost: one picking pass per camera change (the classic frontend
-   already pays this per hover). *Implemented in Phase 2.5 deliverable 7 and removed again*: the pass overlapped a
-   replacement of the data set and corrupted a release build's heap (defect F20 of the Phase 1 report), so the staleness
-   is back until Phase 5's asynchronous pick API can cancel a pass against a scene change.
+   already pays this per hover). *Implemented in Phase 2.5 deliverable 7*; the release-only corruption it exposed (F20)
+   was a lifetime bug in the picking buffer and is fixed (D36).
 3. **Frame-graph generation cost** — each window frame generates one frame graph per pane (unavoidable: four
    cameras), sharing the vis cache (already shared). Profile with the spike's `--qml-frame-stats` before optimizing.
 4. **Launcher/`--gui` UX** — an unknown frontend name currently prints the available names and exits 1; a typo in a

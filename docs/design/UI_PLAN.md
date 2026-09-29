@@ -514,17 +514,13 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        API), the added offscreen pass must not push the hover response beyond the measured warm-path latency, and every
        camera change must not turn a static scene into a continuous renderer. If that cannot be shown, the on-demand pick
        path stays and the staleness remains documented.
-       **This item was implemented and then removed again.** The counter pair below survived; the automatic refresh did
-       not, because a picking pass that no pick asked for overlaps a replacement of the data set by the user and corrupts
-       the heap of a release build (defect F20 of the Phase 1 report: 4 crashes in 5 runs of the scene-replacing session
-       check with the pre-warm, 0 in 5 without it, and invisible to valgrind and to the sanitizer and assert-enabled
-       builds). `pick()` starts a pass and nothing else does, so the documented one-frame staleness is back and
-       `--qml-prewarm-check` (now *picking freshness*) verifies the on-demand path instead - including that a settled
-       viewport with a buffer behind the view renders nothing on its own. The classic frontend has no such race because
-       `RenderTarget::requestPick()` blocks the GUI thread; the pre-warm can only come back together with the
-       asynchronous pick API of Phase 5 (review item A3), which can cancel a pass against a scene change.
-       *Outcome of the first attempt (partly reverted).* `QuickViewportWindow` no longer tracks staleness with a boolean
-       that any pass
+       *Outcome: implemented and accepted.* Finding defect F20 on the way made this item the round's most instructive
+       one: the pre-warm crashed release builds as soon as a picking pass was in flight while the data set was replaced
+       (4 of 5 runs of the scene-replacing session check against 0 of 5 without the pre-warm), AddressSanitizer named the
+       cause (a picking buffer holding object ID handles of a render thread that was gone), and the fix is described in
+       decision D36. The pre-warm stays; `--qml-prewarm-check` verifies that the buffer catches up on its own and that a
+       settled viewport does not keep rendering.
+       `QuickViewportWindow` no longer tracks staleness with a boolean that any pass
        cleared, but with a counter pair: `renderFrameGraph()` counts every change of the rendered contents, a completed
        pass records the counter it was rendered for, and `isPickingBufferCurrent()` answers whether the cached buffer
        belongs to the current view (a booleans-based flag could mark a buffer current that a pass rendered for a
@@ -532,8 +528,7 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        changes, a single-shot 150 ms timer is restarted; when it fires, the buffer is refreshed **if it is behind the
        view**. The delay is the whole trick: during a camera drag frame graphs arrive faster than 150 ms apart, so the
        refreshes happen once after the interaction instead of once per frame (one offscreen pass per interaction, not per
-       frame), and a hover that follows an interaction is answered from the current view. It turned out to be a race
-       against the scene (see the defect above), so this paragraph describes what was built, not what the tree does now.
+       frame), and a hover that follows an interaction is answered from the current view.
      * **Frame-graph generation** — profile the per-frame, per-pane generation cost before optimizing it; four cameras
        mean four frame graphs, which is expected and may already be dominated by something else.
        *Outcome: measured, nothing to optimize.* With temporary instrumentation (reverted again) around
@@ -552,10 +547,10 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        free-standing modal window, and every unattended run (the CI smoke tests, the verify scripts that check `--gui`
        handling, a batch job) would wait for someone to dismiss it - for a message whose only content is a list and a
        suggestion. The message is written for both audiences instead.
-     * *Verification of deliverable 7*: the numbers, the two decided-against items and the picking freshness are
-       documented in [UI_TEST_ENV.md](UI_TEST_ENV.md) sections 9.4 (frame times) and 9.2.7 (the check, including the
-       release-only corruption it was written for); `--qml-prewarm-check` runs in the four CI jobs.
-- **Status**: **deliverables 1–7 are done** — Phase 2.5 is complete except for the exit gate's final pass; every review item A1–A9 is in one of the three states the gate asks for (see the table in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md) section 7), and each optimization of deliverable 7 is recorded with its measured medians, including the two that were decided against and the picking pre-warm that was implemented, found to corrupt release builds (D36, defect F20) and removed again. Phase 2 is complete (deliverables 1–7, exit gate
+     * *Verification of deliverable 7*: the numbers, the two decided-against items and the pre-warm's acceptance are
+       documented in [UI_TEST_ENV.md](UI_TEST_ENV.md) sections 9.4 (frame times) and 9.2.7 (the check, and the release-only
+       corruption that defect F20 turned out to be); `--qml-prewarm-check` runs in the four CI jobs.
+- **Status**: **deliverables 1–7 are done** — Phase 2.5 is complete except for the exit gate's final pass; every review item A1–A9 is in one of the three states the gate asks for (see the table in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md) section 7), and each optimization of deliverable 7 is recorded with its measured medians, including the two that were decided against; the picking pre-warm also names the release-only corruption it exposed (D36, defect F20) and its fix. Phase 2 is complete (deliverables 1–7, exit gate
   verified on Linux/OpenGL, Linux/Vulkan, macOS/Metal and Windows/D3D12), so this phase starts from a verified base; the
   audit decisions it produces are recorded as D30 onward in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md). Deliverable 1 (the
   action/editor inventory in that document's section 6 plus [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md)) is delivered and

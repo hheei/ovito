@@ -1034,91 +1034,26 @@ Traps of this round:
    `DataSetContainer::selectionChangeComplete`, which is emitted only for a real change, so a check that wants the model
    to adopt a node has to clear the selection first.
 
-### 9.2.7 Testing the picking freshness and the frontend selection
+### 9.2.7 Testing the picking pre-warm and the frontend selection
 
-`--qml-prewarm-check` verifies that the picking buffer of a viewport is refreshed **on demand** and by nothing else: it
-hovers over the center of the first viewport item repeatedly until the buffer describes the imported scene (a pick asks
-for the pass; `pick()` itself never blocks), moves the camera of the viewport and requests a repaint, waits for the buffer
-to notice the change, and then counts the frames of the settled window for one second while the buffer is behind the view
-- a viewport that refreshed itself here would fail as *"the picking buffer refreshed itself without a pick asking for
-it"*, which is the defect the automatic pre-warm was removed for (F20 of the Phase 1 report). It finishes by hovering
-again until the buffer is current and asserting that the first pick of the refreshed view names the object the second one
-names.
+`--qml-prewarm-check` verifies that the picking buffer of a viewport catches up **on its own** after the view changed:
+it waits for the buffer of the imported scene (which has to arrive without any pick being made), moves the camera of the
+viewport and requests a repaint, waits for the buffer to notice the change and to become current again - still without a
+pick - and then asserts that the first pick after the camera move names the object the second one names. It finishes by
+counting the frames of the settled window for one second: a pre-warm that refreshed the buffer over and over would look
+like a continuous renderer here (the check fails above four frames, which covers the tail of the passes of the other
+panes). Disabling the pre-warm (`pickingPrewarmTimeout()` as a no-op) makes the check fail with *"the picking buffer did
+not catch up with the imported scene within 20 s"*, which is how it was shown to have teeth.
 
-Reaching a pick from a polling loop needs a task context of its own (`hoverPick()` opens a `GuiTaskScope` per call),
-because the callbacks of `pollUntil()` run in a Qt timer where no OVITO task is active - the same trap section 9.2.6
-describes. Note also that the first pick of a fresh viewport, and the first pick after a change of the view, are answered
-from the buffer of the previous view (or from no buffer at all), which is why the check hovers in a loop instead of
-asserting the result of a single pick.
+**A release-only corruption hides from every sanitizer** - defect F20 was this case, and it cost the most time of the
+whole frontend work. A picking buffer that survived the render thread which had produced it crashed release builds in 4
+of 5 runs of the scene-replacing `--qml-session-check`, while valgrind, the assert-enabled build and even an
+AddressSanitizer build ran the same scenario without a diagnostic until the timing was right (the sanitizer needed five
+attempts). Two lessons: run a scenario that replaces the data set in a **loop in a release build** when a crash is
+reported inside an unrelated allocation (`malloc()`, `QThreadPool::start()`), and build with AddressSanitizer
+(`build-asan`, GCC, see section 4) rather than trusting valgrind when a lifetime bug is suspected - ASan named the exact
+use-after-free and the two stacks involved, valgrind reported nothing at all.
 
-**A release-only heap corruption hides from every sanitizer.** Defect F20 of the Phase 1 report is the case that
-matters: an offscreen picking pass that overlapped a data set replacement corrupted the allocator, and it was found by
-running the scene-replacing `--qml-session-check` in a **loop in a release build** (4 of 5 runs died, 0 of 5 with the
-pre-warm removed) - not by the AddressSanitizer build (`build-asan`), valgrind, or the assert-enabled build, all of which
-completed the same run because the corrupting access is a race between threads rather than a bounds violation. When a
-crash in this frontend lands inside an unrelated allocation (`malloc()`, `QThreadPool::start()`), check the thread
-interaction around the same operation before believing the stack.
-
-Traps of this round:
-
-1. **A bool is not a version.** The freshness of the picking buffer cannot be tracked with a boolean that a started pass
-   clears: a pass that was already rendered for the *previous* view then looks current, and the next hover answers from the
-   old camera without ever refreshing (the old code did exactly that, and the counter pair - contents generation versus the
-   generation the last completed pass was rendered for - is what replaces it).
-2. **Pre-warming on every frame graph would render continuously during a drag.** The refresh is therefore started by a
-   single-shot 150 ms timer that every new frame graph restarts, so it fires once after the interaction instead of once per
-   frame. The same reasoning applies to the `pickingBufferReady()` path: a pass that completed while the view changed again
-   restarts the timer instead of starting another pass right away.
-3. **The command line frontend selection is a CLI concern.** `--gui=<name>` reports the available frontends with their
-   descriptions, guesses a typo (unique prefix, or edit distance at most two) and names the fallback, but deliberately does
-   not open a dialog: the failure happens before a workbench exists, and a modal window there blocks every unattended run
-   (the CI smoke tests and the verify scripts check this path on purpose). The message is written for a launcher user as
-   well - it says that omitting `--gui` starts the default frontend.
-4. **A flaky abort inside Mesa.** One assert-enabled run of the spike suite aborted in `libGLX_mesa`/`libgallium`
-   (`double free or corruption (fasttop)` in `XGetGeometry` while the window rendered), i.e. in the software GL stack and
-   not in OVITO code, and it did not reproduce in the following runs of the same suite. When a crash backtrace ends in
-   `libgallium`/`libGLX_mesa`, re-run before investigating the frontend; the crash of a *test* process is not a check
-   failure (it has no `VERIFY_FAILED` line) and has to be told apart from one.
-
-### 9.5 The CI smoke test and its render loop
-
-The Qt Quick smoke test of the GitHub workflow (`.github/workflows/ci.yml`) runs with `QSG_RENDER_LOOP=basic` on the
-two Linux jobs. It asserts that the frontend starts, renders frames, picks, lays out its panes, passes the shell's parity
-check (`--qml-parity-check`), exercises the shared offscreen service (`--qml-offscreen-check`), the picking pre-warm
-(`--qml-prewarm-check`) and imports a file - none of which depends on the render loop - while the runner has no GPU and few
-CPU cores, where the threaded loop's
-frame synchronization is a source of flakiness rather than of signal. Both loops are part of the local verification
-(section 9.4), so the loop that is left out of CI is covered elsewhere.
-
-Note that CTest runs *before* the smoke test in those jobs, and that a job which fails in the smoke test reports the
-spike's exit code: the spike exits non-zero when one of its checks fails, and a crash of the process (139) is not a
-check failure but a defect of its own.
-
-### 9.6 Reviewing these documents with an LLM review CLI
-
-The design documents in this directory can be reviewed by `ocr` (open-code-review). Three traps cost a round each and are
-worth knowing before the next pass:
-
-* **Markdown is filtered out.** `ocr review --preview` lists `docs/design/UI_PLAN.md` as `unsupported_ext`, and a `--rule`
-  cannot override the built-in extension check (`ocr scan --path …` rejects it too). Workaround: copy the documents
-  *verbatim* to `ocrplan/<name>.ts` — verbatim, so the reported line numbers map straight back to the real file — and stage
-  the copies with `git add -N`, because untracked files are only picked up once git knows them. `.ocr-review/` is git-ignored
-  and therefore invisible to the review; do not use that directory. Delete the copies afterwards (`git reset -q ocrplan`,
-  `rm -rf ocrplan`).
-* **The code-oriented default rule is the wrong lens.** Point `--rule` at a rule file whose `**/ocrplan/*.ts` entry states
-  that the file is a Markdown plan (not code, the extension is only a filter workaround) and lists the axes to judge it on:
-  internal consistency, ownership of every item by exactly one phase, verifiability of each exit gate, existence of the
-  named files/classes/decisions/options, risk and sequencing, and actionability.
-* **It reads the repository, so keep every claim checkable.** A finding is only useful because the reviewers can open the
-  named sources — a plan sentence naming a class, file or defect number *is* verified against the tree. Treat a finding
-  about a missing or misnamed reference as a defect in the document, and expect real ones: two review passes on these
-  documents produced 19 and then 12 findings, including a deliverable that promised three menu entries while only two had
-  handlers, and a "deferred to phase X" item whose phase did not list it.
-
-Practicalities: one pass over two documents takes roughly 6–12 minutes and about 1.5 M tokens, `--audience agent` plus
-`--output <file>` keeps the text reviewable afterwards (never pipe it through `tail`), and the run must be started detached
-(`setsid nohup ocr review … &`) because a tool call in this environment is terminated before the review finishes. Poll it
-with plain sleeps, not with a wait tool.
 
 ## 10. Quick checklist
 
