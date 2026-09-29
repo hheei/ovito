@@ -156,6 +156,29 @@ Traps encountered here, in order of how much time they cost:
   from the X server instead: start the window on a *private* Xvfb display, let the spike hold it open with
   `--qml-hold-ms` (it prints `VERIFICATION_DONE` when the checks are done), and grab that display with ffmpeg.
 
+### 2.3 Checking an installed tree
+
+The build tree is not the deployed layout: CMake installs the frontends, the plugins and the shared data into different
+relative directories, and the plugin lookup of `PluginManager` follows the executable. Check it instead of assuming it:
+
+```bash
+cmake --install build-native --prefix /tmp/ovito-install   # bin/ovito, lib/ovito/plugins, share/ovito
+LD_LIBRARY_PATH="$PWD/.qt/6.10.2/gcc_64/lib:/tmp/ovito-install/lib/ovito/plugins" /tmp/ovito-install/bin/ovito --version
+QT_QPA_PLATFORM=offscreen /tmp/ovito-install/bin/ovito --gui=bogus   # lists "qml, qt-widgets": the QML plugin was found
+QT_QPA_PLATFORM=offscreen /tmp/ovito-install/bin/ovito --nogui
+```
+
+Then run the two product frontends from the prefix under Xvfb and screenshot with `ffmpeg -f x11grab` (§2.2); for the
+classic one, add the settings file of §3.2. Measured on this machine (Phase 2.5):
+
+* the installed **Qt Quick** frontend renders the scene: `ovito --gui=qml lattice.xyz` shows the four panes with the fitted
+  lattice, the per-pane overlays (tripods, view titles), the active-pane border and the status line;
+* the installed **classic** frontend starts, loads its 26 plugins, creates its viewport windows and then takes the known
+  Xvfb renderer-failure path of §3.2 (`Presenting not supported on this window`,
+  `Failed to create render pass descriptor for onscreen render target.`);
+* `ovito-qml-spike` has **no install rule** — it is a prototype and lives in the build tree — so an install-tree check
+  exercises the two product frontends and not the spike.
+
 ## 3. Classic frontend in a headless environment
 
 * `RenderThread::pickGraphicsApi()` hardcodes the graphics API per platform, and on Linux it is always **Vulkan**. There is
@@ -201,9 +224,24 @@ cannot rotate the developer's recent-files list or renderer selection:
 
 ```bash
 mkdir -p /tmp/ovito-cfg/Ovito
-printf 'viewport\\adapter_setup_done=true\n' > /tmp/ovito-cfg/Ovito/Ovito.conf
+printf '[viewport]\nadapter_setup_done=true\n' > /tmp/ovito-cfg/Ovito/Ovito.conf
 XDG_CONFIG_HOME=/tmp/ovito-cfg QT_QPA_PLATFORM=xcb xvfb-run -a --server-args='-screen 0 1400x900x24' ./build-native/bin/ovito
 ```
+
+**The file is a `QSettings` INI file, and `QSettings::value("viewport/adapter_setup_done")` means the
+`[viewport]` section with an `adapter_setup_done` key** — a top-level line `viewport/adapter_setup_done=true` (with a slash
+or with a backslash) is *not* read as that key. This matters because a wrong file fails silently: the dialog still appears
+and the run looks exactly like a healthy one whose viewport area happens to be empty, which is how an earlier version of
+this recipe was recorded as working without ever having worked. Verify the suppression instead of assuming it — with the
+dialog gone, a run under Xvfb prints
+
+```
+Presenting not supported on this window
+ERROR: Failed to create render pass descriptor for onscreen render target.
+```
+
+while a run still behind the dialog prints nothing at all (the classic frontend logged six lines in the working case and
+zero in the blocked one).
 
 With that, the classic frontend creates its four viewport windows, assigns the interactive renderer from
 `ViewportRendererRegistry` and - on a box without DRI3 - ends up in the renderer-failure path it has always had

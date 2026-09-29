@@ -131,7 +131,11 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
 - **Status (partial)**: The build entry, viewport/rendering interface (QRhi ownership) and shared model/command audits are
   complete and recorded in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md), including the decisions implemented in code
   (`RendererService` extraction, `OVITO_BUILD_QML_FRONTEND`, `GuiBase` reuse, non-desktop `UserInterface` guards in two
-  desktop services). The action/editor inventory and the expanded parity matrix of deliverables 1, 3 and 4 are still pending.
+  desktop services). The action/editor inventory of deliverable 1 is recorded in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md)
+  section 6 (the 76 action ids grouped by who creates and handles them, the 84 property editors with their 26 control
+  classes, the four audited specialized editors, and the panels, dialogs, applets and gizmos), and the expanded parity
+  matrix of deliverables 3 and 4 is [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md). Both were written in Phase 2.5, which owns
+  them as its deliverable 1.
 
 ---
 
@@ -309,17 +313,28 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   change can cost when it hides inside unrelated work (defect F13), and the classic frontend has to survive every one of
   these changes.
 - **Deliverables**:
-  1. **Finish the Phase 0 inventory**: the action/editor inventory and the expanded parity matrix (Phase 0 deliverables 1,
-     3 and 4) are still pending. This is the last phase that works on the *difference* between the two frontends rather
-     than on features, and the matrix is what tells Phases 3–7 what is left. Record per row: implemented / scheduled in
-     phase X / deliberately out of scope, with a source reference and an acceptance case.
-     * The row set has to include what Phase 2 could not verify, starting with the **installed layout**: build-tree paths
-       differ from installed paths, so add an install-and-run check (`cmake --install` into a prefix and then start the
-       frontend and the spike from there) on Linux — the platform where this environment can do it — and record
-       macOS/Windows as unverified rather than assumed.
-     * The **Windows packaging prerequisites** belong to the matrix too: a Windows redistributable build needs Boost, a
-       zlib-enabled HDF5 and Perl before it configures at all (defect F16), so that row names the prerequisites instead of
-       implying the build just works.
+  1. **Finish the Phase 0 inventory** — **delivered** as
+     [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md) (the normative per-capability list: state, phase and acceptance case, in 16
+     areas, with the fixture catalogue and the remaining verification gaps) plus the action/editor inventory in
+     [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) section 6. This is the last phase that works on the *difference* between the
+     two frontends rather than on features, and the matrix is what tells Phases 3–7 what is left: it is why the phase's
+     later deliverables no longer have to argue about scope. What the inventory settled: 43 of the 76 commands reach QML
+     and 23 of them act (the other 20 are desktop dialogs or services and are the concrete handler list), the classic
+     frontend has **no reflection fallback** for property fields (so A7's scope is the 84 audited editors, not "all
+     fields"), Phase 6 needs six editor archetypes rather than 84 ports, and two "gaps" are not gaps at all (the scripting
+     commands and the SSH terminal have no implementation in this tree). One real defect surfaced on the way and is fixed
+     here (F17: three `getAction()` lookups of never-registered gallery ids trip an assertion in an assert-enabled build).
+     The row set includes what Phase 2 could not verify:
+     * **Installed layout**: build-tree paths differ from installed paths, so the check was run here on Linux
+       (`cmake --install build-native --prefix /tmp/ovito-install`, then both product frontends from that prefix): the
+       installed Qt Quick frontend renders the scene and the installed classic frontend loads its 26 plugins and creates its
+       viewport windows (recipe and measurements in [UI_TEST_ENV.md](UI_TEST_ENV.md) §2.3). What stays open is a *packaged*
+       tree on macOS/Windows; the spike has no install rule because it is a prototype. Running the check also corrected a
+       testing recipe that had been recorded as working without ever having worked (the `[viewport]` section of the
+       `QSettings` file, §3.2 of the same document).
+     * **Windows packaging prerequisites**: a Windows redistributable build needs Boost, a zlib-enabled HDF5 and Perl
+       before it configures at all (defect F16), so the matrix names the prerequisites instead of implying the build just
+       works.
   2. **Settings facade (the remainder of review item A5)**: one small `gui/base` service that owns the names and defaults
      of the keys the frontends persist (window geometry, renderer selection is already in `ViewportRendererRegistry`,
      per-dialog directory history, UI theme), so neither frontend names storage paths itself. This is deliverable 2 and
@@ -417,9 +432,12 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        mean four frame graphs, which is expected and may already be dominated by something else.
      * **`--gui` diagnostics** — an unknown frontend name currently prints the available names and exits 1; also list the
        names for a typo and make the message usable from a desktop launcher.
-- **Status**: **Not started.** Phase 2 is complete (deliverables 1–7, exit gate verified on Linux/OpenGL, Linux/Vulkan,
-  macOS/Metal and Windows/D3D12), so this phase starts from a verified base; the audit decisions it produces are recorded
-  as D30 onward in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md).
+- **Status**: **deliverable 1 is done; deliverables 2–7 are not started.** Phase 2 is complete (deliverables 1–7, exit gate
+  verified on Linux/OpenGL, Linux/Vulkan, macOS/Metal and Windows/D3D12), so this phase starts from a verified base; the
+  audit decisions it produces are recorded as D30 onward in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md). Deliverable 1 (the
+  action/editor inventory in that document's section 6 plus [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md)) is delivered and
+  verified: writing it also ran the installed-tree check of §2.3 of UI_TEST_ENV.md, fixed defect F17, and corrected a
+  testing recipe that had been recorded as working without ever having worked.
 - **Non-goals** (each assigned to a phase where its semantics are already being changed, so they are not silently lost):
   * **A3** (one asynchronous pick API) belongs to Phase 5: it changes the `pick()` contract that `SelectionMode`,
     `NavigationModes` and `XFormModes` call on every mouse move, and the classic frontend's blocking behaviour has to be
@@ -615,4 +633,5 @@ performance baseline are documented in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md),
 [UI_PLAN.md](UI_PLAN.md) and the audits in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md); the testing recipes and traps are in
 [UI_TEST_ENV.md](UI_TEST_ENV.md). The architecture status remains **proposed** until the owner freezes it — the technical
 preconditions (rendering bridge, picking, teardown, four platforms, assert-enabled run, performance baseline) are met. This
-roadmap describes planned work: Phases 1 and 2 are recorded as verified above, and Phases 2.5–9 have not started.
+roadmap describes planned work: Phases 1 and 2 are recorded as verified above, Phase 2.5 is under way with its
+first deliverable (the parity matrix) delivered, and its remaining deliverables as well as Phases 3–9 have not started.

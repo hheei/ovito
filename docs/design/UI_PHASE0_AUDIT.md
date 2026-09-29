@@ -198,8 +198,10 @@ pipeline view (Phase 4) and a settings facade. The viewport renderer is a shared
 Qt Quick frontend a renderer selection and a recovery path where it previously hardcoded one renderer, and leaves the
 per-viewport window bookkeeping with each frontend on purpose. What remains of the work plan is A4 (one offscreen
 rendering service for render output, ambient-occlusion sampling and picking buffers), A3 (one asynchronous pick API for
-both frontends) and the small parity gaps (among them the Qt Quick session commands that bind to D28). Windows/D3D12
-still has no test host (see the Phase 1 report).
+both frontends) and the small parity gaps (among them the Qt Quick session commands that bind to D28). The Windows/D3D12
+cross-API gate is closed: the Qt Quick frontend picks and lays out identically on Windows on real hardware and through the
+WARP software rasterizer (Phase 1 report, section 3.5), so only the RADV/DRI3 and mixed-DPI cases remain unverified by
+environment (see [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md) section 6).
 
 ## 4. Changes to Existing Code Made Under This Audit
 
@@ -250,6 +252,178 @@ All of these are subject to the regression checks in [UI_PHASE1_SPIKE.md](UI_PHA
 | O10 | A QtWidgets frontend test run must not be automated in a headless environment without suppressing the interactive import dialog: `MainWindowUI::importFiles()` shows a modal importer dialog (and asks about the import mode when the scene is non-empty), so an unattended run renders an *empty* scene. The recipes and the temporary benchmark instrumentation are recorded in [UI_TEST_ENV.md](UI_TEST_ENV.md) sections 3.1 and 7. | Testing |
 | O11 | ~~`QuickViewportRenderer::renderFrameGraph()` (~100 lines) replays the pass sequence of `RenderThread::renderFrameGraph()` a second time.~~ **Resolved in Phase 2** — the sequence is `FrameGraphRenderPass` (D24) and both renderers only describe their target and their additions to the pass. (Original wording kept for the record:) `finalizeForRendering()`, `createImplementationForVisual()`, `renderFrame()`, `prepareIntermediateTarget()`, `prepareResourceUpdates()`, `performPrePasses()`, `beginPass()` with the full-viewport scissor workaround, `compositeInPass()`, `endPass()` and the `OverLayer`/post-process pass. Every change to that ordering in the core render thread must be mirrored by hand in the Qt Quick renderer; the pick radius (4) duplicates the default of the classic `RenderTarget::requestPick()` in the same way. Together with O7 this points at one core helper — a frame-graph renderer over a `RendererService*` plus a `PickingBufferTarget` — shared by both frontends' render paths. | Phase 2 |
 | O4 | ~~Each QML viewport item owns its own `RendererService` state (`RendererResourceCache`, `ObjectIdAllocator`, pipeline cache).~~ **Adopted in Phase 2** (D23): the items of a window share one service owned by the window. Measured on Linux/OpenGL with four viewports at 1280×800 and `QSG_NO_VSYNC=1` (medians of three runs): 512 atoms 64.0 → 114.0 fps (threaded loop) and 118.0 → 175.5 fps (basic loop); 32768 atoms 19.5 → 22.5 fps and 38.5 → 44.5 fps. The gain at low atom counts is the fixed per-frame cost of four viewports, which each item used to pay on its own. | Resolved |
-| O5 | The full action/editor inventory and the expanded parity matrix required by the remaining Phase 0 deliverables are still pending. | Phase 0 |
+| O5 | ~~The full action/editor inventory and the expanded parity matrix required by the remaining Phase 0 deliverables are still pending.~~ **Resolved in Phase 2.5** (deliverable 1): the inventory is section 6 of this document and the matrix is [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md), which carries a state and a phase per capability plus the acceptance case and the fixture list. Writing it also settled scope questions the plan had left open (the 20 commands that still need a QML handler, the fact that A7 has to be measured against the 84 audited editors instead of "all fields", and the six editor archetypes of Phase 6) and found defect F17, which is fixed. | Resolved |
 | O6 | ~~The frontend-neutral application class and `--gui=qml` (D3) are unimplemented.~~ **Resolved in Phase 2** — `ovito --gui=qml` starts the Qt Quick workbench and `ovito --gui=qt-widgets` (or plain `ovito`) the classic one, selected through the registry of D15. | Resolved |
 | O12 | ~~The QML workbench has no file selection UI and no progress display.~~ **Resolved in Phase 2** (deliverable 5): the shell has a file dialog (`Ctrl+O`) and accepts drops onto the window, the status bar shows the progress of the running operations with a Cancel command, failures are reported in a message dialog, and a canceled import removes its half-loaded pipeline (D19-D22). | Resolved |
+
+## 6. Action, Editor and Control Inventory (Phase 0 deliverables 1, 3 and 4)
+
+This section is the "which control exists where" map that the parity matrix
+([UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md)) is built on. It records what the classic frontend has, where it lives and in
+which layer it already resides, because that decides whether the Qt Quick frontend needs a shared extraction, a new
+implementation, or nothing. Every count is reproducible with the command quoted next to it.
+
+### 6.1 Commands: the 76 action ids
+
+`gui/base/actions/ActionManager.h` declares 76 `ACTION_*` ids; they are not 76 commands. Grouping them by who creates them
+and who handles them is what decides the QML work:
+
+| # | Group | Count | Created by | Handled by | State in the Qt Quick frontend |
+|---|---|---|---|---|---|
+| 1 | Shared command, shared handler | 23 | `ActionManager` (gui/base) | gui/base: 12 `connect(getCommand(...))` sites, the undo-stack wiring (3), the playback mirror (1), the auto-key-mode wiring (1), and the 6 viewport-mode commands, which act through `ViewportModeCommand` | works today; exercised by `--qml-command-check` |
+| 2 | Shared command, desktop-only handler | 20 | `ActionManager` (gui/base) | `WidgetActionManager` (gui/desktop) | the command exists and is visible, triggering it does nothing: each needs a QML handler or a disabled placeholder |
+| 3 | Desktop-created command | 4 | `WidgetActionManager` | same file and the panels | not visible to QML at all: the two XForm modes (Phase 5) and snippet import/export (Phase 4) |
+| 4 | Panel command | 19 | `PipelineListModel` (8), `ModifyCommandPage` (1), `OverlayCommandPage` (5), `CommandPanel` (4), `SearchActions` (1) | the panel that creates it | arrives with its panel (Phase 4 pipeline and layer panels, Phase 8 command search) |
+| 5 | Vestigial scripting id | 10 | nobody | — | nothing to port (see below) |
+
+* **Group 1 (23)**: `EditUndo`, `EditRedo`, `EditClearUndoStack`, `EditDelete`, `ViewportMaximize`, the four
+  `ViewportZoom*Extents*`, `AnimationGoto{Start,End,PreviousFrame,NextFrame}`, `Animation{Start,Stop}Playback`,
+  `AnimationTogglePlayback`, `AnimationToggleRecording` and the six viewport-mode commands (`SelectionMode`,
+  `ViewportZoom`, `ViewportPan`, `ViewportOrbit`, `ViewportFOV`, `ViewportOrbitPickCenter`). The QML spike verifies undo and
+  redo state, `EditDelete` enablement, `ViewportMaximize` through the shared handler, the viewport modes through
+  `ViewportModeCommand`, and the playback command starting and stopping playback.
+* **Group 2 (20)**: `Quit`, `File{Open,Save,SaveAs,Import,RemoteImport,Export,NewWindow}`,
+  `Help{About,ShowOnlineHelp,ShowScriptingReference,SystemInfo,RequestFeature}`, `Settings`, `AnimationSettings`,
+  `RenderActiveViewport`, `ConfigureViewportGraphics`, `ClonePipeline`, `RenamePipeline`, `NewPipeline.FileSource`. Each
+  handler is a `WidgetActionManager` slot that opens a QtWidgets dialog or calls a desktop service. This is the exact reason
+  the QML shell sees 43 of the 76 commands but can act on 23 of them.
+* **Group 5 (10)**: `ScriptingRunFile`, `ScriptingGenerateCode` and the eight `ScriptingShowExtensionsGallery*` ids are
+  declared and never registered. The File menu adds the two scripting entries only when they exist
+  (`MainWindow.cpp:328`, `:330`, both through `findAction`), so a classic build shows no such entries — the Python-based GUI
+  integration is not part of this tree. Three other call sites (`AvailableModifiersSelectorWidget::onGetMoreModifiersFromPopup`,
+  `AvailableOverlaysSelectorWidget::onGetMoreLayersFromPopup`, `UtilityCommandPage::onOpenUtility`) used the **asserting**
+  `getAction()` for gallery ids that are never registered: with `NDEBUG` they open the ovito.org extensions page as a
+  fallback, in an assert-enabled build they trip the assertion inside `ActionManager::getAction()`. Recorded as defect F17
+  and fixed here by calling `findAction()` at those three sites, which is what `MainWindow.cpp` does.
+  `ACTION_NEW_PIPELINE_PYTHON_SOURCE` and `ACTION_NEW_PIPELINE_LAMMPS_SCRIPT_SOURCE` are in the same state and are the
+  placeholders of the newer pipeline types.
+
+### 6.2 Property editors and parameter controls
+
+84 classes derive from `PropertiesEditor` (`grep -rl 'public PropertiesEditor' src/ovito --include='*.h'`) and 115
+`SET_OVITO_OBJECT_EDITOR` registrations cover 114 distinct object classes; `DefaultPropertiesEditor` is registered for
+`RefTarget` itself and is the fallback. By module: particles 31, stdmod 22, gui/desktop 12, stdobj 7, crystalanalysis 6,
+grid 2, and one each for mesh, oxdna, correlation and vorotop. Six classes that end in `Modifier` have no editor — four are
+abstract bases (`DelegatingModifier`, `MultiDelegatingModifier`, `ReferenceConfigurationModifier`,
+`StructureIdentificationModifier`) and are covered through their subclasses, one is a delegate base
+(`GenericPropertyModifier`), and one is a concrete object without any editor (see below).
+
+The control vocabulary is 26 `*ParameterUI` classes in `gui/desktop/properties/`: `ParameterUI` and `PropertyParameterUI`
+(the bases), `NumericalParameterUI`, `FloatParameterUI`, `IntegerParameterUI`, `IntegerCheckBoxParameterUI`,
+`IntegerRadioButtonParameterUI`, `BooleanParameterUI`, `BooleanGroupBoxParameterUI`,
+`BooleanRadioButtonParameterUI`, `BooleanActionParameterUI`, `ColorParameterUI`, `StringParameterUI`, `FilenameParameterUI`,
+`FontParameterUI`, `VectorParameterUI`, `AffineTransformationParameterUI`, `VariantComboBoxParameterUI`,
+`DataObjectReferenceParameterUI`, `RefTargetListParameterUI`, `SubObjectParameterUI`, `ModifierDelegateParameterUI`,
+`ModifierDelegateFixedListParameterUI`, `ModifierDelegateVariableListParameterUI`, `PipelineSelectionParameterUI`,
+`CustomParameterUI`, plus non-editor helpers (`ObjectStatusDisplay`, `OpenDataInspectorButton`).
+`stdobj/gui/widgets/PropertyReferenceParameterUI.h` adds the property chooser.
+
+**The classic frontend has no reflection fallback.** `DefaultPropertiesEditor` only re-opens the sub-editors of reference
+fields flagged `PROPERTY_FIELD_OPEN_SUBEDITOR`; it never enumerates scalar fields, and no code under `gui/` iterates
+`propertyFields()` to build controls (`grep -rn 'propertyFields()' src/ovito/gui src/ovito/*/gui` returns that loop plus two
+special cases in `AnimationTrackBar` and `ColorLegendOverlayEditor`). A parameter is editable in the classic frontend only
+because an editor class asks for it, which has two consequences for the migration:
+
+1. The QML field model and generic editor (A7) must be measured against the **audited editors** — the 84 classes and the
+   fields they request — not against "all fields of all classes". The latter is a superset of what the classic frontend
+   offers, and one concrete case exists where it is: `CoordinationPolyhedraModifier` (derived directly from `Modifier`) has
+   no editor, so its `transferParticleProperties` field is not editable in the classic frontend at all.
+2. What the editors do *besides* scalar fields is a closed list, and it is the list of specialized QML editors:
+
+| Pattern | Example | QML phase |
+|---|---|---|
+| Button that calls a core API | Slice "Center in simulation cell", color coding "Export color scale" | 6 |
+| Table of sub-objects with per-row color/enable | `StructureListParameterUI` (structure types of CNA/PTM) | 6 |
+| Chooser for a delegate or a property class | `ModifierDelegateParameterUI`, `PropertyReferenceParameterUI` | 4, 6 |
+| Chooser with a preview and non-scalar values | the color gradient list (image and table gradients included) | 6 |
+| Dependent enablement between controls | the CNA cutoff fields are enabled only in "fixed cutoff" mode | 4 (field dependency) |
+| Widget showing computed results | `ObjectStatusDisplay` ("N structures identified") | 6 |
+| Two-dimensional layout with labels and units | every numerical editor (`FloatParameterUI::label()`) | 4 |
+| Visualization tied to the edited object | the `ViewportGizmo` users of §6.4 | 5, 6 |
+
+### 6.3 The four audited specialized editors (deliverable 4)
+
+The Phase 0 deliverable asked for fields and actions of a slice, a structure-identification, a color-coding and a PTM
+editor. All four exist and are ordinary layouts of the controls above; the difference between them is which non-field
+pattern they use.
+
+| Modifier | Editor | Controls | Coverable by the generic field model | Needs a specialized QML editor |
+|---|---|---|---|---|
+| `SliceModifier` | `stdmod/gui/SliceModifierEditor` | `FloatParameterUI(distanceController)`, `VectorParameterUI(normalController)` (3 components), reduced-coordinates radio pair with unit conversion, `widthController`, four booleans, "Center in simulation cell" button, `ViewportGizmo` for the plane and a viewport overlay | the numerics (they are **Controller** fields: animatable, with units and bounds) and the booleans | the radio pair with unit conversion, the action button, the plane gizmo and the overlay |
+| `CommonNeighborAnalysisModifier` | `particles/gui/modifier/analysis/cna/CommonNeighborAnalysisModifierEditor` | `IntegerRadioButtonParameterUI` with four modes, `FloatParameterUI(cutoffRadiusController)`, the `CutoffRadiusPresetsUI` combo (material presets), two booleans, `ObjectStatusDisplay`, `StructureListParameterUI` table | mode enum, cutoff number, booleans | per-mode enablement of the cutoff controls, the presets combo, the status widget, the structure table |
+| `ColorCodingModifier` | `stdmod/gui/ColorCodingModifierEditor` | `ModifierDelegateParameterUI`, `PropertyReferenceParameterUI`, gradient combo with preview, start/end `FloatParameterUI`, auto-adjust boolean, "Export color scale" button, color-legend overlay toggle, image/table gradient loading | the two numbers, the boolean, the property name behind the chooser | both choosers, the gradient chooser with its preview and its image/table variants, the export button |
+| `PolyhedralTemplateMatchingModifier` | `particles/gui/modifier/analysis/ptm/PolyhedralTemplateMatchingModifierEditor` | `FloatParameterUI(RMSD cutoff)`, two booleans, five output booleans in a group box, `StructureListParameterUI` table | all eight booleans and the number | the structure table (and group boxes as layout, not as behavior) |
+
+Conclusion for Phase 6: six editor archetypes cover the audited ground — the generic field editor (A7) plus a numeric
+field with controller/unit/bounds semantics, a radio group with dependents, a sub-object table with per-row color and
+enable, a class/property chooser, a gradient chooser with preview, and an action/status row. Everything else in the 84
+editors is a layout of those.
+
+### 6.4 Viewport input modes and gizmos
+
+`BaseViewportWindow` forwards mouse and key input to the mode stack of the `ViewportInputManager`, which is already shared
+(`gui/base/viewport/ViewportInputManager.h`). Of the eight modes, six are in `gui/base` and work in both frontends today
+(`SelectionMode`, the four `NavigationMode`s Zoom/Pan/Orbit/FOV, `PickOrbitCenterMode`); two are desktop-only and are Phase
+5 work (`XFormMode` with its Move/Rotate subclasses, `MoveOverlayInputMode` for dragging overlay labels).
+
+Three classes are `ViewportGizmo` users: `NavigationModes` (rotation feedback, shared), `SliceModifierEditor` (the
+draggable slice plane) and `ManualSelectionModifierEditor` (the rubber-band selection). The latter two are Phase 6
+specialized work — they are the "visualization tied to the edited object" row of §6.2.
+
+### 6.5 Viewport layers (overlays)
+
+Three overlay types exist and each has a desktop editor: `CoordinateTripodOverlay`, `TextLabelOverlay`
+(`gui/desktop/viewport/overlays/`) and `ColorLegendOverlay` (`stdmod/gui/ColorLegendOverlayEditor`). The layer list model
+that feeds the panel (`gui/base/mainwin/OverlayListModel.h`, `OverlayListItem.h`) and the layer templates
+(`gui/base/mainwin/templates/OverlayTemplates.h`) are already shared, so the QML layer panel is a Phase 4 binding of shared
+data plus those three editors.
+
+### 6.6 Panels, dialogs and widgets
+
+`gui/desktop/dialogs/` holds 28 headers, 18 of them dialog classes: `AdjustViewDialog`, `AnimationKeyEditorDialog`,
+`AnimationSettingsDialog`, `ApplicationSettingsDialog`, `ClonePipelineDialog`, `ConfigureViewportGraphicsDialog`,
+`CopyPipelineItemDialog`, `ExportObjectSnippetDialog`, `FileExporterSettingsDialog`, `FontSelectionDialog`,
+`HistoryFileDialog`, `ImportFileDialog`, `ImportObjectSnippetDialog`, `ImportRemoteFileDialog`, `LoadImageFileDialog`,
+`MessageDialog`, `ModalPropertiesEditorDialog`, `NewGraphicsSystemDialog`, `RemoteAuthenticationDialog`,
+`SaveImageFileDialog`, `SystemInformationDialog`, `UpdateNotificationDialog`, plus the settings and template pages
+(`FFmpegSettingsPage`, `GeneralSettingsPage`, `ViewportSettingsPage`, `ModifierTemplatesPage`, `OverlayTemplatesPage`,
+`TemplatesPageBase`).
+
+The main window is assembled from `ViewportsPanel`, `DataInspectorPanel`, the command panel with its four pages
+(`ModifyCommandPage`, `RenderCommandPage`, `OverlayCommandPage`, `UtilityCommandPage`, driven by `UtilityListModel` and the
+selector widgets), `TaskDisplayWidget`, `StatusBar`, `CoordinateDisplayWidget`, `StatusWidget`, the animation widgets
+(`AnimationTimeSlider`, `AnimationTrackBar`, `AnimationTimeSpinner`) and `FrameBufferWindow`/`FrameBufferWidget` for render
+output. `widgets/general/` contributes 18 reusable QtWidgets (`SpinnerWidget`, `ColorPickerWidget`, `AutocompleteLineEdit`,
+`ElidedTextLabel`, `RolloutContainer`, …) that the Qt Quick frontend replaces with Qt Quick Controls rather than ports.
+`gui/desktop/widgets/terminal/{TerminalWidget,TerminalBackend}` is not instantiated anywhere in this tree: the integrated
+SSH client (`OVITO_BUILD_SSH_CLIENT`, off by default) is not built here, so remote import is a feature the frontends
+inherit rather than something the QML shell has to reach parity with now.
+
+### 6.7 Data inspector
+
+The panel is `DataInspectorPanel` with the `DataInspectionApplet` base and five applets: `PropertyInspectionApplet` and
+`TypesInspectionApplet` (stdobj), `SimulationCellInspectionApplet` (stdobj), `GlobalAttributesInspectionApplet`
+(gui/desktop) and `DislocationInspectionApplet` (crystalanalysis). The panel is fed by the selected object and the applets
+declare which classes they can show, so the QML data inspector is Phase 7 work over the same applet contract.
+
+### 6.8 Utilities and templates
+
+The Utilities page has no fixed list: `UtilityListModel` enumerates
+`PluginManager::instance().metaclassMembers<UtilityObject>()` (plus the "Get more extensions" item), which is why the QML
+counterpart must enumerate the same registry instead of naming utilities. The object, modifier and overlay templates
+(`gui/base/mainwin/templates/`) are already shared with the classical command panel, and the modifier chooser
+(`AvailableModifiersModel`, `AvailableOverlaysModel`) is shared as well.
+
+### 6.9 What this inventory settles
+
+* The **shared half of the command layer is bigger than the visible half**: 43 command ids reach QML, 23 of them also act.
+  The remaining 20 are the concrete list of handlers the shell still needs (or must show as disabled placeholders), and each
+  of them is a dialog or a desktop service — never shared logic.
+* **A7's scope is the audited editors, not reflection over all fields.** The generic QML editor can be complete for the
+  fields the 84 audited editors request; objects without an editor expose nothing in either frontend until someone authors
+  an editor.
+* **Phase 6 needs six editor archetypes, not 84 ports.** The four audited specialized editors of §6.3 use four of them; the
+  rest of the catalog is layout.
+* **Two features are not parity gaps**: the scripting ids of group 5 have no implementation in this tree, and the SSH
+  terminal/remote import is an optional, currently unbuilt feature.
+* Defect **F17** (three `getAction()` lookups of never-registered gallery ids) is fixed as part of this inventory.

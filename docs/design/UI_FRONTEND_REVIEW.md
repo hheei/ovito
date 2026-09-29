@@ -356,6 +356,12 @@ frontends instead of inventing a second icon language.
 
 ## 5. (C) Not implemented yet — the parity gap as of this review
 
+**Superseded as the normative list**: Phase 2.5 deliverable 1 turned this section into
+[UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md), which gives every capability a state, a phase and an acceptance case, and which is
+what the later phases are measured against. The section below is kept as the review-time snapshot (including its wording
+about what is scheduled and what is out of scope), so that the difference between the review's view and the plan's
+resolution stays visible.
+
 Scheduled in UI_PLAN.md (phases 3–7): pipeline list (the model already exists in gui/base and needs only a QML
 wrapper), parameter inspector + specialized editors, timeline/keyframes/animation, render settings and render output,
 data inspector, command panel / modifier library, viewport toolbar with view modes and zoom actions, viewport
@@ -415,7 +421,9 @@ Open candidates, each with the measurement that must decide it:
 **Where this landed.** The remaining items of this review are collected as **Phase 2.5** of
 [UI_PLAN.md](UI_PLAN.md): A4, A8 and A9, the finish of the Phase 0 inventory, and the four small gaps — one phase that is
 about removing differences rather than adding features. A3, A6 and A7 are explicitly assigned to Phases 5, 7 and 4 there,
-because each of them changes semantics that those phases are already touching.
+because each of them changes semantics that those phases are already touching. The per-capability list behind that mapping
+is [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md) (Phase 2.5 deliverable 1), which also records the acceptance case of every
+row.
 
 **State of every item.** Each review item is in exactly one state, and this table is what Phase 2.5's exit gate re-checks:
 
