@@ -431,6 +431,10 @@ jobs:
         shell: pwsh
         env:
           QSG_RHI_PREFER_SOFTWARE_RENDERER: '1'
+          # Qt writes its messages to the debugger instead of to a redirected stderr on Windows, which is why the step
+          # below - and the earlier runs of this job - showed no output at all. Force the messages to stderr so the
+          # failing checks of the spike appear in the log.
+          QT_FORCE_STDERR_LOGGING: '1'
         run: |
           # OVITO's build tree contains a qt.conf that points at a plugins/ directory - the layout of an installed
           # package. Qt's own plugins and its QML modules therefore have to be pointed at explicitly, or the
@@ -485,6 +489,10 @@ jobs:
               -RedirectStandardOutput $spikeOutput -RedirectStandardError $spikeError
           Write-Host "--- output of the spike ---"
           Get-Content $spikeOutput, $spikeError -ErrorAction SilentlyContinue
+          if((-not (Test-Path $spikeOutput) -or (Get-Item $spikeOutput).Length -eq 0) -and
+             (-not (Test-Path $spikeError) -or (Get-Item $spikeError).Length -eq 0)) {
+            Write-Host "The spike produced no output at all - see QT_FORCE_STDERR_LOGGING in the environment of this step"
+          }
           if($spike.ExitCode -ne 0) {
             throw "The Qt Quick smoke test failed with exit code $($spike.ExitCode)"
           }
