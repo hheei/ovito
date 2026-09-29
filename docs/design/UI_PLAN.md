@@ -10,10 +10,12 @@
 > picking core are in the tree and verified on Linux/OpenGL and macOS/Metal, see
 > [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) and [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md).
 > The comparison against the classic frontend, the duplication it identifies and the abstractions it proposes are
-> collected in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md); of those, the command layer (A1) is implemented (audit
-> decision D26) and the workbench state models (A5) are largely implemented (D27: the recent files list and the shared
-> task progress model; D28: the session workflow). What remains of A5 - the Qt Quick session commands, a selection model
-> and a settings facade - should follow **before** the pipeline and inspector work of Phases 4 and 6.
+> collected in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md); of those, the command layer (A1, audit decision D26),
+> the workbench state models (A5: D27 the recent files list and the shared task progress model, D28 the session
+> workflow) and the shared viewport renderer service (A2, D29) are implemented. The remaining review items are A4
+> (one offscreen rendering service for render output, AO sampling and picking buffers), A3 (one asynchronous pick API
+> used by both frontends) and the small UX gaps, followed by the rest of A5 (the Qt Quick session commands, a selection
+> model and a settings facade) **before** the pipeline and inspector work of Phases 4 and 6.
 >
 > **Design Contract**: [UI_DESIGN.md](UI_DESIGN.md)
 

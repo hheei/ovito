@@ -181,7 +181,7 @@ from the desktop command panel, which the QML frontend does not have yet, and fr
 `PipelineListModel`). The QtWidgets side is unaffected: `getAction()` still returns the `QAction` for menu/toolbar
 insertion, and the 36 handler connects were re-targeted without a signature change.
 
-### A2 — Viewport window management (P1, ~2–3 days)
+### A2 — Viewport window management (P1, ~2–3 days) — *implemented, in reduced form*
 
 **Evidence.** Per-viewport window lifecycle exists twice:
 `ViewportsPanel::createViewportWindows()` / `setInteractiveViewportRendererForAllWindows()` /
@@ -196,6 +196,31 @@ layout cells and window objects. Desktop implements it with `QWidget` containers
 
 **Payoff.** The trickiest frontend rules (renderer assignment before first frame graph, resource release on hide,
 never destroying a window from within a QML callback) live in one place instead of two.
+
+**What was implemented (and what was not).** The forced window-manager abstraction was *rejected* during
+implementation: the two frontends do not create comparable window objects (the desktop puts a `QWindow` created by
+`RenderThread` into a `QWidget` container inside the delicate, well-tested `ViewportsPanel`; the Qt Quick frontend
+creates items that `QmlViewportLayout` positions inside pane delegates). Forcing both through one factory would have
+added a framework, not removed duplication. The genuinely frontend-neutral part was extracted instead:
+
+* `ViewportRendererRegistry` (`gui/base/viewport/`) owns the interactive-renderer logic that used to be private to
+  `GuiApplication`: `availableRenderers()`, `selectedRendererId()` (`OVITO_VIEWPORT_RENDERER` overriding the
+  `rendering/selected_graphics_api` setting), `setSelectedRendererId()`, `revertToDefaultRenderer()`,
+  `renderer()` and `saveRendererSettings()`, plus the `rendererSelectionChanged()` signal. Both frontends consume it,
+  and `GuiApplication`'s five renderer members and its `_viewportRenderers` cache are gone;
+  `ConfigureViewportGraphicsDialog` switches the renderer for every viewport by writing the selection and letting the
+  registry notify the viewport panels.
+* The registry falls back to the default renderer when the selected implementation is unavailable (a removed plugin,
+  settings copied from another installation) instead of leaving the viewports blank, and it answers both frontends.
+* The Qt Quick frontend now has renderer selection *and* failure recovery, which it previously lacked entirely: the
+  controller takes its renderer from the registry, follows `rendererSelectionChanged`, and reverts to the default
+  renderer when a `ViewportWindow::fatalError` arrives (reporting the error once, and reporting the additional
+  "critical problem" message only when the default renderer is already in use, mirroring `ViewportsPanel`).
+* The per-viewport window *bookkeeping* stays where it is: `ViewportsPanel` keeps its `_windowCreationErrorOccurred`
+  state machine and its window list, and `QmlViewportController`/`QmlViewportLayout` keep the item-per-pane rule.
+  Re-creating a viewport item after a fatal error is unnecessary in the Qt Quick frontend because the items live in
+  the scene graph and not behind a render-thread window; Phase 4's insert/delete-viewport work is where the remaining
+  overlap (creating and tearing down a viewport's window as the layout changes) will be unified.
 
 ### A3 — One asynchronous pick API (P1, ~2–4 days, touches core)
 

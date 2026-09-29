@@ -184,6 +184,42 @@ Options when automating the classic frontend:
 2. Apply the temporary instrumentation in §6, which skips that dialog when `OVITO_BENCHMARK_FRAMES` is set, and *verify*
    that the data was loaded (the instrumentation prints the number of scene pipelines; a blocked import prints `0`).
 
+### 3.2 Getting the classic GUI past its first-run dialogs (and exercising the viewport path)
+
+An unattended classic run spends its life behind two dialogs, and since neither `xdotool` nor `xte` is installed there
+is nothing to click them away:
+
+* the **first-run "new graphics system" dialog** (`NewGraphicsSystemService::applicationStarting()`, shown while
+  `QSettings` lacks `viewport/adapter_setup_done`). Without it the main window is created but the viewport windows are
+  never built — which is harmless for a startup smoke test, but it means an "empty grey viewport area" in a screenshot
+  proves nothing about the viewport code;
+* the **import dialog** of §3.1, and on this machine the Vulkan error dialog (§3) that follows a failed onscreen render
+  target.
+
+Write the settings key yourself to skip the first one, and keep the test's settings in their own directory so a test run
+cannot rotate the developer's recent-files list or renderer selection:
+
+```bash
+mkdir -p /tmp/ovito-cfg/Ovito
+printf 'viewport\\adapter_setup_done=true\n' > /tmp/ovito-cfg/Ovito/Ovito.conf
+XDG_CONFIG_HOME=/tmp/ovito-cfg QT_QPA_PLATFORM=xcb xvfb-run -a --server-args='-screen 0 1400x900x24' ./build-native/bin/ovito
+```
+
+With that, the classic frontend creates its four viewport windows, assigns the interactive renderer from
+`ViewportRendererRegistry` and - on a box without DRI3 - ends up in the renderer-failure path it has always had
+("Failed to create render pass descriptor for onscreen render target."). That is the expected outcome under Xvfb, and it
+is the cheapest way to check that a change to the renderer selection did not break the classic window creation.
+
+Related trap: the interactive renderer selection is stored in `QSettings`
+(`rendering/selected_graphics_api`, overridden by `OVITO_VIEWPORT_RENDERER`). A test can therefore switch the renderer
+without touching the settings:
+
+```bash
+# An implementation that this build does not provide: the registry must fall back to the default renderer and warn
+OVITO_VIEWPORT_RENDERER=anari ./build-native/bin/ovito-qml-spike --qml-pick 200,200 /tmp/lattice.xyz
+# -> 'The selected interactive viewport renderer "anari" is not available in this build; using the default renderer instead.'
+```
+
 ---
 
 ## 4. Assertion-enabled builds on this machine
@@ -637,6 +673,10 @@ Traps:
 * **`enabled` needs a NOTIFY signal.** The QML bindings (`Shortcut.enabled`) only follow the command state if
   `Command::changed()` is emitted for every property, which is why the command has a single `changed()` signal that
   serves as the NOTIFY of all of its properties.
+* **The playback command cannot be probed in a static scene.** Checking the "Play Animation" command only starts the
+  playback if the animation interval holds more than one frame (`SceneAnimationPlayback::startAnimationPlayback` refuses
+  a single-frame scene), so the check imports a small trajectory of its own when the workbench shows a static structure -
+  otherwise a healthy command is reported as broken just because the test data has one frame.
 
 ## 10. Quick checklist
 
