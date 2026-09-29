@@ -6,6 +6,7 @@
 #include <ovito/core/viewport/Viewport.h>
 #include <ovito/core/viewport/ViewportConfiguration.h>
 #include <ovito/core/rendering/FrameBuffer.h>
+#include <ovito/core/rendering/OffscreenRenderTarget.h>
 #include <ovito/core/rendering/SceneRenderer.h>
 #include <ovito/core/utilities/concurrent/ObjectExecutor.h>
 #include "WidgetViewportWindow.h"
@@ -199,9 +200,9 @@ Future<QImage> WidgetViewportWindow::grabViewportImage()
 	co_await ExecutorAwaiter(DeferredObjectExecutor(this));
 
 	// Grab the frame graph of the last displayed frame. Keep a copy in _lastFrameGraph so
-	// repeated grabs remain possible (renderOffscreenFrame() consumes the OORef we pass it).
+	// repeated grabs remain possible (the offscreen pass consumes the OORef we pass it).
 	OORef<FrameGraph> frameGraph = _lastFrameGraph;
-	if(!frameGraph || !sceneRenderer() || !ui().renderThread())
+	if(!frameGraph || !sceneRenderer())
 		co_return QImage();
 
 	this_task::get()->setUserInterface(ui().shared_from_this());
@@ -212,13 +213,12 @@ Future<QImage> WidgetViewportWindow::grabViewportImage()
 	if(size.isEmpty())
 		co_return QImage();
 
-	// Reuse OVITO's offscreen render-to-image infrastructure.
-	RenderTarget renderTarget = ui().renderThread()->createOffscreenTarget(size);
+	// Render into a local offscreen target of the shared render thread. It is deliberately not kept between grabs,
+	// because holding it would keep the render thread (and the graphics device) alive.
+	OffscreenRenderTarget renderTarget(ui(), OffscreenRenderTarget::Kind::Visual);
 	auto frameBuffer = std::make_shared<FrameBuffer>(size);
-
-	auto rendererConfig = sceneRenderer()->createConfiguration(*frameGraph);
-	co_await FutureAwaiter(ObjectExecutor(this), renderTarget.renderOffscreenFrame(
-		std::move(frameGraph), std::move(rendererConfig), frameBuffer, TaskProgress::Ignore));
+	co_await FutureAwaiter(ObjectExecutor(this), renderTarget.renderImage(
+		std::move(frameGraph), *sceneRenderer(), frameBuffer, TaskProgress::Ignore));
 
 	co_return frameBuffer->image();
 }

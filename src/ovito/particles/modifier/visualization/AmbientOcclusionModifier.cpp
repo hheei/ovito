@@ -10,8 +10,8 @@
 #include <ovito/core/utilities/units/UnitsManager.h>
 #include <ovito/core/rendering/FrameBuffer.h>
 #include <ovito/core/rendering/FrameGraph.h>
+#include <ovito/core/rendering/OffscreenRenderTarget.h>
 #include <ovito/core/rendering/standard/StandardRenderer.h>
-#include <ovito/core/rendering/RenderThread.h>
 #include "AmbientOcclusionModifier.h"
 
 namespace Ovito {
@@ -141,8 +141,12 @@ Future<ConstDataBufferPtr> AmbientOcclusionModifier::computeAmbientOcclusion(Dat
     // Continue execution in the main thread in order to access the global RenderThread.
     co_await ExecutorAwaiter(ObjectExecutor(this));
 
-    // Request an AO sampling frame buffer of the right size from the RenderThread.
-    RenderTarget renderTarget = this_task::ui()->renderThread()->createOffscreenTarget(QSize(resolution, resolution), true);
+    // Request an AO sampling target of the right size from the shared render thread. The offscreen target is created
+    // on the first sampling pass and reused by all of them, no matter which thread the passes are submitted from. The
+    // sampling loop below runs on a worker thread, which may not allocate an offscreen target, so the target is
+    // allocated here while this coroutine is still on the main thread.
+    OffscreenRenderTarget renderTarget(*this_task::ui(), OffscreenRenderTarget::Kind::PickingOnly);
+    renderTarget.prepare(QSize(resolution, resolution));
 
     // Create a frame graph that can be submitted to the RenderThread for offscreen rendering.
     OORef<FrameGraph> frameGraph = OORef<FrameGraph>::create(
@@ -204,8 +208,9 @@ Future<ConstDataBufferPtr> AmbientOcclusionModifier::computeAmbientOcclusion(Dat
         projParams.validityInterval = TimeInterval::infinite();
         frameGraph->setProjectionParams(projParams);
 
-        // Render the current view to the frame buffer.
-        auto [objectIdBuffer, primitiveIdBuffer] = co_await FutureAwaiter(ThreadPoolExecutor(), renderTarget.renderAOFrame(frameGraph));
+        // Render the current view into the target's ID buffers.
+        auto [objectIdBuffer, primitiveIdBuffer] = co_await FutureAwaiter(ThreadPoolExecutor(),
+            renderTarget.renderAmbientOcclusion(frameGraph, QSize(resolution, resolution)));
 
         // Extract brightness values from rendered image.
         OVITO_ASSERT(objectIdBuffer.size() == resolution * resolution * 4);

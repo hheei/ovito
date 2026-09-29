@@ -7,7 +7,7 @@
 #include <ovito/gui/qml/QmlFrontend.h>
 #include <ovito/gui/base/viewport/BaseViewportWindow.h>
 #include <ovito/core/rendering/ObjectPickingBuffer.h>
-#include <ovito/core/rendering/RenderThread.h>
+#include <ovito/core/rendering/OffscreenRenderTarget.h>
 
 namespace Ovito {
 
@@ -139,11 +139,9 @@ private:
     /// Watches the asynchronous picking pass rendering.
     FutureWatcher<Future<ObjectPickingBuffer>> _pickingBufferWatcher;
 
-    /// The offscreen render target the picking passes are rendered into. Created on demand.
-    std::optional<RenderTarget> _pickingTarget;
-
-    /// The size the current picking render target was created for.
-    QSize _pickingTargetSize;
+    /// The offscreen render target the picking passes are rendered into. Created on demand, and recreated by the
+    /// render target itself when the viewport changed size, because the object under a pixel depends on the resolution.
+    std::optional<OffscreenRenderTarget> _pickingTarget;
 
     /// Indicates that the cached picking buffer no longer matches the viewport contents.
     bool _pickingBufferStale = true;

@@ -5,7 +5,7 @@
 #include <ovito/core/rendering/SceneRenderer.h>
 #include <ovito/core/rendering/FrameBuffer.h>
 #include <ovito/core/rendering/FrameGraph.h>
-#include <ovito/core/rendering/RenderThread.h>
+#include <ovito/core/rendering/OffscreenRenderTarget.h>
 #include <ovito/core/rendering/standard/StandardRenderer.h>
 #include <ovito/core/utilities/units/UnitsManager.h>
 #include <ovito/core/utilities/io/video/VideoEncoder.h>
@@ -253,7 +253,7 @@ ScopedFuture<void> RenderSettings::render(const std::vector<std::pair<Viewport*,
     // Per viewport data.
     struct ViewportRenderingData {
         OORef<Viewport> viewport;
-        RenderTarget renderTarget;
+        OffscreenRenderTarget renderTarget;
         QRect destinationRect;
     };
 
@@ -267,11 +267,12 @@ ScopedFuture<void> RenderSettings::render(const std::vector<std::pair<Viewport*,
         QRect destinationRect = pixelRect.toRect();
         if(destinationRect.isEmpty())
             continue;
-        ViewportRenderingData& vpData = viewportList.emplace_back();
-        // Request a frame buffer of the right size from the render thread.
-        vpData.renderTarget = this_task::ui()->renderThread()->createOffscreenTarget(destinationRect.size() * renderer->supersamplingFactor());
-        vpData.viewport = r.first;
-        vpData.destinationRect = destinationRect;
+        // One offscreen render target per viewport, reused by all frames of the animation. Its GPU resources are
+        // allocated on the first rendered frame, at the resolution that frame needs.
+        viewportList.push_back(ViewportRenderingData{
+            /* viewport */ r.first,
+            /* renderTarget */ OffscreenRenderTarget(*this_task::ui(), OffscreenRenderTarget::Kind::Visual),
+            /* destinationRect */ destinationRect });
     }
 
     std::unique_ptr<VideoEncoder> videoEncoder;
@@ -371,11 +372,11 @@ ScopedFuture<void> RenderSettings::render(const std::vector<std::pair<Viewport*,
             // Compute final projection based on the now known bounding box.
             frameGraph->setProjectionParams(vpData.viewport->computeProjectionParameters(renderTime, viewportAspectRatio, frameGraph->sceneBoundingBox()));
 
-            // Let the scene renderer produce the rendering in the framebuffer.
-            frameBuffer->discardChanges();
+            // Let the offscreen render target produce the rendering in the framebuffer, which covers this viewport's
+            // destination rectangle within the whole output image.
             frameBuffer->setViewportRect(vpData.destinationRect);
-            auto rendererConfig = renderer->createConfiguration(*frameGraph);
-            co_await FutureAwaiter(ObjectExecutor(this), vpData.renderTarget.renderOffscreenFrame(std::move(frameGraph), std::move(rendererConfig), frameBuffer, frameProgress));
+            co_await FutureAwaiter(ObjectExecutor(this), vpData.renderTarget.renderImage(std::move(frameGraph), *renderer,
+                frameBuffer, frameProgress, renderer->supersamplingFactor()));
 
             frameProgress.nextSubStep();
         }

@@ -12,7 +12,7 @@
 #include <ovito/core/dataset/scene/Pipeline.h>
 #include <ovito/core/dataset/pipeline/ModificationNode.h>
 #include <ovito/core/rendering/ColorMapHelper.h>
-#include <ovito/core/rendering/RenderThread.h>
+#include <ovito/core/rendering/OffscreenRenderTarget.h>
 #include <ovito/core/rendering/standard/StandardRenderer.h>
 #include <ovito/core/dataset/data/BufferAccess.h>
 #include <ovito/core/utilities/concurrent/NoninteractiveContext.h>
@@ -1311,13 +1311,12 @@ Future<QImage> ColorLegendOverlay::renderTypeSymbolImage(std::vector<ElementType
     }
     symbolFrameGraph->computeSceneBoundingBox();
 
-    // Render the frame graph into an offscreen buffer.
+    // Render the frame graph into an offscreen buffer of the shared render thread.
     // Note: The render target is deliberately not cached between frames, because it keeps the RenderThread alive.
-    RenderTarget renderTarget = ui->renderThread()->createOffscreenTarget(imageSize * renderer->supersamplingFactor());
+    OffscreenRenderTarget renderTarget(*ui, OffscreenRenderTarget::Kind::Visual);
     std::shared_ptr<FrameBuffer> frameBuffer = std::make_shared<FrameBuffer>(imageSize.width(), imageSize.height());
-    std::unique_ptr<SceneRenderer::Configuration> rendererConfig = renderer->createConfiguration(*symbolFrameGraph);
-    co_await FutureAwaiter(ObjectExecutor(this),
-        renderTarget.renderOffscreenFrame(std::move(symbolFrameGraph), std::move(rendererConfig), frameBuffer, TaskProgress::Ignore));
+    co_await FutureAwaiter(ObjectExecutor(this), renderTarget.renderImage(std::move(symbolFrameGraph), *renderer,
+        frameBuffer, TaskProgress::Ignore, renderer->supersamplingFactor()));
 
     co_return frameBuffer->image();
 }

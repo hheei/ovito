@@ -121,6 +121,7 @@ SET(SourceFiles
     rendering/GraphicsApi.cpp
     rendering/RenderThread.cpp
     rendering/FrameGraphRenderPass.cpp
+    rendering/OffscreenRenderTarget.cpp
     rendering/WarningIndicatorRenderer.cpp
 )
 if(OVITO_BUILD_BASIC)

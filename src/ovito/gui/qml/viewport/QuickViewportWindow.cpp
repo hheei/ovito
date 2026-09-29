@@ -267,19 +267,14 @@ Future<ObjectPickingBuffer> QuickViewportWindow::renderPickingBuffer()
        std::abs(frameGraph->projectionParams().aspectRatio - FloatType(currentSize.height()) / currentSize.width()) > FloatType(1e-6))
         co_return ObjectPickingBuffer();
 
-    std::shared_ptr<RenderThread> renderThread = ui().renderThread();
-    if(!renderThread)
-        co_return ObjectPickingBuffer();
+    // The picking target keeps the GPU resources of the last pass and is reused while the viewport size does not
+    // change; it is created together with the buffers on the first pass. It also keeps the render thread (and the
+    // graphics device) alive for as long as the viewport window exists.
+    if(!_pickingTarget)
+        _pickingTarget.emplace(ui(), OffscreenRenderTarget::Kind::PickingOnly);
 
-    // (Re-)create the offscreen render target that receives the picking buffers when the size changed.
-    if(!_pickingTarget || _pickingTargetSize != currentSize) {
-        _pickingTarget.emplace(renderThread->createOffscreenTarget(currentSize, /*forPickingOnly=*/true));
-        _pickingTargetSize = currentSize;
-    }
-
-    auto rendererConfig = sceneRenderer()->createConfiguration(*frameGraph);
     co_return co_await FutureAwaiter(ObjectExecutor(this),
-        _pickingTarget->renderPickingFrame(std::move(frameGraph), std::move(rendererConfig)));
+        _pickingTarget->renderPicking(std::move(frameGraph), *sceneRenderer(), currentSize));
 }
 
 /******************************************************************************
