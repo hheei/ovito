@@ -23,6 +23,9 @@ Rectangle {
     // carries the name of the operation it would revert.
     readonly property Command undoCommand: commandManager.command("EditUndo")
     readonly property Command redoCommand: commandManager.command("EditRedo")
+    // The entry that brings data into the workbench is the shared Load File command, so the button and the menu entry
+    // carry the same title, the same shortcut and the same handler.
+    readonly property Command importCommand: commandManager.command("FileImport")
 
     /// The color scheme the shell resolved for itself, which is the one the classic frontend would use as well (see
     /// GuiSettings). The verification harness reads it to check that both frontends follow the same policy.
@@ -31,7 +34,7 @@ Rectangle {
     Component.onCompleted: {
         // A command that the shell uses but the frontend does not provide would silently disable its keyboard
         // shortcut or its button, so report it once instead of failing quietly.
-        [undoCommand, redoCommand, commandManager.command("EditDelete"), commandManager.command("ViewportMaximize")].forEach(command => {
+        [undoCommand, redoCommand, importCommand, commandManager.command("EditDelete"), commandManager.command("ViewportMaximize")].forEach(command => {
             if(!command)
                 console.warn("The workbench expects a command that the frontend does not provide")
         })
@@ -62,13 +65,21 @@ Rectangle {
     }
 
     // ---------------------------------------------------------------------------------------------
+    // Menu bar. It is the same list of commands the classic frontend's menu shows; an entry whose handler this shell
+    // does not have yet is disabled and names the phase that brings it.
+    // ---------------------------------------------------------------------------------------------
+    WorkbenchMenuBar {
+        id: menuBar
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // Header: the window title and the commands that do not need a data set.
     // ---------------------------------------------------------------------------------------------
     Rectangle {
         id: header
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.top: parent.top
+        anchors.top: menuBar.bottom
         height: theme.headerHeight
         color: theme.surfaceHeader
 
@@ -101,7 +112,8 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             // The first stop of the keyboard focus chain: the command that brings data into the workbench.
             focus: true
-            text: qsTr("Import Data…")
+            text: workbench.importCommand ? workbench.importCommand.text : qsTr("Import Data…")
+            enabled: workbench.importCommand ? workbench.importCommand.enabled : true
             Accessible.name: qsTr("Import data files into the current scene")
             onClicked: workbenchController.showImportDialog()
 
@@ -303,6 +315,17 @@ Rectangle {
         controller: workbenchController
     }
 
+    // The context menu of the viewports. It belongs to the pane whose caption was clicked; the frontend opens it through
+    // the viewport menu model.
+    ViewportContextMenu {
+        id: viewportContextMenu
+    }
+
+    // The About dialog, which the Help menu opens through the shared About command.
+    WorkbenchAboutDialog {
+        id: aboutDialog
+    }
+
     Connections {
         target: workbenchController
 
@@ -310,6 +333,11 @@ Rectangle {
             if(directoryUrl.toString().length > 0)
                 importDialog.currentFolder = directoryUrl
             importDialog.open()
+        }
+
+        // The About dialog belongs to the shared About command, whose handler is a surface of the frontend.
+        function onAboutDialogRequested() {
+            aboutDialog.open()
         }
     }
 }

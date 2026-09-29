@@ -8,6 +8,8 @@
 
 namespace Ovito {
 
+class QmlViewportMenu;
+
 /**
  * \brief Exposes the C++ side of the Qt Quick frontend to the QML scene.
  *
@@ -30,7 +32,7 @@ class OVITO_GUIQML_EXPORT QmlViewportController : public QObject
 public:
 
     /// Constructor.
-    explicit QmlViewportController(QmlMainWindowUI& ui, QObject* parent = nullptr);
+    explicit QmlViewportController(QmlMainWindowUI& ui, QmlViewportMenu* contextMenu, QObject* parent = nullptr);
 
     /// Returns the number of viewports of the current dataset.
     int viewportCount() const;
@@ -45,6 +47,9 @@ public:
 
     /// Gives the input focus to the viewport item displaying the given viewport.
     void setViewportInputFocus(Viewport* viewport);
+
+    /// Opens the context menu of the viewport whose caption the user clicked.
+    void onContextMenuRequested(ViewportWindow* viewportWindow, const QPoint& pos);
 
 Q_SIGNALS:
 
@@ -63,6 +68,9 @@ private:
 
     /// The viewport items that have been created for the viewports of the current dataset, indexed by viewport.
     std::vector<QPointer<QuickViewportItem>> _viewportItems;
+
+    /// The context menu that is displayed when the user clicks the caption of a viewport.
+    QmlViewportMenu* _contextMenu;
 
     /// Gives every viewport item the renderer the user selected for the interactive viewports.
     void applyInteractiveRenderer();

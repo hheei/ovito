@@ -7,6 +7,11 @@
 	<file>WorkbenchSplitter.qml</file>
 	<file>WorkbenchStatusBar.qml</file>
 	<file>WorkbenchMessageBox.qml</file>
+	<file>WorkbenchMenuBar.qml</file>
+	<file>WorkbenchMenuItem.qml</file>
+	<file>WorkbenchPlaceholderMenuItem.qml</file>
+	<file>WorkbenchAboutDialog.qml</file>
+	<file>ViewportContextMenu.qml</file>
 </qresource>
 
 </RCC>

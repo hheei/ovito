@@ -17,11 +17,13 @@
 #include <ovito/gui/base/app/GuiSettings.h>
 #include <ovito/gui/base/mainwin/RecentFilesList.h>
 #include <ovito/gui/qml/viewport/QuickViewportItem.h>
+#include <ovito/gui/qml/viewport/QmlViewportMenu.h>
 #include <ovito/gui/qml/viewport/QuickViewportWindow.h>
 #include <ovito/core/app/StandaloneApplication.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
 #include <ovito/core/dataset/io/FileSource.h>
+#include <ovito/core/dataset/io/FileSourceImporter.h>
 #include <ovito/core/dataset/scene/Pipeline.h>
 #include <ovito/core/dataset/animation/AnimationSettings.h>
 #include <ovito/core/dataset/scene/Scene.h>
@@ -29,6 +31,7 @@
 #include <ovito/core/dataset/scene/SceneNode.h>
 #include <ovito/core/viewport/ViewportConfiguration.h>
 #include <ovito/core/viewport/Viewport.h>
+#include <ovito/core/viewport/ViewportSettings.h>
 #include <ovito/core/app/Application.h>
 #include <ovito/core/utilities/Exception.h>
 
@@ -45,9 +48,11 @@
 #include <ovito/gui/base/viewport/ViewportInputManager.h>
 #include <ovito/gui/base/viewport/ViewportInputMode.h>
 #include <ovito/gui/base/app/GuiTaskScope.h>
+#include <ovito/core/utilities/concurrent/TaskProgress.h>
 #include <QtQml/qqml.h>
 #include <QtQml/qqmlengine.h>
 #include <QtQml/qqmlexpression.h>
+#include <QtQml/qqmlproperty.h>
 #include <QTimer>
 
 #include <functional>
@@ -720,6 +725,355 @@ void probeAnimationPlaybackCommand(QmlMainWindowUI* ui, Command* playbackCommand
 /// Verifies the import path of the shell: a multi-frame trajectory becomes one pipeline spanning three animation
 /// frames, a file of an unsupported format reports an error without changing the scene, and a canceled import leaves no
 /// partially loaded pipeline behind.
+/// Reads a property that a QML file declares. QObject::property() does not see those properties, QQmlProperty does.
+QVariant qmlProperty(QObject* object, const QString& name)
+{
+    QQmlProperty property(object, name);
+    return property.isValid() ? property.read() : QVariant();
+}
+
+/// Verifies the entries of a QML menu against the rule the shell's menus follow: an entry presents a command of the
+/// shared command layer, or it is one of the frontend side actions its own check exercises, or it is disabled and names
+/// the phase that will deliver it. An entry that none of this applies to would look clickable while doing nothing, so
+/// it fails the check.
+/// \param allowFrontendActions  True for a menu whose entries call into the frontend instead of triggering a command,
+///                              such as the viewport context menu (its actions are driven by verifyContextMenu()).
+void verifyMenuEntries(QObject* menu, const QString& what, bool allowFrontendActions)
+{
+    if(menu == nullptr) {
+        reportVerificationFailure(QStringLiteral("the workbench has no %1").arg(what));
+        return;
+    }
+
+    int entries = 0;
+    int commands = 0;
+    int frontendActions = 0;
+    int pending = 0;
+    std::function<void(QObject*)> walk = [&](QObject* parent) {
+        for(QObject* child : parent->children()) {
+            // The entries are the Qt Quick Controls menu items; a separator carries neither a label nor a state.
+            if(child->inherits("QQuickMenuItem") && !child->inherits("QQuickMenuSeparator")) {
+                const QString text = child->property("text").toString();
+                const bool enabled = child->property("enabled").toBool();
+                Command* command = qmlProperty(child, QStringLiteral("command")).value<Command*>();
+                const QString ownerPhase = qmlProperty(child, QStringLiteral("ownerPhase")).toString();
+                entries++;
+                QString wiring;
+                if(text.isEmpty()) {
+                    reportVerificationFailure(QStringLiteral("the %1 holds an entry without a label").arg(what));
+                    wiring = QStringLiteral("<without a label>");
+                }
+                else if(command != nullptr) {
+                    commands++;
+                    wiring = command->id();
+                }
+                else if(enabled && allowFrontendActions) {
+                    frontendActions++;
+                    wiring = QStringLiteral("<action of the frontend>");
+                }
+                else if(!enabled && !ownerPhase.isEmpty()) {
+                    pending++;
+                    wiring = QStringLiteral("<delivered by> ") + ownerPhase;
+                }
+                else {
+                    wiring = QStringLiteral("<nothing>");
+                    reportVerificationFailure(QStringLiteral("the entry \"%1\" of the %2 is %3 without belonging to a command of the shared layer%4")
+                        .arg(text, what, enabled ? QStringLiteral("enabled") : QStringLiteral("disabled"),
+                             ownerPhase.isEmpty() ? QString() : QStringLiteral(" (it names %1)").arg(ownerPhase)));
+                }
+                qInfo() << "PARITY_TEST  entry" << text << (enabled ? "[enabled]" : "[disabled]") << wiring;
+            }
+            walk(child);
+        }
+    };
+    walk(menu);
+
+    qInfo() << "PARITY_TEST the" << what << "holds" << entries << "entries:" << commands << "of the shared command layer,"
+            << frontendActions << "of the frontend and" << pending << "that name the phase which will deliver them";
+    if(entries < 3)
+        reportVerificationFailure(QStringLiteral("the %1 lists only %2 entries").arg(what).arg(entries));
+}
+
+/// The About command of the shared command layer is presented by whichever frontend runs: the classic one opens a widget
+/// dialog, so the shell brings its own dialog, and this verifies that the command reaches it and that it names the
+/// application.
+void verifyAboutDialog(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    QmlWorkbenchController* controller = ui->workbenchController();
+    QQuickItem* rootObject = ui->view() ? ui->view()->rootObject() : nullptr;
+    QObject* dialog = rootObject ? rootObject->findChild<QObject*>(QStringLiteral("aboutDialog")) : nullptr;
+    if(controller == nullptr || dialog == nullptr) {
+        reportVerificationFailure(QStringLiteral("the shell has no About dialog"));
+        continuation();
+        return;
+    }
+
+    controller->showAboutDialog();
+    pollUntil(ui, 50, 2000, [dialog]() { return dialog->property("visible").toBool(); }, [dialog, continuation](bool opened) {
+        const QString title = dialog->property("title").toString();
+        qInfo() << "PARITY_TEST the About dialog:" << title;
+        if(!opened)
+            reportVerificationFailure(QStringLiteral("the About command did not open the About dialog of the shell"));
+        else if(!title.contains(Application::applicationName()))
+            reportVerificationFailure(QStringLiteral("the About dialog does not name the application"));
+        QMetaObject::invokeMethod(dialog, "close");
+        continuation();
+    });
+}
+
+/// Opens the viewport context menu the way a right-click on the title label of a pane does, and exercises what it
+/// offers. Everything it changes is restored afterwards, because the following steps render the same scene.
+void verifyContextMenu(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    QmlViewportMenu* menu = ui->viewportMenu();
+    QQuickItem* rootObject = ui->view() ? ui->view()->rootObject() : nullptr;
+    QObject* menuPopup = rootObject ? rootObject->findChild<QObject*>(QStringLiteral("viewportContextMenu")) : nullptr;
+    if(menu == nullptr || menuPopup == nullptr) {
+        reportVerificationFailure(QStringLiteral("the viewport context menu is not available"));
+        continuation();
+        return;
+    }
+
+    // The title label of a viewport belongs to the frame graph the viewport rendered last, and the viewport items are
+    // rebuilt when the data set or the layout changes, so wait for a viewport that can actually be clicked instead of
+    // reading the state a moment too early.
+    pollUntil(ui, 100, 5000, [ui]() {
+        QuickViewportItem* item = firstViewportItem(ui);
+        QuickViewportWindow* viewportWindow = item ? item->viewportWindow() : nullptr;
+        return viewportWindow && !viewportWindow->contextMenuArea().isEmpty();
+    }, [ui, menu, menuPopup, continuation](bool ready) {
+        QuickViewportItem* item = firstViewportItem(ui);
+        QuickViewportWindow* viewportWindow = item ? item->viewportWindow() : nullptr;
+        Viewport* viewport = viewportWindow ? viewportWindow->viewport() : nullptr;
+        ViewportConfiguration* config = ui->datasetContainer().activeViewportConfig();
+        if(!ready || viewport == nullptr || config == nullptr) {
+            reportVerificationFailure(QStringLiteral("no viewport of the workbench offers a title label to click on"));
+            continuation();
+            return;
+        }
+
+        const QRectF captionArea = viewportWindow->contextMenuArea();
+        // The caption area belongs to the rendered frame graph, which is laid out in device pixels, while the viewport item
+        // receives its mouse events in device independent coordinates.
+        const qreal devicePixelRatio = item->window() ? item->window()->devicePixelRatio() : 1.0;
+        const QPointF captionCenter = captionArea.center() / devicePixelRatio;
+
+        Viewport* previousActiveViewport = config->activeViewport();
+        const QString previousViewportTitle = viewport->objectTitle();
+        const QPointF globalPos = item->mapToGlobal(captionCenter);
+        QMouseEvent pressEvent(QEvent::MouseButtonPress, captionCenter, globalPos, Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(item, &pressEvent);
+
+        if(!menu->isOpen())
+            reportVerificationFailure(QStringLiteral("a right-click on the title label of a viewport did not open its context menu"));
+        if(menu->item() != item)
+            reportVerificationFailure(QStringLiteral("the context menu belongs to another viewport than the one that was clicked"));
+        if(!menuPopup->property("visible").toBool())
+            reportVerificationFailure(QStringLiteral("the context menu of the viewport did not appear"));
+        if(config->activeViewport() != viewport)
+            reportVerificationFailure(QStringLiteral("clicking a viewport did not make it the active one"));
+
+        verifyMenuEntries(menuPopup, QStringLiteral("viewport context menu"), true);
+
+        // Show Grid, the view type and the constraint on the camera rotation are viewport state; the section level setting
+        // of the rotation constraint is shared with the classic frontend, so it has to be saved and put back.
+        const bool gridVisible = viewport->isGridVisible();
+        menu->setGridVisible(!gridVisible);
+        if(viewport->isGridVisible() != !gridVisible)
+            reportVerificationFailure(QStringLiteral("the context menu did not change the visibility of the construction grid"));
+
+        ViewportSettings& viewportSettings = ViewportSettings::getSettings();
+        const bool constrainRotation = viewportSettings.constrainCameraRotation();
+        menu->setConstrainRotation(!constrainRotation);
+        if(viewportSettings.constrainCameraRotation() != !constrainRotation)
+            reportVerificationFailure(QStringLiteral("the context menu did not change the camera rotation constraint"));
+
+        const int defaultMaximizedType = viewportSettings.defaultMaximizedViewportType();
+        const Viewport::ViewType viewType = viewport->viewType();
+        menu->setViewType(Viewport::VIEW_FRONT);
+        if(viewport->viewType() != Viewport::VIEW_FRONT)
+            reportVerificationFailure(QStringLiteral("the context menu did not switch the viewport to another view type"));
+        menu->setViewType(viewType);
+
+        const bool wasMaximized = config->maximizedViewport() != nullptr;
+        menu->toggleMaximize();
+        if((config->maximizedViewport() != nullptr) == wasMaximized)
+            reportVerificationFailure(QStringLiteral("the context menu did not maximize the viewport"));
+        menu->toggleMaximize();
+        if((config->maximizedViewport() != nullptr) != wasMaximized)
+            reportVerificationFailure(QStringLiteral("the context menu left the viewport maximized"));
+
+        viewportSettings.setConstrainCameraRotation(constrainRotation);
+        viewportSettings.setDefaultMaximizedViewportType(static_cast<Viewport::ViewType>(defaultMaximizedType));
+        viewportSettings.save();
+        QMetaObject::invokeMethod(menuPopup, "close");
+        menu->close();
+        config->setActiveViewport(previousActiveViewport);
+
+        qInfo() << "PARITY_TEST the viewport context menu of the" << previousViewportTitle
+                << "viewport offers the view type, the construction grid, the rotation constraint and maximizing, and all of it was restored";
+
+        continuation();
+    });
+}
+
+/// The status line lists one row per running task, fed by the shared task progress model. No operation of this prototype
+/// runs long enough to be observed together with another one, so two progress records stand in for two concurrent
+/// operations here - which is also the case the classic status bar (one aggregate bar) cannot show.
+void verifyTaskRows(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    TaskProgressModel* model = ui->taskProgressModel();
+    QQuickItem* rootObject = ui->view() ? ui->view()->rootObject() : nullptr;
+    QObject* rows = rootObject ? rootObject->findChild<QObject*>(QStringLiteral("taskProgressRows")) : nullptr;
+    if(model == nullptr || rows == nullptr) {
+        reportVerificationFailure(QStringLiteral("the status line does not present the running tasks"));
+        continuation();
+        return;
+    }
+
+    // Reporting progress touches OVITO objects, which needs the task context of this user interface: a Qt timer
+    // callback runs in no task of its own (see open item O8 of the audit).
+    GuiTaskScope taskScope(*ui);
+
+    // The records are shared, because they have to outlive this function: the model is read again once the status line
+    // has caught up with it.
+    auto firstTask = std::make_shared<TaskProgress>(ui);
+    auto secondTask = std::make_shared<TaskProgress>(ui);
+    firstTask->setText(QStringLiteral("Verifying the status line"));
+    firstTask->setMaximum(4);
+    firstTask->setValue(1);
+    secondTask->setText(QStringLiteral("Verifying the task list"));
+    secondTask->setMaximum(2);
+    secondTask->setValue(1);
+
+    pollUntil(ui, 100, 3000, [model]() { return model->rowCount() == 2; }, [model, rows, firstTask, secondTask, continuation](bool listed) {
+        const int qmlRows = rows->property("count").toInt();
+        qInfo() << "PARITY_TEST the status line shows" << qmlRows << "row(s) for" << model->rowCount()
+                << "running task(s), busy" << model->isBusy() << "text" << model->activeText();
+        if(!listed)
+            reportVerificationFailure(QStringLiteral("the task progress model did not list the two running tasks"));
+        else if(qmlRows != 2)
+            reportVerificationFailure(QStringLiteral("the status line shows %1 row(s) for two running tasks").arg(qmlRows));
+        else if(!model->isBusy() || model->activeText().isEmpty())
+            reportVerificationFailure(QStringLiteral("the aggregate state of the running tasks is empty"));
+        continuation();
+    });
+}
+
+/// The size and position of the workbench window are remembered in the shared settings store: a resize is written back
+/// after a short delay, and the frontend can apply the remembered state again on the next start.
+void verifyWindowState(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    QQuickWindow* window = ui->view();
+    if(window == nullptr) {
+        reportVerificationFailure(QStringLiteral("the shell has no window"));
+        continuation();
+        return;
+    }
+
+    const QRect storedGeometry = GuiSettings::instance().workbenchWindowGeometry();
+    const bool storedMaximized = GuiSettings::instance().isWorkbenchWindowMaximized();
+
+    const QSize resized(1024, 720);
+    window->resize(resized);
+    pollUntil(ui, 100, 3000, [resized]() { return GuiSettings::instance().workbenchWindowGeometry().size() == resized; },
+        [ui, window, storedGeometry, storedMaximized, continuation](bool saved) {
+            if(!saved)
+                reportVerificationFailure(QStringLiteral("resizing the workbench window was not written to the settings store"));
+
+            // The other direction: a remembered geometry is applied by the frontend.
+            const QRect remembered(QPoint(60, 40), QSize(1100, 700));
+            GuiSettings::instance().setWorkbenchWindowGeometry(remembered);
+            const bool applied = ui->applyStoredWindowState();
+            qInfo() << "PARITY_TEST the shell restored the remembered window state:" << applied << window->size();
+            if(!applied || window->size() != remembered.size())
+                reportVerificationFailure(QStringLiteral("the remembered window size was not applied (expected %1x%2, got %3x%4)")
+                    .arg(remembered.width()).arg(remembered.height()).arg(window->width()).arg(window->height()));
+
+            // Leave the settings store as it was found - a developer machine runs the spike against its real settings.
+            GuiSettings::instance().setWorkbenchWindowGeometry(storedGeometry);
+            GuiSettings::instance().setWorkbenchWindowMaximized(storedMaximized);
+            window->resize(1280, 800);
+            continuation();
+        });
+}
+
+/// An import reports which format the file was understood as and how many source frames it holds. The format is known
+/// right away, while the number of frames is discovered when the file source is evaluated, so the notice grows into its
+/// final form while the pipeline is being processed.
+void verifyImportNotice(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    QmlWorkbenchController* controller = ui->workbenchController();
+    if(controller == nullptr) {
+        reportVerificationFailure(QStringLiteral("the workbench has no shell controller"));
+        continuation();
+        return;
+    }
+
+    const QString directory = QDir::tempPath() + QStringLiteral("/ovito-qml-parity-test");
+    QDir().mkpath(directory);
+
+    // The file that OVITO's importer autodetection hands to the LAMMPS Data importer although it is an XYZ file: a
+    // comment line mentioning atoms is all the LAMMPS importer needs (defect F6 of the spike report). Such a file
+    // imports without an error but leaves an empty scene, so the notice reporting the format it was read as is the only
+    // hint the user gets.
+    const QString path = directory + QStringLiteral("/misdetected.xyz");
+    {
+        QFile file(path);
+        if(!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            reportVerificationFailure(QStringLiteral("the import check could not write its test file"));
+            continuation();
+            return;
+        }
+        QTextStream stream(&file);
+        stream << "8\n";
+        // The comment line is the trigger: the LAMMPS Data importer accepts any line within the first 20 lines that
+        // mentions atoms and starts with a number, and it takes precedence over the XYZ importer.
+        stream << "8 atoms\n";
+        for(int atom = 0; atom < 8; atom++)
+            stream << "Ar 0 0 0\n";
+    }
+
+    controller->importFiles({QUrl::fromLocalFile(path)});
+    pollUntil(ui, 100, 10000, [controller]() { return controller->importNotice().contains(QStringLiteral("source frame")); },
+        [ui, controller, continuation](bool reported) {
+            const QString message = controller->importNotice();
+            const FileSource* fileSource = firstFileSource(ui);
+            const QString formatUsed = fileSource && fileSource->importer() ? fileSource->importer()->objectTitle() : QString();
+            qInfo() << "PARITY_TEST the import notice reads:" << message
+                    << "| the file was read as" << formatUsed << "and left" << sceneObjectCount(ui) << "object(s) in the scene";
+            if(!reported)
+                reportVerificationFailure(QStringLiteral("the notice did not report the number of source frames"));
+            else if(formatUsed.isEmpty() || !message.contains(formatUsed))
+                reportVerificationFailure(QStringLiteral("the notice does not name the format the file was imported as (\"%1\")").arg(formatUsed));
+            // Informational: the trap of defect F6 is that this file leaves no object behind, which the notice now makes
+            // visible instead of the scene simply looking empty.
+            else if(sceneObjectCount(ui) == 0)
+                qInfo() << "PARITY_TEST the notice is the only visible outcome of that import: the scene holds no object";
+            continuation();
+        });
+}
+
+/// Verifies the features the shell gained for parity with the classic frontend: the menus of the workbench present the
+/// shared commands, the viewport has a context menu, the status line lists the running tasks, the window state is
+/// remembered and an import reports what it did with the file.
+void runParityTest(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    QQuickItem* rootObject = ui->view() ? ui->view()->rootObject() : nullptr;
+    verifyMenuEntries(rootObject ? rootObject->findChild<QObject*>(QStringLiteral("workbenchMenuBar")) : nullptr,
+        QStringLiteral("menu bar of the workbench"), false);
+
+    verifyContextMenu(ui, [ui, continuation]() {
+        verifyAboutDialog(ui, [ui, continuation]() {
+            verifyTaskRows(ui, [ui, continuation]() {
+                verifyWindowState(ui, [ui, continuation]() {
+                    verifyImportNotice(ui, std::move(continuation));
+                });
+            });
+        });
+    });
+}
+
 void runImportTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
     QmlWorkbenchController* controller = ui->workbenchController();
@@ -1398,6 +1752,8 @@ protected:
             tr("Verify the viewport layout: pane geometry, undoable splitter drags and maximizing a viewport.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-import-check"),
             tr("Verify the import path of the shell: a multi-frame trajectory, an unsupported file and a cancelled import.")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-parity-check"),
+            tr("Verify the shell features added for parity: the menus, the viewport context menu, the task rows, the window state and the import notice.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-hide-show"),
             tr("Hide the viewport items for a moment and show them again, verifying that rendering and picking recover.")));
     }
@@ -1484,6 +1840,7 @@ protected:
         const bool settingsCheck = cmdLineParser().isSet(QStringLiteral("qml-settings-check"));
         const bool sessionCheck = cmdLineParser().isSet(QStringLiteral("qml-session-check"));
         const bool importCheck = cmdLineParser().isSet(QStringLiteral("qml-import-check"));
+        const bool parityCheck = cmdLineParser().isSet(QStringLiteral("qml-parity-check"));
         const int lifecycleCycles = cmdLineParser().value(QStringLiteral("qml-lifecycle-cycles")).toInt();
         QSize resizeSize;
         const QStringList resizeArguments = cmdLineParser().value(QStringLiteral("qml-resize")).split(QLatin1Char('x'));
@@ -1496,7 +1853,7 @@ protected:
         const int holdMs = cmdLineParser().value(QStringLiteral("qml-hold-ms")).toInt();
 
         // Interactive mode: without a verification option, keep the window open.
-        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck && !commandCheck && !sessionCheck && !settingsCheck)
+        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck && !commandCheck && !sessionCheck && !settingsCheck && !parityCheck)
             return;
 
         int delay = cmdLineParser().value(QStringLiteral("qml-startup-delay")).toInt();
@@ -1586,6 +1943,13 @@ protected:
             // and reloads the scene of the workbench.
             _verificationSteps.push_back([ui = mainWinUI](std::function<void()> next) {
                 runSessionTest(ui, std::move(next));
+            });
+        }
+        if(parityCheck) {
+            // Before the import check, which ends with a cancelled import that leaves the scene empty, and after the
+            // picking check, because this check clicks in a viewport and changes the camera for a moment.
+            _verificationSteps.push_back([ui = mainWinUI](std::function<void()> next) {
+                runParityTest(ui, std::move(next));
             });
         }
         if(importCheck) {

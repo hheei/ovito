@@ -7,6 +7,8 @@
 #include <ovito/gui/qml/viewport/QuickViewportItem.h>
 #include <ovito/gui/qml/viewport/QuickViewportWindow.h>
 #include <ovito/gui/base/app/GuiTaskScope.h>
+#include <ovito/gui/base/viewport/ViewportInputManager.h>
+#include <ovito/gui/qml/viewport/QmlViewportMenu.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
 #include <ovito/core/viewport/Viewport.h>
@@ -20,7 +22,8 @@ namespace Ovito {
 /******************************************************************************
 * Constructor.
 ******************************************************************************/
-QmlViewportController::QmlViewportController(QmlMainWindowUI& ui, QObject* parent) : QObject(parent), _ui(ui)
+QmlViewportController::QmlViewportController(QmlMainWindowUI& ui, QmlViewportMenu* contextMenu, QObject* parent) :
+    QObject(parent), _ui(ui), _contextMenu(contextMenu)
 {
     // The viewport items have to be rebuilt whenever the current dataset (and with it the set of viewports) changes,
     // because a viewport item belongs to the viewport of one dataset.
@@ -34,6 +37,30 @@ QmlViewportController::QmlViewportController(QmlMainWindowUI& ui, QObject* paren
     connect(&ViewportRendererRegistry::instance(), &ViewportRendererRegistry::rendererSelectionChanged, this, [this]() {
         applyInteractiveRenderer();
     });
+
+    // A click on the caption of a viewport asks for its context menu (BaseViewportWindow::mousePressEvent). The desktop
+    // frontend answers that request in ViewportsPanel; here the menu belongs to the viewport item of the pane.
+    if(ViewportInputManager* inputManager = ui.viewportInputManager())
+        connect(inputManager, &ViewportInputManager::contextMenuRequested, this, &QmlViewportController::onContextMenuRequested);
+}
+
+/******************************************************************************
+* Opens the context menu of the viewport whose caption the user clicked.
+******************************************************************************/
+void QmlViewportController::onContextMenuRequested(ViewportWindow* viewportWindow, const QPoint& pos)
+{
+    if(!viewportWindow || !viewportWindow->viewport() || !_contextMenu)
+        return;
+
+    // The request comes from a mouse event, i.e. from a callback that has no task context of its own, and opening the
+    // menu reads the state of the viewport.
+    GuiTaskScope taskScope(_ui);
+    for(const QPointer<QuickViewportItem>& item : _viewportItems) {
+        if(item && item->viewportWindow() == viewportWindow) {
+            _contextMenu->openFor(item, pos);
+            return;
+        }
+    }
 }
 
 /******************************************************************************

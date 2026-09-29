@@ -5,10 +5,13 @@ import QtQuick
 import QtQuick.Controls
 import Ovito.Qml
 
-// The status line at the bottom of the workbench window: the message the frontend last reported, and the progress of
-// the operations that are running. The progress of a task comes from the workbench's task progress model, which is the
-// same data the status bar of the classic frontend displays. The Cancel command cancels the operation the shell started on behalf of the user
-// (currently the import), which is the same operation the classic frontend's progress dialog offers to cancel.
+// The status line at the bottom of the workbench window: the message the frontend last reported, and the progress of the
+// operations that are running.
+//
+// One row is shown per running task, which comes from the workbench's shared task progress model - the same model the
+// classic frontend's status bar reads. Presenting one row per task is new here: the classic status bar shows a single
+// aggregate bar. Cancelling stays at the level of the operation the shell started on behalf of the user (currently the
+// import), because a task's progress record carries no handle to the task itself.
 Item {
     id: statusBar
 
@@ -25,46 +28,61 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         anchors.right: taskArea.left
         anchors.rightMargin: theme.spacing
-        text: statusBar.controller.statusMessage.length > 0 ? statusBar.controller.statusMessage : qsTr("Ready")
+        text: statusBar.controller.statusMessage.length > 0 ? statusBar.controller.statusMessage
+            : (statusBar.controller.importNotice.length > 0 ? statusBar.controller.importNotice : qsTr("Ready"))
         color: theme.textSecondary
         font.pixelSize: theme.fontSize
         elide: Text.ElideRight
     }
 
-    Row {
+    Column {
         id: taskArea
         anchors.right: parent.right
         anchors.rightMargin: theme.spacing
         anchors.verticalCenter: parent.verticalCenter
-        spacing: theme.spacing
-        visible: taskProgress.busy
+        spacing: 2
+        visible: taskProgress.count > 0
 
-        Text {
-            anchors.verticalCenter: parent.verticalCenter
-            visible: text.length > 0
-            text: taskProgress.text
-            color: theme.textSecondary
-            font.pixelSize: theme.fontSize
-            elide: Text.ElideRight
-            width: Math.min(implicitWidth, 320)
-        }
+        Repeater {
+            id: taskRows
+            objectName: "taskProgressRows"
+            model: taskProgress
 
-        ProgressBar {
-            anchors.verticalCenter: parent.verticalCenter
-            // An operation that does not know its extent shows an indeterminate bar.
-            indeterminate: taskProgress.maximum <= 0
-            from: 0
-            to: Math.max(1, taskProgress.maximum)
-            value: taskProgress.value
-            Accessible.name: qsTr("Import progress")
+            delegate: Row {
+                required property string text
+                required property int value
+                required property int maximum
 
-            palette.highlight: theme.accentPrimary
-            palette.base: theme.controlDisabledBackground
-            palette.text: theme.textSecondary
+                spacing: theme.spacing
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: parent.text.length > 0
+                    text: parent.text
+                    color: theme.textSecondary
+                    font.pixelSize: theme.fontSize
+                    elide: Text.ElideRight
+                    width: Math.min(implicitWidth, 320)
+                }
+
+                ProgressBar {
+                    anchors.verticalCenter: parent.verticalCenter
+                    // An operation that does not know its extent shows an indeterminate bar.
+                    indeterminate: parent.maximum <= 0
+                    from: 0
+                    to: Math.max(1, parent.maximum)
+                    value: parent.value
+                    Accessible.name: qsTr("Progress of the running operation")
+
+                    palette.highlight: theme.accentPrimary
+                    palette.base: theme.controlDisabledBackground
+                    palette.text: theme.textSecondary
+                }
+            }
         }
 
         Button {
-            anchors.verticalCenter: parent.verticalCenter
+            anchors.right: parent.right
             visible: statusBar.controller.cancellable
             // While the operation is winding down, its cancellation cannot be requested a second time.
             enabled: !statusBar.controller.cancelling

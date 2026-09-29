@@ -92,6 +92,17 @@ void QmlWorkbenchController::setStatusMessage(const QString& message)
 }
 
 /******************************************************************************
+* Replaces the report about the last import.
+******************************************************************************/
+void QmlWorkbenchController::setImportNotice(const QString& notice)
+{
+    if(_importNotice != notice) {
+        _importNotice = notice;
+        Q_EMIT importNoticeChanged();
+    }
+}
+
+/******************************************************************************
 * Updates the state derived from the registered task progress records.
 ******************************************************************************/
 void QmlWorkbenchController::updateOperationState()
@@ -161,7 +172,8 @@ void QmlWorkbenchController::importFiles(const QVariantList& urls)
     setRunningOperation(taskScope.task());
     try {
         _ui.importFiles(urlList);
-        setStatusMessage(tr("Imported %1.").arg(urlList.back().fileName()));
+        // The import itself reports what it did with the file (which format it was read as and how many source frames
+        // it holds), so no second, less precise message is put on top of it here.
     }
     catch(const OperationCanceled&) {
         // WorkbenchUI::importFiles() removed the objects of the canceled operation, so the data set is unchanged
@@ -227,6 +239,55 @@ UserInterface::MessageBoxButton QmlWorkbenchController::presentMessageBox(UserIn
     _messageBoxVisible = false;
     Q_EMIT messageBoxChanged();
     return _messageBoxAnswer;
+}
+
+/******************************************************************************
+* Returns the name of the application.
+******************************************************************************/
+QString QmlWorkbenchController::applicationName() const
+{
+    return Application::applicationName();
+}
+
+/******************************************************************************
+* Returns the version of the application.
+******************************************************************************/
+QString QmlWorkbenchController::applicationVersion() const
+{
+    return Application::applicationVersionString();
+}
+
+/******************************************************************************
+* Returns the edition this build is.
+******************************************************************************/
+QString QmlWorkbenchController::buildType() const
+{
+#ifdef OVITO_BUILD_PROFESSIONAL
+    return tr("Professional");
+#else
+    return tr("Basic");
+#endif
+}
+
+/******************************************************************************
+* Returns the copyright notice of this build.
+******************************************************************************/
+QString QmlWorkbenchController::copyrightNotice() const
+{
+    // The text comes from the build (see cmake/Version.cmake). It can contain placeholders that plugins fill in at run
+    // time by attaching a dynamic property to the application object - the same mechanism the classic About dialog uses.
+    QString text = QStringLiteral(OVITO_COPYRIGHT_NOTICE);
+    for(const QByteArray& name : Application::instance()->dynamicPropertyNames())
+        text.replace(QStringLiteral("[[%1]]").arg(QString::fromLatin1(name)), Application::instance()->property(name.data()).toString());
+    return text;
+}
+
+/******************************************************************************
+* Asks the scene to display the About dialog of the workbench.
+******************************************************************************/
+void QmlWorkbenchController::showAboutDialog()
+{
+    Q_EMIT aboutDialogRequested();
 }
 
 /******************************************************************************

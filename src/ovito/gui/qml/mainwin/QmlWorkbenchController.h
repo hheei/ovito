@@ -32,8 +32,14 @@ class OVITO_GUIQML_EXPORT QmlWorkbenchController : public QObject
     /// The title of the workbench window, derived from the data set or session file.
     Q_PROPERTY(QString windowTitle READ windowTitle NOTIFY windowTitleChanged)
 
-    /// The message displayed in the status line of the workbench window.
+    /// The message displayed in the status line of the workbench window. It is transient: the workbench clears it when
+    /// the mouse leaves a viewport, exactly like the classic frontend does.
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
+
+    /// What the last import did with the file it was given: which format it was read as and how many source frames it
+    /// holds. Unlike the status message this survives user interaction and is only replaced by the next import, because
+    /// it is the only visible hint of a file that was read as an unexpected format (see defect F6).
+    Q_PROPERTY(QString importNotice READ importNotice NOTIFY importNoticeChanged)
 
     /// Whether the current scene contains any data to display. False means the shell shows its empty state.
     Q_PROPERTY(bool hasData READ hasData NOTIFY hasDataChanged)
@@ -55,6 +61,18 @@ class OVITO_GUIQML_EXPORT QmlWorkbenchController : public QObject
     /// The button value the dialog answers with when it is dismissed instead of answered (the caller's default).
     Q_PROPERTY(int defaultMessageBoxButton READ defaultMessageBoxButton NOTIFY messageBoxChanged)
 
+    /// The name of the application, as the About dialog and the error messages show it.
+    Q_PROPERTY(QString applicationName READ applicationName CONSTANT)
+
+    /// The version of the application, as the About dialog shows it.
+    Q_PROPERTY(QString applicationVersion READ applicationVersion CONSTANT)
+
+    /// The edition this build is ("Basic" or "Professional").
+    Q_PROPERTY(QString buildType READ buildType CONSTANT)
+
+    /// The copyright notice of this build, as rich text.
+    Q_PROPERTY(QString copyrightNotice READ copyrightNotice CONSTANT)
+
 public:
 
     /// Constructor.
@@ -68,6 +86,12 @@ public:
 
     /// Replaces the message shown in the status line.
     void setStatusMessage(const QString& message);
+
+    /// Returns the report about the last import.
+    QString importNotice() const { return _importNotice; }
+
+    /// Replaces the report about the last import.
+    void setImportNotice(const QString& notice);
 
     /// Returns whether the current scene contains data to display.
     bool hasData() const { return _hasData; }
@@ -96,6 +120,18 @@ public:
     /// Returns the button value the message dialog answers with when it is dismissed instead of answered.
     int defaultMessageBoxButton() const { return static_cast<int>(_messageBoxAnswer); }
 
+    /// Returns the name of the application.
+    QString applicationName() const;
+
+    /// Returns the version of the application.
+    QString applicationVersion() const;
+
+    /// Returns the edition this build is.
+    QString buildType() const;
+
+    /// Returns the copyright notice of this build.
+    QString copyrightNotice() const;
+
     /// Imports the given files (QUrl values) into the current dataset, reporting the states they produce.
     Q_INVOKABLE void importFiles(const QVariantList& urls);
 
@@ -110,6 +146,9 @@ public:
 
     /// Answers the message dialog the frontend is waiting on with one of its buttons.
     Q_INVOKABLE void answerMessageBox(int button);
+
+    /// Asks the scene to display the About dialog of the workbench.
+    Q_INVOKABLE void showAboutDialog();
 
     /// Updates the state derived from the current dataset: the window title and the empty state.
     /// Called by the frontend when the data set changes or an operation that may have changed it has finished.
@@ -135,6 +174,9 @@ Q_SIGNALS:
     /// Is emitted when the status line message has changed.
     void statusMessageChanged();
 
+    /// Is emitted when the report about the last import has changed.
+    void importNoticeChanged();
+
     /// Is emitted when the current scene became empty or gained its first object.
     void hasDataChanged();
 
@@ -146,6 +188,9 @@ Q_SIGNALS:
 
     /// Is emitted when the scene should open the file selection dialog for the given directory.
     void importDialogRequested(const QUrl& directoryUrl);
+
+    /// Is emitted when the scene should display the About dialog.
+    void aboutDialogRequested();
 
     /// Is emitted when the message dialog has been answered.
     void messageBoxAnswered();
@@ -172,14 +217,11 @@ private:
     /// The message shown in the status line.
     QString _statusMessage;
 
+    /// The report about the last import, shown in the status line while no other message is displayed.
+    QString _importNotice;
+
     /// Whether the current scene contains data to display.
     bool _hasData = false;
-
-    /// Whether an operation that reports its progress is running.
-
-    /// The description of the running operation.
-
-    /// The progress value and maximum of the running operation.
 
     /// Whether the running operation can be cancelled by the user, and whether its cancellation was requested.
     bool _cancellable = false;

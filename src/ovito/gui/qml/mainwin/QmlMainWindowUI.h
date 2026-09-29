@@ -8,6 +8,7 @@
 #include <ovito/gui/qml/mainwin/QmlViewportController.h>
 #include <ovito/gui/qml/mainwin/QmlViewportLayout.h>
 #include <ovito/gui/qml/mainwin/QmlWorkbenchController.h>
+#include <ovito/gui/qml/viewport/QmlViewportMenu.h>
 #include <ovito/gui/base/app/WorkbenchUI.h>
 
 namespace Ovito {
@@ -49,6 +50,15 @@ public:
 
     /// Returns the model that lays the viewport panes of the workbench out.
     QmlViewportLayout* viewportLayout() const { return _viewportLayout; }
+
+    /// Returns the model of the viewport context menu.
+    QmlViewportMenu* viewportMenu() const { return _contextMenu; }
+
+    /// Restores the window size, the window position and the maximized state the user left behind, in so far as they were
+    /// remembered (see GuiSettings). Called while the window is created; it can be called again whenever the window has
+    /// to return to the remembered state.
+    /// \return True if a remembered window state was applied; false leaves the window as it is.
+    bool applyStoredWindowState();
 
     /// Displays a message string in the window's status bar.
     void showStatusBarMessage(const QString& message, int timeout = 0) override;
@@ -93,6 +103,12 @@ private:
     /// Shows the message of an exception in a message dialog of the QML scene.
     void showErrorMessage(const Exception& ex);
 
+    /// Remembers the current window state, so that the next launch looks like this one.
+    void saveWindowState();
+
+    /// Gives the commands whose handlers belong to a frontend (Open, Save, About, Quit) the handlers of this one.
+    void connectFrontendCommands(QQuickView* view);
+
     /// The Qt Quick window displaying the workbench UI.
     QPointer<QQuickView> _view;
 
@@ -104,6 +120,14 @@ private:
 
     /// The layout of the viewport panes displayed by this window.
     QPointer<QmlViewportLayout> _viewportLayout;
+
+    /// The context menu of the viewports of this window.
+    QPointer<QmlViewportMenu> _contextMenu;
+
+    /// Keeps the continuation alive that completes the import notice with the number of source frames of the imported
+    /// file. A future nobody awaits cancels the continuation it carries, and the frame list of a file source is only
+    /// known once the pipeline has been evaluated, which happens after the import call has returned.
+    Future<void> _importNoticeFuture;
 };
 
 }   // End of namespace

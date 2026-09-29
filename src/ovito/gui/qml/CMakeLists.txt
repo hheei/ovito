@@ -17,6 +17,7 @@ OVITO_STANDARD_PLUGIN(GuiQml
         viewport/QuickViewportItem.cpp
         viewport/QuickViewportRenderer.cpp
         viewport/QuickRendererService.cpp
+        viewport/QmlViewportMenu.cpp
         resources/qml.qrc
     PLUGIN_DEPENDENCIES
         GuiBase
@@ -27,6 +28,12 @@ OVITO_STANDARD_PLUGIN(GuiQml
 # Qt6::QuickControls2 is what makes the shell's controls (buttons, progress bar, dialogs) available; Qt6::QuickDialogs is
 # the file selection dialog. The QML modules themselves are loaded by the QML engine at run time.
 TARGET_LINK_LIBRARIES(GuiQml PUBLIC Qt6::Quick Qt6::QuickControls2)
+
+# Inject the copyright notice text (cmake/Version.cmake) into the source code of the About dialog of this frontend, the
+# same way the classic frontend's About dialog receives it.
+SET_PROPERTY(SOURCE mainwin/QmlWorkbenchController.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS
+    "OVITO_COPYRIGHT_NOTICE=\"${OVITO_COPYRIGHT_NOTICE}\"")
 
 # Build the Phase 1 prototype application, which renders an OVITO scene inside a Qt Quick window.
 # This is a technical spike; it is not the final frontend entry point (see docs/design/UI_PLAN.md).
