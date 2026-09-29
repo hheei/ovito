@@ -891,6 +891,38 @@ The evidence screenshot of this round was taken with the recipe of section 2.2 (
 from the *product* frontend (`ovito --gui=qml <file>`, which shows the menu bar and the persistent import notice) and is
 stored as `docs/design/evidence/phase25_parity_shell.png`.
 
+### 9.2.4 Testing the shared library models and the graphics-device report
+
+`--qml-library-check` constructs the two library models of the classic frontend (`PipelineListModel`,
+`AvailableModifiersModel`, `AvailableOverlaysModel`) inside a `GuiTaskScope` and verifies every row: it exposes a command
+of the shared layer (`CommandRole`), that command is registered in the `ActionManager` under the id of the row's object
+name, and `ActionRole` returns exactly the `QAction` view of that command. It also compares the row flags with the enabled
+state of the command. It runs before the import check, because its models register commands that stay registered for the
+rest of the run.
+
+`--qml-device-check` compares the frontend's own answer (`QmlMainWindowUI::hasGraphicsDevice()`, filled from
+`QQuickWindow::rhi()`) with the scene graph of the window and fails if they disagree; when no graphics device exists, the
+workbench notice must name the platform plugin. The acceptance run is the one the CI jobs use for the two Linux runners:
+
+```bash
+QT_QPA_PLATFORM=offscreen LD_LIBRARY_PATH="$QT_LIB:$PWD/build/lib/ovito/plugins" \
+  ./build/bin/ovito-qml-spike --qml-startup-delay 3000 --qml-device-check   # DEVICE_TEST ... missing/missing, exit 0
+```
+
+Traps of this round:
+
+1. **A frontend without the desktop's snippet commands**: `PipelineListModel` resolved the two modifier-snippet commands
+   with the asserting `getCommand()` and used the result unconditionally, so constructing it in the QML frontend either
+   tripped the assertion (assert build) or dereferenced null (release). Look up shared commands that a frontend may not
+   own with `findCommand()` and guard the use (defect F19; the same pattern as defect F17).
+2. **A library entry can switch on a mode the frontend lacks**: inserting a viewport layer runs
+   `viewport->setRenderPreviewMode(true)`, which the Qt Quick viewport does not implement yet, so a check must not trigger
+   a viewport-layer entry expecting an undoable, harmless edit. Verify the row-to-command wiring instead, and cover the
+   trigger path once preview mode exists (Phase 5).
+3. **A missing `continuation()` hangs the harness, not the check**: a step that returns without calling its continuation
+   leaves the step runner waiting until the process timeout (`EXIT=124`) and prints no `VERIFICATION_DONE`, which looks
+   like a crash of the feature under test. Check the step's exit path first.
+
 ### 9.5 The CI smoke test and its render loop
 
 The Qt Quick smoke test of the GitHub workflow (`.github/workflows/ci.yml`) runs with `QSG_RENDER_LOOP=basic` on the

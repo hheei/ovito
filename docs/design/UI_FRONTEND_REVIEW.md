@@ -339,6 +339,8 @@ rules in QML.
 
 ### A8 — Remaining core/frontend couplings (P3, small, independent)
 
+**Status: implemented in Phase 2.5 (deliverable 4).** A8.1 became `core/rendering/GraphicsApi` (the statics of `RenderThread`, plus the two Vulkan probes) and the standard renderer family no longer includes `RenderThread.h`; A8.2 was solved with `MainWindow::activeMainWindow()`, a desktop-side lookup that returns null under another frontend, because the two services are desktop tools (the update service shows its page in the command panel) and a frontend-neutral message-box API could not replace their cast; A8.3 registers `--noviewports` in core; A8.4 keeps O1 a documented environment constraint and adds the null-`rhi()` report, verified by a `QT_QPA_PLATFORM=offscreen` run of the spike; A8.5 converted the modifier and viewport-layer libraries to `Command`s, verified by the spike's `--qml-library-check`.
+
 | # | Coupling | Where | Suggested cleanup |
 | --- | --- | --- | --- |
 | A8.1 | `StandardRenderer` still includes `RenderThread.h` to call the statics `pickGraphicsApi()`, `enumerateAdapters()`, `selectedAdapterName()` | core/rendering/standard/StandardRenderer.cpp | move to `RendererService` or a small graphics-API utility; completes the RendererService extraction |
@@ -440,7 +442,7 @@ row.
 | A5 selection/hover model | assigned | Phase 4 |
 | A6 import plan/options model | assigned | Phase 7; the user-visible *notice* is Phase 2.5 |
 | A7 property model foundation | assigned | Phase 4 (deliverable 0, mandatory before its other deliverables) |
-| A8.1–A8.5 remaining couplings | assigned | Phase 2.5 (deliverable 4) |
+| A8.1–A8.5 remaining couplings | implemented | Phase 2.5 (deliverable 4) |
 | A9 shared icon/theme assets | assigned | Phase 2.5 (deliverable 5) |
 
 The four small gaps of §5 are Phase 2.5 deliverable 3 — with **About and Quit** in the menu bar and **Preferences deferred

@@ -391,23 +391,35 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      * **Window state**: remember window size/position, the last used theme and the pane-layout policy through the settings
        facade of deliverable 2, so a second launch does not look like a first launch.
   4. **Remaining core/frontend couplings (review item A8)**:
-     * **A8.1** — `StandardRenderer` still includes `RenderThread.h` for three static calls (`pickGraphicsApi()`,
+     * **A8.1 (done)** — `StandardRenderer` still includes `RenderThread.h` for three static calls (`pickGraphicsApi()`,
        `enumerateAdapters()`, `selectedAdapterName()`); move them behind `RendererService` or a small graphics-API
        utility, which completes the extraction started in Phase 1.
-     * **A8.2** — replace the two `dynamic_object_cast<MainWindowUI>` sites in application services with a GUI-neutral
+     * **A8.2 (done)** — replace the two `dynamic_object_cast<MainWindowUI>` sites in application services with a GUI-neutral
        "notify/confirm with details" interface next to `UserInterface::showMessageBox()`.
-     * **A8.3** — `--noviewports` is registered by the desktop frontend and read by core
+     * **A8.3 (done)** — `--noviewports` is registered by the desktop frontend and read by core
        (`core/dataset/DataSet.cpp`); make it a core-level parameter or let the frontend decide the default viewport
        configuration.
-     * **A8.4** — O1 is settled as a **documented environment constraint, not an implementation task**: the
+     * **A8.4 (done)** — O1 is settled as a **documented environment constraint, not an implementation task**: the
        `ovitoheadless` QPA plugin does not exist in this tree, Qt's `offscreen` plugin provides no QRhi, and the working
        headless route for the Qt Quick frontend is `xvfb` with `QT_QPA_PLATFORM=xcb` (UI_TEST_ENV.md sections 1 and 3.2).
        What this phase adds is the failure path that constraint implies: when no QRhi-capable platform is available, the
        frontend must detect it (`QQuickWindow::rhi()` stays null) and report an error naming the platform plugin and the
        recipe instead of opening a blank viewport. Acceptance: a spike run with `QT_QPA_PLATFORM=offscreen` takes the error
        path and says so, and the constraint is stated for users, not only for tests.
-     * **A8.5** — `AvailableModifiersModel` and `AvailableOverlaysModel` still register plain `QAction`s; convert them to
+     * **A8.5 (done)** — `AvailableModifiersModel` and `AvailableOverlaysModel` still register plain `QAction`s; convert them to
        `Command`s so Phase 4's modifier library (and the QML command list) can consume them.
+       *Outcome:* they register `ModifierAction`/`OverlayAction` commands (keeping their object names as ids, so
+       `findAction(id)` still resolves the `QAction` view that the desktop cards expect) and the models expose
+       `categoryCommands()`/`commandAt()`/`commandFromIndex()` plus a `CommandRole` next to the `ActionRole` that returns
+       that view. The "Manage templates…" row of each library is no longer a wrapper `QAction` with shortened, italic text
+       but the frontend-owned global command itself.
+     * *Verification of deliverable 4*: the native build and `ctest --preset native` (6/6), a headless `--nogui` run and a
+       classic run under Xvfb; the spike's new `--qml-library-check` (every row of both libraries exposes a registered
+       command whose `QAction` view and row flags agree with it) plus the offscreen `--qml-device-check` run that accepts
+       the missing-graphics-device path; and the whole spike suite in the release and the assert-enabled build. The insert
+       path of the library rows is *not* exercised by the spike: inserting a viewport layer switches the viewport into
+       render preview mode, which the Qt Quick viewport does not implement yet (Phase 5), and inserting a modifier needs a
+       selected pipeline in the list model, which only a selection operation of the frontend establishes.
   5. **Shared presentation assets (review item A9)**: publish the classic icon set
      (`gui/base/resources/icons/ovito-dark|light`) and its tint rule for QML use, replacing the drawn glyphs the shell
      uses today, so both frontends speak one visual language.
