@@ -7,7 +7,7 @@
 > **Status**: Proposed Roadmap; Phase 0 audit (partially), Phase 1 rendering spike and Phase 2 deliverables 1–7
 > executed — the frontend selection (`--gui=qml`), the shared `gui/base` workbench base class, the layout-derived
 > workbench shell, the import path with its empty/busy/cancelling/cancelled/error states and the shared rendering/
-> picking core are in the tree and verified on Linux/OpenGL and macOS/Metal, see
+> picking core are in the tree and verified on Linux/OpenGL, Linux/Vulkan, macOS/Metal and Windows/D3D12, see
 > [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) and [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md).
 > The comparison against the classic frontend, the duplication it identifies and the abstractions it proposes are
 > collected in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md); of those, the command layer (A1, audit decision D26),
@@ -145,11 +145,13 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   on OVITO's `RenderThread` and verified end to end (hit/no-hit controls, 2× HiDPI and Retina, three Qt Quick render loops,
   lifecycle cycles, a 262144-atom scene, and selection through the unmodified `SelectionMode`), including a run with
   assertions enabled. The frontend was exercised with Qt Quick **OpenGL** and **Vulkan** on Linux x86_64 and with
-  **Metal** on macOS ARM64, and its frame times (512–262144 atoms) were compared against the classic frontend on macOS.
-  Results, evidence and the exact reproduction commands are recorded in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md); the
-  environment recipes and testing traps are collected in [UI_TEST_ENV.md](UI_TEST_ENV.md). Still open: the **D3D12 runtime
-  path** (the CI runner now *builds* the frontend on Windows x86_64, but the smoke test has not run there yet), Qt Quick
-  Vulkan on a hardware driver (Xvfb lacks DRI3), and mixed-DPI multi-monitor setups.
+  **Metal** on macOS ARM64, with **Direct3D 12** (hardware and WARP) and **Vulkan** on Windows x86_64, and its frame times
+  (512–262144 atoms) were compared against the classic frontend on macOS. Results, evidence and the exact reproduction
+  commands are recorded in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md); the environment recipes and testing traps are
+  collected in [UI_TEST_ENV.md](UI_TEST_ENV.md). Still open: Qt Quick Vulkan on a hardware RADV driver under Linux (Xvfb
+  lacks DRI3) and mixed-DPI multi-monitor setups. The Windows round added two fixes to shared code — F13 (an unspecified
+  argument evaluation order that MSVC resolved differently and that crashed every import) and F14 (the frontend now
+  selects Direct3D 12 itself instead of failing on Qt Quick's D3D11 default, whose shader model OVITO does not bake).
 
 ---
 
@@ -236,11 +238,13 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   carried-over Phase 1 items: the window's viewport items share one renderer service (**D23**, measured below), the
   frame-graph pass sequence exists once (**D24**), the picking target no longer exists twice (**O7**) and **O2** (explicit
   Vulkan API version) and **O1** (documented as an environment constraint) are settled. **Open from this phase**: the
-  exit-gate verification on Windows (D3D12 has no test host). The spike verifies the shell with `--qml-layout-check` and `--qml-import-check` in CI; the
-  testing recipe is [UI_TEST_ENV.md](UI_TEST_ENV.md). Verified so far: Linux/OpenGL (all checks, including the four
-  viewports, the splitter drag and its undo, picking, the import path and the cancellation) and macOS/Metal (the same
-  check set, 126 fps with four viewports at 1280x800); macOS screenshots need the screen-recording permission, so the
-  shell evidence image is the Linux one.
+  exit-gate verification on Windows x86_64, which is done now (D3D12 on hardware and through WARP, plus Qt Quick Vulkan,
+  each with the full check set and zero failed checks; defects F13 and F14 came out of it). The spike verifies the shell
+  with `--qml-layout-check` and `--qml-import-check` in CI; the testing recipe is [UI_TEST_ENV.md](UI_TEST_ENV.md).
+  Verified so far: Linux/OpenGL (all checks, including the four viewports, the splitter drag and its undo, picking, the
+  import path and the cancellation), macOS/Metal (the same check set, 126 fps with four viewports at 1280x800) and
+  Windows/D3D12 (the same check set on a real GPU, 60 fps vsync-limited); macOS screenshots need the screen-recording
+  permission, so the shell evidence images are the Linux and Windows ones.
 
 - **Deliverable 7 measurement (frame time of the four viewports, 1280×800, headless, `QSG_NO_VSYNC=1`, medians of three
   runs)**: one service per viewport item versus one per window, Linux/OpenGL/llvmpipe:

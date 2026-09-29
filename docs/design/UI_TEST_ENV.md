@@ -374,7 +374,8 @@ The `buddy` host has a `Windows 11.pvm` virtual machine, but it is not a usable 
 * Parallels Desktop on Apple Silicon exposes **DirectX 11.1** at most — there is no D3D12 support in the guest.
 * The guest is Windows 11 **ARM64**, while OVITO's Windows target is **AMD64/x86_64**.
 
-So a D3D12 smoke test needs an x86_64 Windows runner; section 6 describes the CI job that provides one. Qt Quick's D3D12 backend supports the **WARP** software adapter
+So a D3D12 smoke test needs an x86_64 Windows machine; a real one is described in section 5.5, and section 6 shows the CI
+job that covers the same ground without owning the hardware. Qt Quick's D3D12 backend supports the **WARP** software adapter
 (`QSG_RHI_PREFER_SOFTWARE_RENDERER=1`), and OVITO's render thread creates its D3D12 device with default
 `QRhiD3D12InitParams`, which falls back to the DXGI default adapter (WARP on a GPU-less machine) — i.e. a CPU-only CI runner
 can exercise the D3D12 code paths, the same way lavapipe covers Vulkan on Linux. Prerequisites for such a job: a Qt 6.10
@@ -382,6 +383,95 @@ Windows installation with private headers, and `dxc` on `PATH` (OVITO precompile
 
 Also note that when a Windows machine *is* available, a classic-frontend run needs the interactive import dialog out of the
 way (section 3.1) — that trap applies to every platform.
+
+### 5.5 Windows x86_64 host: build, run and diagnose
+
+This section is the recipe that produced the Windows/D3D12 results in
+[UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md) section 3.5 and the fixes F13–F16. Two of its traps cost a long debugging
+session each, so they are written down in the order they were hit.
+
+**Toolchain and configure.** Visual Studio 2022 (x64 native tools), CMake and Ninja (the copy inside the Visual Studio
+installation works), Qt 6.10.2 `msvc2022_64` including the `qtshadertools` module, the **official Boost source tarball**
+(header-only use, `-DBOOST_ROOT=… -DBoost_NO_BOOST_CMAKE=ON`; the vcpkg `boost-headers` port is missing per-library headers
+such as `boost/algorithm/algorithm.hpp`), `dxc.exe` from the Windows SDK on `PATH`, and — because
+`-DOVITO_REDISTRIBUTABLE_PACKAGE=ON` builds the bundled HDF5/NetCDF/SQLite — a **zlib-enabled** environment: the bundled
+netcdf-c stops with `HDF5 was built without zlib. Rebuild HDF5 with zlib.` and also requires **Perl** on `PATH` (defect F16).
+Build zlib first (`-DBUILD_SHARED_LIBS=ON`, install to a prefix), pass both `-DZLIB_ROOT=<prefix>` and that prefix inside
+`-DCMAKE_PREFIX_PATH` (module-mode `FindZLIB` does not always honour `ZLIB_ROOT` alone), and delete the external-project
+stamps `build-win/_ep` and `build-win/_ep_build` when zlib is added afterwards, because an HDF5 stamp records the source
+version only and a stale one silently keeps the zlib-less build.
+
+**Where the binaries land.** Unlike Linux (`bin/` plus `lib/ovito/plugins/`), a Windows build tree puts `ovito.exe`,
+`ovito-qml-spike.exe` and all `*.ovito.dll` plugins directly into the build root, and it also writes a `qt.conf` there whose
+`Plugins = plugins/` describes the layout of an *installed* package. Qt therefore cannot find its own plugins or QML
+modules from the build tree, which shows up as
+
+```
+qt.qpa.plugin: Could not find the Qt platform plugin "windows" in ""
+qrc:/ovito/gui/qml/WorkbenchWindow.qml:5:1: module "QtQuick.Controls" plugin "qtquickcontrols2plugin" not found
+```
+
+Set these before running anything from a build tree (a `.cmd` file is the reliable way, see below):
+
+```bat
+set PATH=C:\ovito\build-win;%QT%\bin;%PATH%
+set QT_PLUGIN_PATH=%QT%\plugins
+set QT_QPA_PLATFORM_PLUGIN_PATH=%QT%\plugins\platforms
+set QML_IMPORT_PATH=%QT%\qml
+set QML2_IMPORT_PATH=%QT%\qml
+```
+
+**GUI tests must run in the console session.** An SSH session lands in Windows session 0, which has no DWM compositor: a
+D3D12 device and its command queue can be created there, but `CreateSwapChainForHwnd` fails with
+`DXGI_ERROR_NOT_CURRENTLY_AVAILABLE` and every GUI run dies at startup (Qt's `offscreen` plugin cannot supply a D3D12 QRhi
+either). Start the test through the task scheduler as the logged-on user, which lands in session 1, and collect the output
+from a file; the same trick keeps the build running while the SSH connection comes and goes:
+
+```bat
+schtasks /create /tn ovito-verify /tr "cmd /c C:\Users\chlo\jobs\verify.cmd > C:\Users\chlo\jobs\verify.log 2>&1" /sc once /st 00:00 /f
+schtasks /run /tn ovito-verify
+```
+
+Scheduled tasks start in `C:\Windows\System32`, so every wrapper script has to `mkdir` and `cd /d` its working directory
+first (otherwise downloads and logs fail with confusing write errors), and the warning `Task may not run because /ST is
+earlier than current time` is harmless. There is no screenshot to be had this way: `QQuickWindow::grabWindow()` returns
+nothing usable for a `QQuickRhiItem` viewport (section 2.2), so a product screenshot has to be taken from outside with a
+`PrintWindow(PW_RENDERFULLCONTENT)` helper while the application is held open (`--qml-hold-ms`). Such a helper can crash in
+`gdiplus.dll` *after* writing the file — check the file size, not the exit code.
+
+**Diagnosing a crash without a debugger.** Windows Error Reporting already records the essentials, including the module and
+the fault offset, and `llvm-symbolizer` from the Visual Studio LLVM component resolves that offset against the PDB:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'} -MaxEvents 5 |
+  ForEach-Object { ($_.Message -split "`n") | Where-Object { $_ -match 'Faulting module name|Fault offset' } }
+# fault offset is an RVA: add the image base (0x180000000 for these x64 DLLs) and let the symbolizer read the PDB
+& "<VS>\VC\Tools\Llvm\x64\bin\llvm-symbolizer.exe" --obj=C:\ovito\build-win\GuiBase.ovito.dll 0x18004f3a2
+# -> Ovito::WorkbenchUI::importFiles(...) C:\ovito\src\ovito\gui\base\app\WorkbenchUI.cpp:103:0
+```
+
+Two details of that: `llvm-symbolizer` takes the **virtual address** (image base + RVA) and has no `--pdb=` option — it
+finds the PDB through the binary — and the disassembly only lines up when it starts at a real instruction boundary, so use
+`llvm-objdump --start-address=<symbol start>` rather than a round offset. The compiler had inlined the real culprit into
+the call site, so the crash line named a *statement*: it was narrowed by splitting that statement into temporaries with
+`qDebug()` markers between them until the failing step was obvious (defect F13 — an argument evaluation order that only
+MSVC chose differently). That technique is worth reaching for early: one rebuild of `GuiBase` costs two minutes.
+
+**One more build-tree trap.** After a source file appears in a target through a new condition (here: zlib was added, so
+`GzipIODevice.cpp` became part of `Core`), AUTOMOC may not process its header, and `Core` then fails to link with missing
+`moc_*` symbols even though the `.cpp` compiled. Deleting the stale `build-win/src/ovito/core/Core_autogen` directory and
+rebuilding fixes it.
+
+**Verifying.** `C:\Users\chlo\jobs\verify.cmd` runs the whole gate in one go: `ovito --version`, `--nogui` and
+`--gui=bogus` (which must print the available user interfaces and exit 1), then the spike with the full check set under the
+frontend's own backend choice, with `QSG_RHI_BACKEND=d3d12`, with `QSG_RHI_BACKEND=d3d12` plus
+`QSG_RHI_PREFER_SOFTWARE_RENDERER=1` and with `QSG_RHI_BACKEND=vulkan`, and finally the product `ovito --gui=qml` with a
+data file, which must stay alive and can be screenshotted from outside. Every spike run prints
+`VERIFICATION_DONE with 0 failed check(s)` and exits 0; the picking numbers (9 of 25 probe positions, 2315 of 7128 scan
+positions, empty background control, identical hit locations across backends) are the regression signal. The classic
+frontend is affected by defect F13 as well — it shares `WorkbenchUI::importFiles()` — but it blocks in its modal import
+dialog before reaching that call, which is why the crash surfaced through the Qt Quick frontend first; the product crash
+that was reproducible is `ovito --gui=qml` with a data file.
 
 ---
 
