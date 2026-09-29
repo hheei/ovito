@@ -563,7 +563,33 @@ Traps and facts that cost time here, in order:
   `QmlFrontend::createWorkbench()` and colors the controls from `Theme.qml`; the styles of the platform are deliberately
   not used, so the workbench looks the same on every platform.
 
-## 9.2 Testing the shared command layer
+## 9.2 Testing the shared workbench state
+
+The workbench state that both frontends display (audit decision D27) lives in `gui/base`: `RecentFilesList` holds the
+recently opened sessions and imports, and `TaskProgressModel` lists the running tasks. `--qml-import-check` verifies the
+progress model with a real operation, because the model is only interesting while something runs:
+
+* it imports a POSCAR of 140^3 atoms, i.e. one that takes longer to read than the 100 ms after which the workbench
+  starts displaying progress, and checks from a timer that the model reports the import (`Reading VASP file ...`);
+* it compares the model with what the QML scene sees through the `taskProgress` context property (busy, count, text), so
+  an unbound model or a broken binding fails the run instead of showing up as an empty status line;
+* it waits for the model to become idle again after the canceled import, which catches a progress record that stayed
+  behind (a leaked record would keep the status line busy forever).
+
+Traps:
+
+* **A progress record is registered with the `UserInterface` of its task.** A large file imported from the command line
+  or by a file source is *scanned and read* later, when the pipeline is evaluated - and the task that evaluates it has no
+  user interface, so its `TaskProgress` record never reaches the workbench and neither frontend's status bar shows it.
+  The progress of an operation that the frontend starts (an import, an export) does show up. The check therefore drives
+  the import through the shell's own command, not by evaluating a pipeline.
+* **The workbench refreshes the model at most every 100 ms** (`WorkbenchUI::notifyProgressTasksChanged`), deliberately:
+  short operations must not flash a progress bar. Consequences for tests: an operation that is over in less than 100 ms
+  must not be expected in the model (the check only requires it when the operation took longer than 150 ms), and a row
+  can still be there right after an operation returned - the check waits for it to disappear rather than reading it
+  immediately.
+
+## 9.3 Testing the shared command layer
 
 The commands of the workbench live in `gui/base` and are the objects both frontends use (`ovito::Command`, audit
 decision D26): the classic frontend displays each one through a `QAction` that mirrors it, the QML frontend binds
@@ -601,7 +627,7 @@ Traps:
 5. Lifecycle: `--qml-lifecycle-cycles N`, `--qml-hide-show`, `--qml-resize WxH`.
    Import path: `--qml-import-check` (trajectory, unsupported file, cancelled import; see §9.1).
    Command layer: `--qml-command-check` (the commands the QML workbench sees, their state rules and their handlers;
-   see §9.2).
+   see §9.3). Workbench state (shared task progress model): part of `--qml-import-check` (§9.2).
 6. Frame rate: `--qml-frame-stats MS` (state vsync and the render loop; only compare equal configurations).
 7. Non-Linux validation: run the same commands on the macOS host (§5) — and **close the windows afterwards** (§5.3).
 8. Screenshots: `--qml-hold-ms` + a private `Xvfb` display + `ffmpeg -f x11grab` (§2.2); never `grabWindow()` (§9).

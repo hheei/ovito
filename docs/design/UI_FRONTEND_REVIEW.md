@@ -228,7 +228,16 @@ with four near-identical entry points (`createOffscreenTarget`, `renderOffscreen
 samples") that owns target creation, supersampling, readback and reuse, plus a shared `PickingBufferTarget`. The QML
 render output planned for Phase 7 and the classic render output would then use identical code.
 
-### A5 — Workbench state models (P2, ~2–3 days)
+### A5 — Workbench state models (P2, ~2–3 days) — **partly implemented**
+
+**Status.** The recent files list (`RecentFilesList`) moved from `gui/desktop/mainwin/` to `gui/base/mainwin/` and the new
+`TaskProgressModel` (audit decision D27) presents the running tasks to both frontends: the Qt Quick status line binds to
+it instead of walking the task list, and the classic `TaskDisplayWidget` reads the same model. Still to do: the session
+service (the operations `fileSave()`, `fileSaveAs()` and `askForSaveChanges()` are still desktop methods, and the
+`defaults.ovito` session load is in `GuiApplication`), a selection model for the pipeline view (Phase 4), and a settings
+facade. A finding to keep in mind while building them: a `TaskProgress` record is registered with the `UserInterface` of
+its *task*, so an operation started by the frontend (an import) reports progress, while a pipeline evaluation that a
+viewport triggered reports to no status bar at all - in either frontend.
 
 **Evidence.** Presentation state is computed twice: the classic frontend spreads it over `TaskDisplayWidget`,
 `RecentFilesList`, `MainWindow` (window title, status bar, error list) and `QSettings`; the QML frontend recomputes
@@ -239,7 +248,9 @@ tasks, title, empty state, status line and message boxes in `QmlWorkbenchControl
 small application-settings facade, and a session service. Two skins render the same model.
 
 **Payoff.** The classic frontend's per-task progress bars and cancellation become available to QML without a second
-implementation, and the "no session support" gap (3.6) becomes a matter of binding, not of new logic.
+implementation, and the "no session support" gap (3.6) becomes a matter of binding, not of new logic. The progress model
+was measured to do this in the Qt Quick shell with a real operation: the spike's import check logs the model reporting
+`Reading VASP file ...` while a large import runs and no task afterwards.
 
 ### A6 — Import plan / options model (P2, ~1–2 days)
 
