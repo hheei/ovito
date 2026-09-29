@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
+#include <ovito/gui/base/viewport/ViewportRendererRegistry.h>
 #include <ovito/gui/desktop/GUI.h>
 #include <ovito/core/viewport/ViewportWindow.h>
 #include <ovito/gui/desktop/dialogs/SystemInformationDialog.h>
@@ -95,7 +96,7 @@ ConfigureViewportGraphicsDialog::ConfigureViewportGraphicsDialog(MainWindowUI& u
     // Create a radio button for each available rendering backend.
     _backendSelectionGroup = new QButtonGroup(this);
     int index = 0;
-    for(const auto& [id, label, rendererClass] : GuiApplication::instance()->listInteractiveViewportRenderers()) {
+    for(const auto& [id, label, rendererClass] : ViewportRendererRegistry::instance().availableRenderers()) {
         QRadioButton* option = new QRadioButton(label);
         option->setEnabled(rendererClass);
         option->setProperty("graphics_api", id);
@@ -104,7 +105,7 @@ ConfigureViewportGraphicsDialog::ConfigureViewportGraphicsDialog(MainWindowUI& u
 
         handleExceptions([&]() {
             // Create a settings panel for the rendering backend.
-            if(OORef<SceneRenderer> rendererInstance = GuiApplication::instance()->getInteractiveViewportRenderer(id)) {
+            if(OORef<SceneRenderer> rendererInstance = ViewportRendererRegistry::instance().renderer(id)) {
                 PropertiesPanel* propertiesPanel = new PropertiesPanel(ui);
                 propertiesPanel->setEditObject(rendererInstance);
                 if(propertiesPanel->editor()) {
@@ -149,7 +150,7 @@ ConfigureViewportGraphicsDialog::ConfigureViewportGraphicsDialog(MainWindowUI& u
 void ConfigureViewportGraphicsDialog::updateGUI()
 {
     handleExceptions([&]() {
-        QString selectedGraphicsApi = GuiApplication::instance()->getInteractiveViewportRendererName();
+        QString selectedGraphicsApi = ViewportRendererRegistry::instance().selectedRendererId();
         for(QAbstractButton* option : _backendSelectionGroup->buttons()) {
             if(option->isEnabled() && selectedGraphicsApi.compare(option->property("graphics_api").toString(), Qt::CaseInsensitive) == 0)
                 option->setChecked(true);
@@ -185,7 +186,7 @@ void ConfigureViewportGraphicsDialog::closeEvent(QCloseEvent* event)
 
     // Save renderer settings to application settings store.
     handleExceptions([&]() {
-        GuiApplication::instance()->saveInteractiveViewportRendererSettings();
+        ViewportRendererRegistry::instance().saveRendererSettings();
     });
 
     QDockWidget::closeEvent(event);
@@ -249,13 +250,9 @@ void ConfigureViewportGraphicsDialog::backendSelectionChanged(QAbstractButton* o
         }
 
         handleExceptions([&]() {
-            if(GuiApplication::instance()->setInteractiveViewportRendererName(option->property("graphics_api").toString())) {
-                // Assign the new renderer to all interactive viewport windows.
-                OORef<SceneRenderer> renderer = GuiApplication::instance()->getInteractiveViewportRenderer();
-                MainWindow::visitMainWindows([&](MainWindow* mainWindow) {
-                    mainWindow->viewportsPanel()->setInteractiveViewportRendererForAllWindows(renderer);
-                });
-            }
+            // The viewport panels of all main windows follow the ViewportRendererRegistry, which announces the new
+            // selection, so assigning the renderer to the viewport windows is not this dialog's business.
+            ViewportRendererRegistry::instance().setSelectedRendererId(option->property("graphics_api").toString());
         });
         updateGUI();
     }

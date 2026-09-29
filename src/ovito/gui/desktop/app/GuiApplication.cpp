@@ -13,12 +13,10 @@
 #include <ovito/gui/base/app/GuiFrontendRegistry.h>
 #include <ovito/gui/base/app/WorkbenchUI.h>
 #include <ovito/core/app/undo/UndoStack.h>
-#include <ovito/core/app/PluginManager.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
-#include <ovito/core/rendering/standard/StandardRenderer.h>
-#include <ovito/core/utilities/concurrent/NoninteractiveContext.h>
 #include <ovito/core/utilities/concurrent/Task.h>
+#include <ovito/gui/base/viewport/ViewportRendererRegistry.h>
 #include "GuiApplication.h"
 
 // Registers the embedded Qt resource files embedded in a statically linked executable at application startup.
@@ -582,152 +580,5 @@ bool GuiApplication::detectedUnknownSshServer(const QString& hostname, const QSt
 }
 
 #endif
-
-/******************************************************************************
-* Returns the list of available interactive viewport renderers.
-******************************************************************************/
-std::vector<std::tuple<QString, QString, OvitoClassPtr>> GuiApplication::listInteractiveViewportRenderers() const
-{
-    std::vector<std::tuple<QString, QString, OvitoClassPtr>> list;
-
-    // Standard renderer:
-    list.emplace_back(
-        QStringLiteral("opengl"), // Legacy name "opengl" is kept for backward compatibility.
-        tr("GPU rasterizer (default)"),
-        &StandardRenderer::OOClass()
-    );
-
-    // ANARI:
-    list.emplace_back(
-        QStringLiteral("anari"),
-        tr("NVIDIA VisRTX (requires CUDA-capable device)"),
-        PluginManager::instance().findClass("AnariRenderer", "AnariRenderer")
-    );
-#if defined(Q_OS_MACOS) && !defined(OVITO_DEBUG)
-    // Disable ANARI option in macOS release builds, because VisRTX is not available on this platform (even if the window class is present).
-    std::get<2>(list.back()) = nullptr;
-#endif
-
-    return list;
-}
-
-/******************************************************************************
-* Returns a string identifying the interactive viewport renderer currently selected by the user.
-******************************************************************************/
-QString GuiApplication::getInteractiveViewportRendererName() const
-{
-    return qEnvironmentVariable("OVITO_VIEWPORT_RENDERER",
-        QSettings().value("rendering/selected_graphics_api",
-            QStringLiteral("opengl")).toString().toLower());
-}
-
-/******************************************************************************
-* Sets the interactive viewport renderer currently selected by the user.
-******************************************************************************/
-bool GuiApplication::setInteractiveViewportRendererName(const QString& name)
-{
-    QString oldGraphicsApi = getInteractiveViewportRendererName();
-
-    if(name.compare(oldGraphicsApi, Qt::CaseInsensitive) != 0) {
-        // Save new API selection in the application settings store.
-        QSettings settings;
-        if(!name.isEmpty())
-            settings.setValue(QStringLiteral("rendering/selected_graphics_api"), name);
-        else
-            settings.remove(QStringLiteral("rendering/selected_graphics_api"));
-        return true;
-    }
-    return false;
-}
-
-/******************************************************************************
-* Switches back to the default renderer for interactive viewports.
-******************************************************************************/
-bool GuiApplication::revertToDefaultInteractiveViewportRenderer()
-{
-    QSettings settings;
-    if(qgetenv("OVITO_VIEWPORT_RENDERER").isEmpty() && settings.value(QStringLiteral("rendering/selected_graphics_api")).isValid()) {
-        settings.remove(QStringLiteral("rendering/selected_graphics_api"));
-        return true;
-    }
-    return false;
-}
-
-/******************************************************************************
-* Saves the current settings of the interactive viewport renderers to the application settings store.
-******************************************************************************/
-void GuiApplication::saveInteractiveViewportRendererSettings()
-{
-    OVITO_ASSERT(this_task::isMainThread());
-
-    QSettings settings;
-    settings.beginGroup(QStringLiteral("rendering/interactive_window_renderers"));
-    for(const auto& [apiName, apiDisplayName, rendererClass] : listInteractiveViewportRenderers()) {
-        if(auto rendererInstance = getInteractiveViewportRenderer(apiName)) {
-            QByteArray buffer;
-            QDataStream dstream(&buffer, QIODevice::WriteOnly);
-            ObjectSaveStream stream(dstream);
-            stream.saveObject(rendererInstance);
-            stream.close();
-            settings.setValue(apiName, std::move(buffer));
-        }
-    }
-}
-
-/******************************************************************************
-* Returns the instance of the renderer used for the interactive viewports.
-* This instance does not perform the actual rendering, but it manages the settings that can be configured by the user.
-******************************************************************************/
-OORef<SceneRenderer> GuiApplication::getInteractiveViewportRenderer(const QString& implementationName) const
-{
-    OVITO_ASSERT(this_task::isMainThread());
-    OVITO_ASSERT(this_task::get());
-
-    // Get the effective name of the renderer implementation to use. If no name is specified, use the one from the user settings or environment variable.
-    const QString implName = implementationName.isEmpty() ? getInteractiveViewportRendererName() : implementationName;
-
-    // Check if we have already created an instance of the requested renderer.
-    if(auto it = _viewportRenderers.find(implName); it != _viewportRenderers.end())
-        return it->second;
-
-    // Temporarily establish a non-interactive context to always initialize
-    // the renders' parameters to factory default settings.
-    NoninteractiveContext noninteractiveContext;
-
-    // Load or create a new instance for the requested renderer implementation.
-    for(const auto& [apiName, apiDisplayName, rendererClass] : listInteractiveViewportRenderers()) {
-        if(apiName == implName && rendererClass) {
-            // First, try to load the renderer instance from the user settings store.
-            OORef<SceneRenderer> rendererInstance;
-            QSettings settings;
-            settings.beginGroup(QStringLiteral("rendering/interactive_window_renderers"));
-            try {
-                QByteArray buffer = settings.value(apiName).toByteArray();
-                if(!buffer.isEmpty()) {
-                    QDataStream dstream(buffer);
-                    ObjectLoadStream stream(dstream);
-                    rendererInstance = stream.loadObject<SceneRenderer>();
-                    if(!rendererClass->isMember(rendererInstance))
-                        rendererInstance.reset();
-                    stream.close();
-                }
-            }
-            catch(const Exception& ex) {
-                qWarning() << "Failed to load interactive viewport renderer settings for" << apiName << ":";
-                ex.logError();
-                settings.remove(apiName);
-            }
-
-            // If no instance was found in the settings store, create a new instance with factory default settings.
-            if(!rendererInstance)
-                rendererInstance = dynamic_object_cast<SceneRenderer>(rendererClass->createInstance());
-            _viewportRenderers.emplace(apiName, rendererInstance);
-            return rendererInstance;
-        }
-    }
-
-    return {};
-}
-
 
 }   // End of namespace

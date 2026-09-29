@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
+#include <ovito/gui/base/viewport/ViewportRendererRegistry.h>
 #include <ovito/gui/desktop/GUI.h>
 #include <ovito/gui/desktop/mainwin/MainWindow.h>
 #include <ovito/gui/desktop/viewport/ViewportMenu.h>
@@ -23,6 +24,10 @@ namespace Ovito {
 ******************************************************************************/
 ViewportsPanel::ViewportsPanel(MainWindow& mainWindow) : _mainWindow(mainWindow)
 {
+    // Follow the renderer the user selects for the interactive viewports.
+    connect(&ViewportRendererRegistry::instance(), &ViewportRendererRegistry::rendererSelectionChanged,
+            this, &ViewportsPanel::viewportRendererSelectionChanged);
+
     // Activate the new viewport layout as soon as a new state file is loaded.
     connect(&mainWindow.datasetContainer(), &DataSetContainer::viewportConfigReplaced, this, &ViewportsPanel::onViewportConfigurationReplaced);
 
@@ -259,7 +264,7 @@ void ViewportsPanel::createViewportWindows()
                 connect(viewportWindow.get(), &ViewportWindow::fatalError, this, &ViewportsPanel::fatalViewportWindowError);
 
                 // Give the window a scene renderer.
-                viewportWindow->setSceneRenderer(GuiApplication::instance()->getInteractiveViewportRenderer());
+                viewportWindow->setSceneRenderer(ViewportRendererRegistry::instance().renderer());
 
                 // Associate the window with the viewport and initialize it.
                 viewportWindow->initializeWindow(viewport, _mainWindow.ui(), this);
@@ -301,7 +306,7 @@ void ViewportsPanel::fatalViewportWindowError(Exception ex)
 
     _windowCreationErrorOccurred = true;
     // Automatically switch back to the default viewport renderer if there is a problem with the current one.
-    if(!GuiApplication::instance()->revertToDefaultInteractiveViewportRenderer()) {
+    if(!ViewportRendererRegistry::instance().revertToDefaultRenderer()) {
         // When already using the standard renderer, do not try to use it again for the current program session.
         ex.prependGeneralMessage(tr("There is a critical problem with the interactive viewport windows."));
         _windowCreationIsBroken = true;
@@ -313,8 +318,13 @@ void ViewportsPanel::fatalViewportWindowError(Exception ex)
 /******************************************************************************
 * Sets the given renderer for all interactive viewport windows in the panel.
 ******************************************************************************/
-void ViewportsPanel::setInteractiveViewportRendererForAllWindows(SceneRenderer* renderer)
+/******************************************************************************
+* Applies the renderer the user selected to all viewport windows.
+******************************************************************************/
+void ViewportsPanel::viewportRendererSelectionChanged()
 {
+    // The instance stays alive in the registry, so the windows can take a plain pointer to it.
+    const OORef<SceneRenderer> renderer = ViewportRendererRegistry::instance().renderer();
     for(const auto& window : _viewportWindows) {
         window->setSceneRenderer(renderer);
     }

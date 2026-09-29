@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
+#include <ovito/gui/base/viewport/ViewportRendererRegistry.h>
 #include <ovito/gui/desktop/GUI.h>
 #include <ovito/gui/desktop/app/GuiApplication.h>
 #include <ovito/core/viewport/ViewportWindow.h>
@@ -19,8 +20,8 @@ BaseSceneRendererEditor::BaseSceneRendererEditor()
         if(!editObject)
             return;
         handleExceptions([&]() {
-            for(const auto& [id, label, rendererClass] : GuiApplication::instance()->listInteractiveViewportRenderers()) {
-                if(GuiApplication::instance()->getInteractiveViewportRenderer(id).get() == editObject) {
+            for(const auto& [id, label, rendererClass] : ViewportRendererRegistry::instance().availableRenderers()) {
+                if(ViewportRendererRegistry::instance().renderer(id).get() == editObject) {
                     Q_EMIT editingInteractiveRenderer();
                     return;
                 }

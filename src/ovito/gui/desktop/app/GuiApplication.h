@@ -37,25 +37,6 @@ public:
     /// Returns whether app's UI should automatically follow the system color scheme.
     static bool automaticallyEnableDarkMode();
 
-    /// Returns the list of available interactive viewport renderers.
-    std::vector<std::tuple<QString, QString, OvitoClassPtr>> listInteractiveViewportRenderers() const;
-
-    /// Returns a string identifying the interactive viewport renderer currently selected by the user.
-    QString getInteractiveViewportRendererName() const;
-
-    /// Sets the interactive viewport renderer currently selected by the user.
-    bool setInteractiveViewportRendererName(const QString& name);
-
-    /// Switches back to the default renderer for interactive viewports.
-    bool revertToDefaultInteractiveViewportRenderer();
-
-    /// Returns the instance of the renderer used for the interactive viewports.
-    /// This instance does not perform the actual rendering, but it manages the settings that can be configured by the user.
-    OORef<SceneRenderer> getInteractiveViewportRenderer(const QString& rendererName = {}) const;
-
-    /// Saves the current settings of the interactive viewport renderers to the application settings store.
-    void saveInteractiveViewportRendererSettings();
-
 protected:
 
     /// Create the global instance of the right QCoreApplication derived class.
@@ -99,8 +80,6 @@ protected:
 
 private:
 
-    /// Application-wide list of interactive viewport renderer instances, which are shared between all viewports and manage the settings of the renderers.
-    mutable std::map<QString, OORef<SceneRenderer>> _viewportRenderers;
 };
 
 }   // End of namespace

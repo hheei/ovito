@@ -24,6 +24,7 @@ OVITO_STANDARD_PLUGIN(GuiBase
         mainwin/templates/OverlayTemplates.cpp
         mainwin/templates/ObjectTemplates.cpp
         viewport/ViewportInputManager.cpp
+        viewport/ViewportRendererRegistry.cpp
         viewport/ViewportInputMode.cpp
         viewport/NavigationModes.cpp
         viewport/SelectionMode.cpp

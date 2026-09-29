@@ -698,6 +698,24 @@ void verifyUnsupportedFileImport(QmlMainWindowUI* ui, const QString& directory, 
     });
 }
 
+/// Probes the "Play Animation" command: the checkable command has to start and stop the playback of the data set, which
+/// is what the menu entry and the toolbar button of the classic frontend toggle. The scene must hold an animation with
+/// more than one frame; a single-frame scene never starts a playback (SceneAnimationPlayback::startAnimationPlayback).
+///
+/// This is verified where a trajectory exists - either because the check was given one on the command line (the command
+/// check probes it then) or right after the import check has imported one.
+void probeAnimationPlaybackCommand(QmlMainWindowUI* ui, Command* playbackCommand)
+{
+    OVITO_ASSERT(playbackCommand);
+    playbackCommand->setChecked(true);
+    if(!ui->datasetContainer().isPlaybackActive())
+        reportVerificationFailure(QStringLiteral("playback command: checking the command did not start the playback"));
+    playbackCommand->setChecked(false);
+    if(ui->datasetContainer().isPlaybackActive())
+        reportVerificationFailure(QStringLiteral("playback command: unchecking the command did not stop the playback"));
+    qInfo() << "COMMAND_TEST the playback command controls the animation playback";
+}
+
 /// Verifies the import path of the shell: a multi-frame trajectory becomes one pipeline spanning three animation
 /// frames, a file of an unsupported format reports an error without changing the scene, and a canceled import leaves no
 /// partially loaded pipeline behind.
@@ -751,6 +769,9 @@ void runImportTest(QmlMainWindowUI* ui, std::function<void()> continuation)
             reportVerificationFailure(QStringLiteral("the animation interval does not span the three imported frames"));
         if(!controller->hasData())
             reportVerificationFailure(QStringLiteral("the empty state was not left after the import"));
+        // The imported trajectory is the natural place to probe the playback command: a static scene cannot play.
+        if(Command* playbackCommand = ui->actionManager() ? ui->actionManager()->findCommand(QStringLiteral("AnimationTogglePlayback")) : nullptr)
+            probeAnimationPlaybackCommand(ui, playbackCommand);
 
         verifyUnsupportedFileImport(ui, directory, std::move(continuation));
     });
@@ -859,8 +880,10 @@ void runLayoutTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     continuation();
 }
 
+
 /******************************************************************************
 * Verifies the shared command layer of the two frontends.
+
 *
 * The commands are the frontend-neutral description of everything the user can invoke, and the classic frontend
 * presents them as QActions. This check verifies that the QML workbench sees the same commands with the same state,
@@ -960,15 +983,18 @@ void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     }
 
     // 5. A checkable command that mirrors program state: starting and stopping the animation playback goes through the
-    //    command, which is what the menu entry of the classic frontend toggles.
-    if(Command* playbackCommand = actionManager->findCommand(QStringLiteral("AnimationTogglePlayback"))) {
-        playbackCommand->setChecked(true);
-        if(!ui->datasetContainer().isPlaybackActive())
-            reportVerificationFailure(QStringLiteral("command check: checking the playback command did not start the playback"));
-        playbackCommand->setChecked(false);
-        if(ui->datasetContainer().isPlaybackActive())
-            reportVerificationFailure(QStringLiteral("command check: unchecking the playback command did not stop the playback"));
-        qInfo() << "COMMAND_TEST the playback command controls the animation playback";
+    //    command, which is what the menu entry of the classic frontend toggles. A playback needs an animation with more
+    //    than one frame, so the probe is skipped for a static scene instead of importing data here: this step must leave
+    //    the scene as it found it, and the playback is probed where a trajectory is imported anyway (runImportTest()).
+    {
+        const AnimationSettings* animSettings = ui->datasetContainer().activeAnimationSettings();
+        Command* playbackCommand = actionManager->findCommand(QStringLiteral("AnimationTogglePlayback"));
+        if(!animSettings || animSettings->isSingleFrame()) {
+            qInfo() << "COMMAND_TEST (skipped) the scene holds no animation, so the playback command cannot be probed";
+        }
+        else if(playbackCommand) {
+            probeAnimationPlaybackCommand(ui, playbackCommand);
+        }
     }
 
     // 6. Viewport input modes are commands as well, including the rule that an exclusive mode stays active.

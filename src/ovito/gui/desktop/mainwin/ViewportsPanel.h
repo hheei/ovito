@@ -35,8 +35,10 @@ public:
     /// Handles keyboard input for the viewport windows.
     bool onKeyShortcut(QKeyEvent* event);
 
-    /// Sets the given renderer for all interactive viewport windows in the panel.
-    void setInteractiveViewportRendererForAllWindows(SceneRenderer* renderer);
+private Q_SLOTS:
+
+    /// Applies the renderer the user selected to all viewport windows (see ViewportRendererRegistry).
+    void viewportRendererSelectionChanged();
 
 public Q_SLOTS:
 

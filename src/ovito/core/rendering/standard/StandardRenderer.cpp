@@ -86,9 +86,9 @@ void StandardRenderer::OOMetaClass::querySystemInformation(QTextStream& stream, 
         stream << "Graphics API: " << QString::fromUtf8(QRhi::backendName(graphicsApi)) << "\n";
 
         // In GUI mode, report the active real-time viewport rendering backend.
-        // The selection is stored in QSettings (key: "rendering/selected_graphics_api")
-        // and may be overridden by the OVITO_VIEWPORT_RENDERER environment variable —
-        // the same sources read by GuiApplication::getInteractiveViewportRendererName().
+        // The selection is stored in QSettings (key: "rendering/selected_graphics_api") and may be overridden by the
+        // OVITO_VIEWPORT_RENDERER environment variable - the same two sources the frontends' ViewportRendererRegistry
+        // reads. This renderer lives in core and cannot use that GUI service, so it resolves the selection once more.
         if(Application::guiEnabled()) {
             QString rendererKey = qEnvironmentVariable("OVITO_VIEWPORT_RENDERER",
                 QSettings().value(QStringLiteral("rendering/selected_graphics_api")).toString().toLower());

@@ -64,8 +64,20 @@ private:
     /// The viewport items that have been created for the viewports of the current dataset, indexed by viewport.
     std::vector<QPointer<QuickViewportItem>> _viewportItems;
 
+    /// Gives every viewport item the renderer the user selected for the interactive viewports.
+    void applyInteractiveRenderer();
+
+    /// Returns the renderer that provides the settings of the interactive viewports (see ViewportRendererRegistry).
+    static OORef<SceneRenderer> interactiveRenderer();
+
+    /// Handles a fatal error reported by a viewport window: the workbench falls back to the default renderer.
+    void viewportWindowFatalError(const Exception& ex);
+
     /// The renderer object that provides the rendering settings of the interactive viewports.
     OORef<SceneRenderer> _interactiveRenderer;
+
+    /// Indicates that a fatal rendering error has been handled; further errors are ignored to avoid a retry loop.
+    bool _fatalRenderErrorHandled = false;
 };
 
 }   // End of namespace

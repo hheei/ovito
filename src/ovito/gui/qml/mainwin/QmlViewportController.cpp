@@ -12,7 +12,7 @@
 #include <ovito/core/viewport/Viewport.h>
 #include <ovito/core/viewport/ViewportConfiguration.h>
 #include <ovito/core/rendering/SceneRenderer.h>
-#include <ovito/core/rendering/standard/StandardRenderer.h>
+#include <ovito/gui/base/viewport/ViewportRendererRegistry.h>
 #include "QmlViewportController.h"
 
 namespace Ovito {
@@ -29,6 +29,57 @@ QmlViewportController::QmlViewportController(QmlMainWindowUI& ui, QObject* paren
         Q_EMIT viewportConfigurationChanged();
     });
 
+    // When the user selects another renderer for the interactive viewports, the viewport items have to be given the new
+    // renderer instance (see ViewportRendererRegistry).
+    connect(&ViewportRendererRegistry::instance(), &ViewportRendererRegistry::rendererSelectionChanged, this, [this]() {
+        applyInteractiveRenderer();
+    });
+}
+
+/******************************************************************************
+* Gives every viewport item the renderer the user selected for the interactive viewports.
+******************************************************************************/
+void QmlViewportController::applyInteractiveRenderer()
+{
+    // The instance stays alive in the registry, so the viewport windows can take a plain pointer to it.
+    const OORef<SceneRenderer> renderer = interactiveRenderer();
+    if(!renderer)
+        return;
+    _interactiveRenderer = renderer;
+    for(const QPointer<QuickViewportItem>& item : _viewportItems) {
+        if(item && item->viewportWindow())
+            item->viewportWindow()->setSceneRenderer(renderer);
+    }
+}
+
+/******************************************************************************
+* Returns the renderer that provides the settings of the interactive viewports.
+******************************************************************************/
+OORef<SceneRenderer> QmlViewportController::interactiveRenderer()
+{
+    // The registry falls back to the default renderer if the one the user selected is not available in this build.
+    return ViewportRendererRegistry::instance().renderer();
+}
+
+/******************************************************************************
+* Handles a fatal error of a viewport window.
+******************************************************************************/
+void QmlViewportController::viewportWindowFatalError(const Exception& ex)
+{
+    if(_fatalRenderErrorHandled) // An error has already been handled; do not report another one or retry in a loop.
+        return;
+    _fatalRenderErrorHandled = true;
+
+    if(!ViewportRendererRegistry::instance().revertToDefaultRenderer()) {
+        // The default renderer is already in use, so there is nothing to fall back to. Retrying would only produce the
+        // same error again.
+        Exception error = ex;
+        error.prependGeneralMessage(tr("There is a critical problem with the interactive viewport windows."));
+        _ui.reportError(error, true);
+        return;
+    }
+    // The registry announces the change, which gives every viewport window the default renderer again.
+    _ui.reportError(ex, false);
 }
 
 /******************************************************************************
@@ -74,11 +125,18 @@ QQuickItem* QmlViewportController::createViewportItem(QQuickItem* parentItem, in
     auto* item = new QuickViewportItem(parentItem);
     item->setParentItem(parentItem);
 
-    // Create the renderer that provides the settings used for interactive rendering.
+    // Create the renderer that provides the settings used for interactive rendering. The instance is shared by all
+    // viewport windows of the application, so a setting the user changes in the renderer's property editor applies to
+    // every viewport.
     if(!_interactiveRenderer)
-        _interactiveRenderer = OORef<StandardRenderer>::create();
+        _interactiveRenderer = interactiveRenderer();
 
     item->initializeWindow(viewport, _ui, _interactiveRenderer);
+
+    // A viewport window that cannot render reports it, and the workbench falls back to the default renderer instead of
+    // leaving the user with a broken viewport (the classic frontend does the same).
+    if(QuickViewportWindow* viewportWindow = item->viewportWindow())
+        connect(viewportWindow, &ViewportWindow::fatalError, this, &QmlViewportController::viewportWindowFatalError);
 
     // Keep the item sized to the area reserved for it in the QML layout. The item is the context of the connections, so
     // that they die with it instead of leaving a dangling reference behind in a later resize of the pane.
