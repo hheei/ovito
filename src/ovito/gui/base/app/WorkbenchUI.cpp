@@ -213,6 +213,8 @@ void WorkbenchUI::saveSessionFile(const QString& filePath)
     dataset->setFilePath(QFileInfo(filePath).absoluteFilePath());
     if(undoStack())
         undoStack()->setClean();
+    // A session that was just written is a recently opened file like any other, which is what both frontends list.
+    RecentFilesList::instance().addSessionFileEntry(QUrl::fromLocalFile(dataset->filePath()));
     RecentFilesList::instance().addSessionFileEntry(QUrl::fromLocalFile(filePath));
 }
 

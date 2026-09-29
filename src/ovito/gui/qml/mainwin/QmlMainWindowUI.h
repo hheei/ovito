@@ -82,6 +82,11 @@ public:
     /// Gives the active viewport the input focus.
     void setViewportInputFocus() override;
 
+    /// Asks the user about the changes of a modified session before the workbench is closed.
+    /// \return \c true if the workbench may be closed; \c false if the user cancelled the question or the session
+    /// could not be written (the reason is reported in that case).
+    bool canCloseWorkbench();
+
     /// Cancels all running tasks associated with this user interface and closes the user interface.
     bool shutdown() override;
 
@@ -101,6 +106,9 @@ protected:
 
     /// Shows the file selection dialog of the QML scene.
     virtual void openImportDialog(const QString& directoryPath) override;
+
+    /// Remembers the directory of the imported file, so that the file selection dialog opens there next time.
+    virtual void importDirectoryChanged(const QString& directoryPath) override;
 
     /// Runs the import operation while keeping track of the task, so that the user can cancel it.
     virtual void runFileImport(FileImporter& importer, Scene* scene, std::vector<std::pair<QUrl, OORef<FileImporter>>> urlImporters, FileImporter::ImportMode importMode) override;

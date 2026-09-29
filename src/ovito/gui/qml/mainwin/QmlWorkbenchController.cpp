@@ -2,21 +2,25 @@
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
 #include <ovito/gui/qml/QmlFrontend.h>
+#include <ovito/gui/base/app/GuiSettings.h>
 #include <ovito/gui/base/app/GuiTaskScope.h>
-#include <ovito/gui/base/app/WorkbenchUI.h>
 #include <ovito/gui/base/app/TaskProgressModel.h>
+#include <ovito/gui/base/app/WorkbenchUI.h>
+#include <ovito/gui/base/mainwin/RecentFilesList.h>
 #include <ovito/core/app/Application.h>
 #include <ovito/core/app/UserInterface.h>
+#include <ovito/core/app/undo/UndoStack.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
+#include <ovito/core/dataset/io/FileImporter.h>
 #include <ovito/core/dataset/scene/Scene.h>
 #include <ovito/core/dataset/scene/SceneNode.h>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QEventLoop>
 #include <QtCore/QFileInfo>
 #include <QtCore/QTimer>
-#include <QtCore/QVariantMap>
 #include <QtCore/QUrl>
+#include <QtCore/QVariantMap>
 #include <QtQuick/QQuickView>
 #include "QmlMainWindowUI.h"
 #include "QmlWorkbenchController.h"
@@ -32,6 +36,12 @@ QmlWorkbenchController::QmlWorkbenchController(QmlMainWindowUI& ui, QObject* par
     // was loaded from.
     connect(&ui.datasetContainer(), &DataSetContainer::dataSetChanged, this, &QmlWorkbenchController::refreshDataSetState);
     connect(&ui.datasetContainer(), &DataSetContainer::filePathChanged, this, &QmlWorkbenchController::refreshDataSetState);
+    // The title carries the modified marker of the session, so it follows the clean state of the undo stack as well -
+    // the same signal the classic main window marks its window title with (MainWindow.cpp:238).
+    if(UndoStack* undoStack = ui.undoStack())
+        connect(undoStack, &UndoStack::cleanChanged, this, &QmlWorkbenchController::refreshDataSetState);
+    // The File menu lists the recent files of the shared list, which both frontends write to.
+    connect(&RecentFilesList::instance(), &RecentFilesList::listChanged, this, &QmlWorkbenchController::recentFilesChanged);
     refreshDataSetState();
 }
 
@@ -60,11 +70,18 @@ QString QmlWorkbenchController::determineWindowTitle() const
 {
     // The desktop frontend shows the session file in the window title (MainWindow::setWindowFilePath()). There is no
     // session file until the session is saved, so the title is the application name until then.
+    QString title = Application::applicationName();
     if(const DataSet* dataset = _ui.datasetContainer().currentSet()) {
         if(!dataset->filePath().isEmpty())
-            return tr("%1 - %2").arg(QFileInfo(dataset->filePath()).fileName(), Application::applicationName());
+            title = tr("%1 - %2").arg(QFileInfo(dataset->filePath()).fileName(), Application::applicationName());
     }
-    return Application::applicationName();
+
+    // A modified session is marked the way the classic frontend marks it: it calls setWindowModified(), which renders
+    // the '*' of the window title's placeholder. The shell shows the same marker in its own title bar and in the libc
+    // window title, so a user who is asked about unsaved changes can see where they come from.
+    if(_ui.isSessionModified())
+        title += QStringLiteral(" *");
+    return title;
 }
 
 /******************************************************************************
@@ -165,6 +182,24 @@ void QmlWorkbenchController::importFiles(const QVariantList& urls)
         return;
     }
 
+    // A single .ovito file is a session state, not a data file: the classic frontend redirects it to its session
+    // loading path as well (WidgetActionManager::on_FileImport_triggered). Loading it replaces the session, so this has
+    // to be a task of this user interface and asks about unsaved changes first.
+    if(urlList.size() == 1 && urlList.front().fileName().endsWith(QStringLiteral(".ovito"), Qt::CaseInsensitive)) {
+        GuiTaskScope taskScope(_ui);
+        try {
+            _ui.askForSaveChanges();
+            _ui.loadSessionFile(urlList.front());
+        }
+        catch(const OperationCanceled&) {
+            setStatusMessage(tr("Import cancelled."));
+        }
+        catch(const Exception& ex) {
+            _ui.reportError(ex);
+        }
+        return;
+    }
+
     // A QML signal handler runs outside of any OVITO task, so the import takes place in a task of its own (see the note
     // on task contexts in the Phase 0 audit). The whole operation is handed to the shell, which is what lets the user
     // cancel it - from the detection of the file formats to the loading of the data.
@@ -193,7 +228,87 @@ void QmlWorkbenchController::importFiles(const QVariantList& urls)
 ******************************************************************************/
 void QmlWorkbenchController::showImportDialog()
 {
-    Q_EMIT importDialogRequested(_importDialogDirectory.isEmpty() ? QUrl() : QUrl::fromLocalFile(_importDialogDirectory));
+    Q_EMIT importDialogRequested(importDirectoryUrl());
+}
+
+/******************************************************************************
+* Returns the directory that the file selection dialog opens in.
+******************************************************************************/
+QUrl QmlWorkbenchController::importDirectoryUrl() const
+{
+    if(!_importDialogDirectory.isEmpty())
+        return QUrl::fromLocalFile(_importDialogDirectory);
+
+    // Nothing asked for a directory, so the dialog reopens where the last import was - the same history the classic
+    // frontend's file dialog keeps. GuiSettings drops the history when the user turned it off.
+    const QStringList directories = GuiSettings::instance().recentDirectories(QStringLiteral("import"));
+    return directories.isEmpty() ? QUrl() : QUrl::fromLocalFile(directories.front());
+}
+
+/******************************************************************************
+* Returns the recently opened data and session files.
+******************************************************************************/
+QVariantList QmlWorkbenchController::recentFiles() const
+{
+    QVariantList list;
+    for(const RecentFilesList::Entry& entry : RecentFilesList::instance().entries()) {
+        OVITO_ASSERT(!entry.urls.empty());
+        QString title = entry.urls.front().toDisplayString(QUrl::PreferLocalFile | QUrl::NormalizePathSegments);
+        if(entry.urls.size() > 1)
+            title += tr(" + %1 more").arg(entry.urls.size() - 1);
+        list.append(QVariantMap{
+            { QStringLiteral("title"), title },
+            { QStringLiteral("isSession"), entry.isSessionFile() }
+        });
+    }
+    return list;
+}
+
+/******************************************************************************
+* Opens the file of a recent files list entry.
+******************************************************************************/
+void QmlWorkbenchController::openRecentFile(int index)
+{
+    const QList<RecentFilesList::Entry> entries = RecentFilesList::instance().entries();
+    if(index < 0 || index >= entries.size())
+        return;
+
+    // A copy of the entry, because opening a file can change the list (the opened file moves to the front).
+    const RecentFilesList::Entry entry = entries[index];
+
+    // Opening a file replaces the session, which is work that needs a task context of this user interface.
+    GuiTaskScope taskScope(_ui);
+    bool openFailed = false;
+    try {
+        if(entry.isSessionFile()) {
+            OVITO_ASSERT(entry.urls.size() == 1);
+            // The unsaved changes of the current session would be gone, so this asks first - the same question the
+            // classic frontend asks when it opens a recent session file.
+            _ui.askForSaveChanges();
+            _ui.loadSessionFile(entry.urls.front());
+        }
+        else {
+            // The entry remembers the importer and the format the user selected, so a data file whose format cannot be
+            // detected any more is still opened the way it was opened before.
+            const FileImporterClass* importerClass = dynamic_cast<const FileImporterClass*>(OvitoClass::decodeFromString(entry.importerClassName));
+            _ui.performTransaction(tr("Import data"), [&] {
+                _ui.importFiles(entry.urls, importerClass, entry.importerFormat);
+            });
+        }
+    }
+    catch(const OperationCanceled&) {
+        // The user aborted the question about the unsaved changes, so nothing happened.
+    }
+    catch(...) {
+        // The entry cannot be opened any more (the file is gone, or its format is unsupported now), so it is dropped -
+        // an entry that stays in the menu and fails every time helps nobody.
+        openFailed = true;
+    }
+
+    if(openFailed) {
+        RecentFilesList::instance().removeEntry(index);
+        _ui.reportError(Exception(tr("The file %1 could not be opened.").arg(entry.urls.front().toString())));
+    }
 }
 
 /******************************************************************************

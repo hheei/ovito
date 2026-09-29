@@ -44,6 +44,10 @@ class OVITO_GUIQML_EXPORT QmlWorkbenchController : public QObject
     Q_PROPERTY(QString notice READ notice NOTIFY noticeChanged)
 
     /// Whether the current scene contains any data to display. False means the shell shows its empty state.
+    /// The recently opened data and session files the File menu offers, as entries that carry a `title` and whether they
+    /// are a session file (`isSession`). It is the shared RecentFilesList, so both frontends offer the same files.
+    Q_PROPERTY(QVariantList recentFiles READ recentFiles NOTIFY recentFilesChanged)
+
     Q_PROPERTY(bool hasData READ hasData NOTIFY hasDataChanged)
 
     /// Whether the operation that is currently running can be cancelled by the user.
@@ -140,6 +144,18 @@ public:
     /// Asks the scene to open the file selection dialog, starting in the last used directory.
     Q_INVOKABLE void showImportDialog();
 
+    /// Opens the recently opened file with the given index of recentFiles(): a session file replaces the current session
+    /// (asking about unsaved changes first), a data file is imported again through the importer and the format the entry
+    /// remembers.
+    Q_INVOKABLE void openRecentFile(int index);
+
+    /// Returns the recently opened data and session files, most recent first (see the recentFiles property).
+    QVariantList recentFiles() const;
+
+    /// Returns the directory the file selection dialog opens in: the one the frontend asked for, else the one the last
+    /// import used (the file dialog history that the shared GuiSettings owns).
+    QUrl importDirectoryUrl() const;
+
     /// Asks the scene to open the file selection dialog, starting in the given directory.
     void requestImportDialog(const QString& directoryPath);
 
@@ -190,6 +206,9 @@ Q_SIGNALS:
 
     /// Is emitted when the scene should open the file selection dialog for the given directory.
     void importDialogRequested(const QUrl& directoryUrl);
+
+    /// Is emitted when the list of recently opened files changed.
+    void recentFilesChanged();
 
     /// Is emitted when the scene should display the About dialog.
     void aboutDialogRequested();

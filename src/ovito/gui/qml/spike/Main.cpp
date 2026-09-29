@@ -764,8 +764,12 @@ void verifyMenuEntries(QObject* menu, const QString& what, bool allowFrontendAct
     int pending = 0;
     std::function<void(QObject*)> walk = [&](QObject* parent) {
         for(QObject* child : parent->children()) {
-            // The entries are the Qt Quick Controls menu items; a separator carries neither a label nor a state.
-            if(child->inherits("QQuickMenuItem") && !child->inherits("QQuickMenuSeparator")) {
+            // The entries are the Qt Quick Controls menu items; a separator carries neither a label nor a state. The
+            // placeholder that the recent files submenu shows while the list is empty is not an entry of its own, so it
+            // names itself and is skipped here. (Note that 'visible' cannot be used for this: a closed menu reports all
+            // of its items as invisible.)
+            if(child->inherits("QQuickMenuItem") && !child->inherits("QQuickMenuSeparator")
+                    && child->objectName() != QStringLiteral("emptyRecentFilesEntry")) {
                 const QString text = child->property("text").toString();
                 const bool enabled = child->property("enabled").toBool();
                 Command* command = qmlProperty(child, QStringLiteral("command")).value<Command*>();
@@ -779,6 +783,12 @@ void verifyMenuEntries(QObject* menu, const QString& what, bool allowFrontendAct
                 else if(command != nullptr) {
                     commands++;
                     wiring = command->id();
+                }
+                else if(child->property("subMenu").value<QObject*>() != nullptr) {
+                    // An entry that opens a submenu is a container, not an action of its own: what it holds is verified
+                    // on its own (the recent files by verifyRecentFiles(), the view types by the context menu check).
+                    frontendActions++;
+                    wiring = QStringLiteral("<submenu of the frontend>");
                 }
                 else if(enabled && allowFrontendActions) {
                     frontendActions++;
@@ -794,7 +804,8 @@ void verifyMenuEntries(QObject* menu, const QString& what, bool allowFrontendAct
                         .arg(text, what, enabled ? QStringLiteral("enabled") : QStringLiteral("disabled"),
                              ownerPhase.isEmpty() ? QString() : QStringLiteral(" (it names %1)").arg(ownerPhase)));
                 }
-                qInfo() << "PARITY_TEST  entry" << text << (enabled ? "[enabled]" : "[disabled]") << wiring;
+                qInfo() << "PARITY_TEST  entry" << text << (enabled ? "[enabled]" : "[disabled]") << wiring
+                        << QStringLiteral("(%1)").arg(child->metaObject()->className());
             }
             walk(child);
         }
@@ -2029,6 +2040,80 @@ void verifyFocusOrder(QmlMainWindowUI* ui)
                 << "the keyboard focus), so the order is verified by the tabbable items above";
 }
 
+/// Verifies that the File menu offers the recent files of the shared list and that the file selection dialog reopens
+/// where the last import was - two places where the shell has to use the shared layer rather than keep its own state.
+void verifyRecentFiles(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    QmlWorkbenchController* controller = ui->workbenchController();
+    const QList<RecentFilesList::Entry>& entries = RecentFilesList::instance().entries();
+    if(entries.isEmpty()) {
+        reportVerificationFailure(QStringLiteral("the run imported and saved several files, but the recent files list is empty"));
+    }
+    else {
+        const QVariantList shellList = controller->recentFiles();
+        if(shellList.size() != entries.size())
+            reportVerificationFailure(QStringLiteral("the shell reports %1 recent files while the shared list holds %2")
+                .arg(shellList.size()).arg(entries.size()));
+
+        const QString expectedTitle = entries.front().urls.front().toDisplayString(QUrl::PreferLocalFile | QUrl::NormalizePathSegments);
+        const QString shellTitle = shellList.isEmpty() ? QString() : shellList.front().toMap().value(QStringLiteral("title")).toString();
+        if(shellTitle != expectedTitle)
+            reportVerificationFailure(QStringLiteral("the shell lists \"%1\" as the most recent file instead of \"%2\"").arg(shellTitle, expectedTitle));
+        if(!shellList.isEmpty() && shellList.front().toMap().value(QStringLiteral("isSession")).toBool())
+            reportVerificationFailure(QStringLiteral("the shell marks a session file of the recent files list as a data file"));
+
+        // The menu is built from that list, so it has to hold one entry per file.
+        QQuickItem* rootObject = ui->view() ? ui->view()->rootObject() : nullptr;
+        QObject* submenu = rootObject ? rootObject->findChild<QObject*>(QStringLiteral("recentFilesMenu")) : nullptr;
+        if(submenu == nullptr) {
+            reportVerificationFailure(QStringLiteral("the File menu of the workbench has no recent files submenu"));
+        }
+        else {
+            // The entries are the delegates of the Repeater of the submenu (a menu's items are not its QObject
+            // children when they are created by a Repeater), so they are read through the Repeater itself.
+            QObject* repeater = submenu->findChild<QObject*>(QStringLiteral("recentFilesRepeater"));
+            int items = 0;
+            if(repeater == nullptr) {
+                reportVerificationFailure(QStringLiteral("the recent files submenu has no repeater to build its entries"));
+            }
+            else {
+                const int count = repeater->property("count").toInt();
+                for(int i = 0; i < count; i++) {
+                    QQuickItem* entry = nullptr;
+                    if(!QMetaObject::invokeMethod(repeater, "itemAt", Q_RETURN_ARG(QQuickItem*, entry), Q_ARG(int, i)) || entry == nullptr)
+                        continue;
+                    items++;
+                    const QString text = entry->property("text").toString();
+                    if(text.isEmpty())
+                        reportVerificationFailure(QStringLiteral("the recent files submenu holds an entry without a label"));
+                    else if(!entry->property("enabled").toBool())
+                        reportVerificationFailure(QStringLiteral("the recent files submenu offers \"%1\" although the list is not empty").arg(text));
+                }
+            }
+            if(items != entries.size())
+                reportVerificationFailure(QStringLiteral("the recent files submenu lists %1 entries while the shared list holds %2")
+                    .arg(items).arg(entries.size()));
+        }
+    }
+
+    // The import dialog starts in the directory of the last import, which is the history the shared GuiSettings keeps and
+    // the classic frontend's file dialog reads as well.
+    const QStringList importDirectories = GuiSettings::instance().recentDirectories(QStringLiteral("import"));
+    if(importDirectories.isEmpty()) {
+        reportVerificationFailure(QStringLiteral("the imported file did not leave its directory in the file dialog history"));
+    }
+    else if(controller->importDirectoryUrl() != QUrl::fromLocalFile(importDirectories.front())) {
+        reportVerificationFailure(QStringLiteral("the file selection dialog would open in \"%1\" instead of in \"%2\"")
+            .arg(controller->importDirectoryUrl().toLocalFile(), importDirectories.front()));
+    }
+    else {
+        qInfo() << "PARITY_TEST the File menu lists" << entries.size() << "recent file(s) and the file selection dialog"
+                << "reopens in" << importDirectories.front();
+    }
+
+    continuation();
+}
+
 void runParityTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
     QQuickItem* rootObject = ui->view() ? ui->view()->rootObject() : nullptr;
@@ -2040,7 +2125,9 @@ void runParityTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         verifyAboutDialog(ui, [ui, continuation]() {
             verifyTaskRows(ui, [ui, continuation]() {
                 verifyWindowState(ui, [ui, continuation]() {
-                    verifyImportNotice(ui, std::move(continuation));
+                    verifyImportNotice(ui, [ui, continuation]() {
+                        verifyRecentFiles(ui, std::move(continuation));
+                    });
                 });
             });
         });
@@ -2491,6 +2578,21 @@ void runSettingsTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 /// state, a change to the scene marks the session as modified, and loading the session brings the saved content back.
 ///
 /// The file dialog in front of the workflow is frontend specific (the classic main window shows a QFileDialog, the Qt
+/// Answers the next message dialog of the workbench, so that an unattended run never waits for a user. The dialog of a
+/// verification step that blocks the main thread is answered from the timer of this poll, which the nested event loop of
+/// the dialog keeps running.
+void answerNextMessageBox(QmlMainWindowUI* ui, QmlWorkbenchController* controller, UserInterface::MessageBoxButton button)
+{
+    pollUntil(ui, 50, 10000,
+        [controller]() { return controller->messageBoxVisible(); },
+        [controller, button](bool appeared) {
+            if(appeared)
+                controller->answerMessageBox(static_cast<int>(button));
+            else
+                reportVerificationFailure(QStringLiteral("the workbench did not ask about the modified session"));
+        });
+}
+
 /// Quick shell has no session commands yet), so this check drives the operations that do not need a file name.
 void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
@@ -2592,6 +2694,76 @@ void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
             qInfo() << "SESSION_TEST a session without a file name reports the missing file dialog";
         if(dataset)
             dataset->setFilePath(rememberedPath);
+
+        // 6. Closing a workbench with unsaved changes asks about them, which is the question the classic frontend asks
+        //    in its close event (MainWindow::closeEvent); the title marks the modified session in the meantime.
+        QmlWorkbenchController* controller = ui->workbenchController();
+        Scene* currentSceneAfterReload = ui->datasetContainer().activeScene();
+        if(!ui->isSessionModified() && currentSceneAfterReload && !currentSceneAfterReload->children().empty()) {
+            SceneNode* nodeToRename = currentSceneAfterReload->children().front();
+            ui->performTransaction(QStringLiteral("Rename pipeline"), [&]() { nodeToRename->setSceneNodeName(QStringLiteral("renamed before closing")); });
+        }
+        if(!ui->isSessionModified()) {
+            reportVerificationFailure(QStringLiteral("session check: the scene cannot be modified, so the close prompt cannot be checked"));
+        }
+        else {
+            const QString modifiedTitle = controller->windowTitle();
+            if(!modifiedTitle.contains(QLatin1Char('*')))
+                reportVerificationFailure(QStringLiteral("session check: the window title does not mark the modified session (%1)").arg(modifiedTitle));
+
+            // Cancelling the question keeps the workbench and the session exactly as they were.
+            answerNextMessageBox(ui, controller, UserInterface::MessageBoxButton::Cancel);
+            if(ui->canCloseWorkbench())
+                reportVerificationFailure(QStringLiteral("session check: cancelling the save question allowed the workbench to close"));
+            if(!ui->isSessionModified())
+                reportVerificationFailure(QStringLiteral("session check: cancelling the save question discarded the changes"));
+
+            // The window's own close path asks the same question, so a cancelled close leaves the window open.
+            answerNextMessageBox(ui, controller, UserInterface::MessageBoxButton::Cancel);
+            ui->view()->close();
+            if(!ui->view()->isVisible())
+                reportVerificationFailure(QStringLiteral("session check: a cancelled close closed the window anyway"));
+
+            // Discarding the changes lets the workbench close without touching the session file, and saving them writes
+            // the file and leaves a clean session - which the title stops marking.
+            answerNextMessageBox(ui, controller, UserInterface::MessageBoxButton::No);
+            if(!ui->canCloseWorkbench())
+                reportVerificationFailure(QStringLiteral("session check: discarding the changes did not allow the workbench to close"));
+
+            answerNextMessageBox(ui, controller, UserInterface::MessageBoxButton::Yes);
+            if(!ui->canCloseWorkbench())
+                reportVerificationFailure(QStringLiteral("session check: saving the changes did not allow the workbench to close"));
+            if(ui->isSessionModified())
+                reportVerificationFailure(QStringLiteral("session check: the session is still modified after saving it from the close prompt"));
+            if(controller->windowTitle().contains(QLatin1Char('*')))
+                reportVerificationFailure(QStringLiteral("session check: the title still marks a session that was just saved"));
+
+            qInfo() << "SESSION_TEST closing the workbench with unsaved changes asks three ways: cancelling keeps the"
+                    << "window open, discarding closes it, saving writes the session and clears the modified marker";
+        }
+
+        // 7. The session file is the most recent entry, and opening that entry reads it back - including through the
+        //    import path, which redirects a .ovito file to the session loader as the classic frontend does.
+        const QVariantList recentFiles = controller->recentFiles();
+        if(recentFiles.isEmpty() || !recentFiles.front().toMap().value(QStringLiteral("isSession")).toBool())
+            reportVerificationFailure(QStringLiteral("session check: the saved session is not the most recent session file"));
+        else {
+            controller->openRecentFile(0);
+            Scene* sceneAfterReopening = ui->datasetContainer().activeScene();
+            SceneNode* nodeAfterReopening = sceneAfterReopening && !sceneAfterReopening->children().empty() ? sceneAfterReopening->children().front() : nullptr;
+            if(!nodeAfterReopening || nodeAfterReopening->objectTitle() != QStringLiteral("renamed before closing"))
+                reportVerificationFailure(QStringLiteral("session check: opening the recent session file did not restore it (title: %1)")
+                    .arg(nodeAfterReopening ? nodeAfterReopening->objectTitle() : QStringLiteral("<no object>")));
+
+            controller->importFiles(QVariantList{ QUrl::fromLocalFile(sessionFile) });
+            Scene* sceneAfterImport = ui->datasetContainer().activeScene();
+            SceneNode* nodeAfterImport = sceneAfterImport && !sceneAfterImport->children().empty() ? sceneAfterImport->children().front() : nullptr;
+            if(!nodeAfterImport || nodeAfterImport->objectTitle() != QStringLiteral("renamed before closing"))
+                reportVerificationFailure(QStringLiteral("session check: importing a .ovito file did not load it as a session (title: %1)")
+                    .arg(nodeAfterImport ? nodeAfterImport->objectTitle() : QStringLiteral("<no object>")));
+            qInfo() << "SESSION_TEST the recent files entry of the session and a .ovito file handed to the import path"
+                    << "both restore the saved session";
+        }
     });
 
     continuation();

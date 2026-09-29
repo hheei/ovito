@@ -37,6 +37,39 @@ MenuBar {
 
         MenuSeparator {}
 
+        // The recently opened files of the shared list, which the classic frontend shows in its own submenu as well.
+        // A broken entry is dropped by the frontend when it cannot be opened any more.
+        Menu {
+            id: recentFilesMenu
+            objectName: "recentFilesMenu"
+            title: qsTr("Open &Recent")
+            enabled: workbenchController.recentFiles.length > 0
+
+            Repeater {
+                id: recentFilesRepeater
+                objectName: "recentFilesRepeater"
+                model: workbenchController.recentFiles
+
+                delegate: MenuItem {
+                    required property var modelData
+                    required property int index
+
+                    text: modelData.title
+                    enabled: recentFilesMenu.enabled
+                    onTriggered: workbenchController.openRecentFile(index)
+                }
+            }
+
+            MenuItem {
+                objectName: "emptyRecentFilesEntry"
+                text: qsTr("No recent files")
+                enabled: false
+                visible: workbenchController.recentFiles.length === 0
+            }
+        }
+
+        MenuSeparator {}
+
         WorkbenchPlaceholderMenuItem {
             itemText: qsTr("Open Session State…")
             ownerPhase: "Phase 3"

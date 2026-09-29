@@ -10,6 +10,7 @@
 #include <ovito/gui/base/actions/Command.h>
 #include <ovito/gui/base/app/GuiSettings.h>
 #include <ovito/gui/base/app/GuiTaskScope.h>
+#include <ovito/gui/base/mainwin/RecentFilesList.h>
 #include <ovito/core/app/Application.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
@@ -20,6 +21,7 @@
 #include <ovito/core/viewport/Viewport.h>
 #include <ovito/core/viewport/ViewportConfiguration.h>
 #include <QtCore/QTimer>
+#include <QtGui/QCloseEvent>
 #include <QtQml/qqml.h>
 #include <algorithm>
 #include "QmlMainWindowUI.h"
@@ -27,6 +29,37 @@
 #include "QmlIcons.h"
 
 namespace Ovito {
+
+namespace {
+
+/******************************************************************************
+* The workbench window that asks about a modified session before it closes.
+*
+* QQuickWindow announces a close request through a signal, but the event that decides whether the window may close is
+* only reachable through a private Qt header. The window is therefore closed through the same hook the classic main
+* window uses: an override of QWindow::closeEvent().
+******************************************************************************/
+class WorkbenchQuickView : public QQuickView
+{
+public:
+    explicit WorkbenchQuickView(QmlMainWindowUI& ui) : _ui(ui) {}
+
+protected:
+    void closeEvent(QCloseEvent* event) override
+    {
+        // A close the user cancelled leaves the window (and the session in it) as it was.
+        if(!_ui.canCloseWorkbench()) {
+            event->ignore();
+            return;
+        }
+        QQuickView::closeEvent(event);
+    }
+
+private:
+    QmlMainWindowUI& _ui;
+};
+
+}   // namespace
 
 IMPLEMENT_CREATABLE_OVITO_CLASS(QmlMainWindowUI);
 
@@ -92,7 +125,7 @@ void QmlMainWindowUI::initializeWindow()
 #endif
 
     // Create the window that displays the workbench UI.
-    auto* view = new QQuickView();
+    auto* view = new WorkbenchQuickView(*this);
     // The user interface owns the window from here on; a failure while loading the shell deletes it again, which clears
     // this reference (it is a guarded pointer).
     _view = view;
@@ -287,10 +320,12 @@ void QmlMainWindowUI::connectFrontendCommands(QQuickView* view)
     }
     if(Command* command = manager->findCommand(ACTION_QUIT)) {
         QObject::connect(command, &Command::triggered, view, [this]() {
-            // The same behaviour as the classic frontend's Quit: close the window, which ends the application when this
-            // was the last user interface.
-            shutdown();
-            QCoreApplication::quit();
+            // The same behaviour as the classic frontend's Quit: ask about a modified session, then close the window,
+            // which ends the application when this was the last user interface.
+            if(canCloseWorkbench()) {
+                shutdown();
+                QCoreApplication::quit();
+            }
         });
     }
 }
@@ -310,6 +345,29 @@ void QmlMainWindowUI::initializeDataset()
 {
     if(datasetContainer().currentSet() == nullptr)
         datasetContainer().setCurrentSet(OORef<DataSet>::create());
+}
+
+/******************************************************************************
+* Asks the user about the changes of a modified session before the workbench is closed.
+******************************************************************************/
+bool QmlMainWindowUI::canCloseWorkbench()
+{
+    // A QML signal handler or a Qt event handler runs without a task context of its own, and the question starts work
+    // (the shared code writes the session file when the user chooses to save).
+    GuiTaskScope taskScope(*this);
+    try {
+        askForSaveChanges();
+        return true;
+    }
+    catch(const OperationCanceled&) {
+        // The user cancelled the question instead of answering it, so the workbench stays open exactly as it was.
+        return false;
+    }
+    catch(const Exception& ex) {
+        // A session that cannot be written must not let the window close silently.
+        reportError(ex, true);
+        return false;
+    }
 }
 
 /******************************************************************************
@@ -375,12 +433,29 @@ void QmlMainWindowUI::openImportDialog(const QString& directoryPath)
 }
 
 /******************************************************************************
+* Remembers the directory of the imported file in the file dialog history.
+******************************************************************************/
+void QmlMainWindowUI::importDirectoryChanged(const QString& directoryPath)
+{
+    // The same history the classic frontend's import dialog uses, so a user who switches frontends keeps it. The
+    // facade drops the entry itself when the user turned the directory history off.
+    GuiSettings::instance().rememberDirectory(QStringLiteral("import"), directoryPath);
+}
+
+/******************************************************************************
 * Runs the import operation while keeping track of the task, so that the user can cancel it.
 ******************************************************************************/
 void QmlMainWindowUI::runFileImport(FileImporter& importer, Scene* scene, std::vector<std::pair<QUrl, OORef<FileImporter>>> urlImporters, FileImporter::ImportMode importMode)
 {
     // The notice that reports what the import made of the files names the file the user chose.
     const QString fileName = urlImporters.empty() ? QString() : urlImporters.front().first.fileName();
+
+    // The file names are needed after the import as well, to remember them as recently opened files - the importer
+    // consumes the URL list.
+    std::vector<QUrl> importedUrls;
+    importedUrls.reserve(urlImporters.size());
+    for(const auto& urlImporter : urlImporters)
+        importedUrls.push_back(urlImporter.first);
 
     // Remember the objects of the scene, so that a canceled import does not leave a partially loaded pipeline behind.
     std::vector<OORef<SceneNode>> previousNodes;
@@ -416,6 +491,11 @@ void QmlMainWindowUI::runFileImport(FileImporter& importer, Scene* scene, std::v
     catch(...) {
         throw;
     }
+
+    // The import succeeded, so the files go to the front of the recent files list that both frontends offer. The
+    // importer class is remembered as well, so a file whose format cannot be detected any more still opens the way it
+    // was opened now.
+    RecentFilesList::instance().addEntry(std::move(importedUrls), dynamic_cast<const FileImporterClass*>(&importer.getOOMetaClass()), {});
 
     // Tell the user what the import did with the files: which format the importer identified them as and how many source
     // frames the data source found. This is the only place in the frontends that reports the outcome of the format
