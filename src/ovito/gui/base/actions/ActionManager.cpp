@@ -12,7 +12,7 @@
 #include <ovito/core/app/UserInterface.h>
 #include <ovito/core/app/Application.h>
 #include <ovito/core/app/undo/UndoStack.h>
-#include <ovito/gui/base/actions/ViewportModeAction.h>
+#include <ovito/gui/base/actions/Command.h>
 #include "ActionManager.h"
 
 namespace Ovito {
@@ -29,111 +29,111 @@ ActionManager::ActionManager(QObject* parent, UserInterface& ui) : QAbstractList
     connect(&datasetContainer(), &DataSetContainer::maximizedViewportChanged, this, &ActionManager::onMaximizedViewportChanged);
     connect(&datasetContainer(), &DataSetContainer::viewportLayoutChanged, this, &ActionManager::onViewportLayoutChanged);
 
-    createCommandAction(ACTION_QUIT, tr("Quit"), "file_quit", tr("Quit the application."));
-    createCommandAction(ACTION_FILE_OPEN, tr("Load Session State..."), "file_open", tr("Load a previously saved session from a file."), QKeySequence::Open);
-    createCommandAction(ACTION_FILE_SAVE, tr("Save Session State"), "file_save", tr("Save the current program session to a file."), QKeySequence::Save);
-    createCommandAction(ACTION_FILE_SAVEAS, tr("Save Session State As..."), "file_save_as", tr("Save the current program session to a new file."), QKeySequence::SaveAs);
-    createCommandAction(ACTION_FILE_IMPORT, tr("Load File..."), "file_import", tr("Import data from a file on this computer."), QKeyCombination(Qt::CTRL, Qt::Key_I));
-    createCommandAction(ACTION_FILE_REMOTE_IMPORT, tr("Load Remote File"), "file_import_remote", tr("Import a file from a remote location."), QKeyCombination(Qt::CTRL | Qt::SHIFT, Qt::Key_I));
-    createCommandAction(ACTION_FILE_EXPORT, tr("Export File..."), "file_export", tr("Export data to a file."), QKeyCombination(Qt::CTRL, Qt::Key_E));
-    createCommandAction(ACTION_FILE_NEW_WINDOW, tr("New Program Window"), "file_new_window", tr("Open another OVITO program window."), QKeySequence::New);
-    createCommandAction(ACTION_HELP_ABOUT, tr("About OVITO"), "application_about", tr("Show information about this software."));
-    createCommandAction(ACTION_HELP_SHOW_ONLINE_HELP, tr("User Manual"), "help_user_manual", tr("Open the OVITO user manual."), QKeySequence::HelpContents);
-    createCommandAction(ACTION_HELP_SHOW_SCRIPTING_HELP, tr("Scripting Reference"), "help_scripting_manual", tr("Open the OVITO Python API documentation."));
-    createCommandAction(ACTION_HELP_GRAPHICS_SYSINFO, tr("System Information..."), "help_system_info", tr("Display system and graphics hardware information."));
-    createCommandAction(ACTION_HELP_REQUEST_FEATURE, tr("Request a Feature"), "help_request_feature", tr("Submit a request for a new feature to the OVITO developers."));
+    createCommand(ACTION_QUIT, tr("Quit"), "file_quit", tr("Quit the application."));
+    createCommand(ACTION_FILE_OPEN, tr("Load Session State..."), "file_open", tr("Load a previously saved session from a file."), QKeySequence::Open);
+    createCommand(ACTION_FILE_SAVE, tr("Save Session State"), "file_save", tr("Save the current program session to a file."), QKeySequence::Save);
+    createCommand(ACTION_FILE_SAVEAS, tr("Save Session State As..."), "file_save_as", tr("Save the current program session to a new file."), QKeySequence::SaveAs);
+    createCommand(ACTION_FILE_IMPORT, tr("Load File..."), "file_import", tr("Import data from a file on this computer."), QKeyCombination(Qt::CTRL, Qt::Key_I));
+    createCommand(ACTION_FILE_REMOTE_IMPORT, tr("Load Remote File"), "file_import_remote", tr("Import a file from a remote location."), QKeyCombination(Qt::CTRL | Qt::SHIFT, Qt::Key_I));
+    createCommand(ACTION_FILE_EXPORT, tr("Export File..."), "file_export", tr("Export data to a file."), QKeyCombination(Qt::CTRL, Qt::Key_E));
+    createCommand(ACTION_FILE_NEW_WINDOW, tr("New Program Window"), "file_new_window", tr("Open another OVITO program window."), QKeySequence::New);
+    createCommand(ACTION_HELP_ABOUT, tr("About OVITO"), "application_about", tr("Show information about this software."));
+    createCommand(ACTION_HELP_SHOW_ONLINE_HELP, tr("User Manual"), "help_user_manual", tr("Open the OVITO user manual."), QKeySequence::HelpContents);
+    createCommand(ACTION_HELP_SHOW_SCRIPTING_HELP, tr("Scripting Reference"), "help_scripting_manual", tr("Open the OVITO Python API documentation."));
+    createCommand(ACTION_HELP_GRAPHICS_SYSINFO, tr("System Information..."), "help_system_info", tr("Display system and graphics hardware information."));
+    createCommand(ACTION_HELP_REQUEST_FEATURE, tr("Request a Feature"), "help_request_feature", tr("Submit a request for a new feature to the OVITO developers."));
 
-    QAction* undoAction = createCommandAction(ACTION_EDIT_UNDO, tr("Undo"), "edit_undo", tr("Reverse the last action."), QKeySequence::Undo);
-    QAction* redoAction = createCommandAction(ACTION_EDIT_REDO, tr("Redo"), "edit_redo", tr("Restore the previously reversed action."), QKeySequence::Redo);
-    QAction* clearUndoStackAction = createCommandAction(ACTION_EDIT_CLEAR_UNDO_STACK, tr("Clear Undo Stack"), nullptr, tr("Discards all existing undo records."));
-    clearUndoStackAction->setVisible(false);
+    Command* undoCommand = createCommand(ACTION_EDIT_UNDO, tr("Undo"), "edit_undo", tr("Reverse the last action."), QKeySequence::Undo);
+    Command* redoCommand = createCommand(ACTION_EDIT_REDO, tr("Redo"), "edit_redo", tr("Restore the previously reversed action."), QKeySequence::Redo);
+    Command* clearUndoStackCommand = createCommand(ACTION_EDIT_CLEAR_UNDO_STACK, tr("Clear Undo Stack"), nullptr, tr("Discards all existing undo records."));
+    clearUndoStackCommand->setVisible(false);
     if(UndoStack* undoStack = this->undoStack()) {
-        undoAction->setEnabled(undoStack->canUndo());
-        redoAction->setEnabled(undoStack->canRedo());
-        undoAction->setText(tr("Undo %1").arg(undoStack->undoText()));
-        redoAction->setText(tr("Redo %1").arg(undoStack->redoText()));
-        connect(undoStack, &UndoStack::canUndoChanged, undoAction, &QAction::setEnabled);
-        connect(undoStack, &UndoStack::canRedoChanged, redoAction, &QAction::setEnabled);
-        connect(undoStack, &UndoStack::undoTextChanged, undoAction, [undoAction](const QString& undoText) {
-            undoAction->setText(tr("Undo %1").arg(undoText));
+        undoCommand->setEnabled(undoStack->canUndo());
+        redoCommand->setEnabled(undoStack->canRedo());
+        undoCommand->setText(tr("Undo %1").arg(undoStack->undoText()));
+        redoCommand->setText(tr("Redo %1").arg(undoStack->redoText()));
+        connect(undoStack, &UndoStack::canUndoChanged, undoCommand, &Command::setEnabled);
+        connect(undoStack, &UndoStack::canRedoChanged, redoCommand, &Command::setEnabled);
+        connect(undoStack, &UndoStack::undoTextChanged, undoCommand, [undoCommand](const QString& undoText) {
+            undoCommand->setText(tr("Undo %1").arg(undoText));
         });
-        connect(undoStack, &UndoStack::redoTextChanged, redoAction, [redoAction](const QString& redoText) {
-            redoAction->setText(tr("Redo %1").arg(redoText));
+        connect(undoStack, &UndoStack::redoTextChanged, redoCommand, [redoCommand](const QString& redoText) {
+            redoCommand->setText(tr("Redo %1").arg(redoText));
         });
-        connect(undoAction, &QAction::triggered, undoStack, &UndoStack::undo);
-        connect(redoAction, &QAction::triggered, undoStack, &UndoStack::redo);
-        connect(clearUndoStackAction, &QAction::triggered, undoStack, &UndoStack::clear);
+        connect(undoCommand, &Command::triggered, undoStack, &UndoStack::undo);
+        connect(redoCommand, &Command::triggered, undoStack, &UndoStack::redo);
+        connect(clearUndoStackCommand, &Command::triggered, undoStack, &UndoStack::clear);
     }
     else {
-        undoAction->setEnabled(false);
-        redoAction->setEnabled(false);
-        clearUndoStackAction->setEnabled(false);
+        undoCommand->setEnabled(false);
+        redoCommand->setEnabled(false);
+        clearUndoStackCommand->setEnabled(false);
     }
 
-    QAction* createNewPipelineAcion = createCommandAction(ACTION_NEW_PIPELINE_FILESOURCE, tr("External data file"), "edit_create_pipeline", tr("Creates a new pipeline with an external file as data source."));
-    QAction* clonePipelineAction = createCommandAction(ACTION_EDIT_CLONE_PIPELINE, tr("Clone Pipeline..."), "edit_clone_pipeline", tr("Duplicate the current pipeline to show multiple datasets side by side."));
+    Command* createNewPipelineCommand = createCommand(ACTION_NEW_PIPELINE_FILESOURCE, tr("External data file"), "edit_create_pipeline", tr("Creates a new pipeline with an external file as data source."));
+    Command* clonePipelineCommand = createCommand(ACTION_EDIT_CLONE_PIPELINE, tr("Clone Pipeline..."), "edit_clone_pipeline", tr("Duplicate the current pipeline to show multiple datasets side by side."));
 #ifndef OVITO_BUILD_PROFESSIONAL
-    createNewPipelineAcion->setText(createNewPipelineAcion->text() + QStringLiteral(" (Pro)"));
-    clonePipelineAction->setText(clonePipelineAction->text() + QStringLiteral(" (Pro)"));
+    createNewPipelineCommand->setText(createNewPipelineCommand->text() + QStringLiteral(" (Pro)"));
+    clonePipelineCommand->setText(clonePipelineCommand->text() + QStringLiteral(" (Pro)"));
 #else
-    (void)createNewPipelineAcion;
-    (void)clonePipelineAction;
+    (void)createNewPipelineCommand;
+    (void)clonePipelineCommand;
 #endif
-    createCommandAction(ACTION_EDIT_RENAME_PIPELINE, tr("Rename Pipeline..."), "edit_rename_pipeline", tr("Assign a new name to the selected pipeline."));
-    createCommandAction(ACTION_EDIT_DELETE, tr("Delete Pipeline"), "edit_delete_pipeline", tr("Delete the selected object from the scene."));
+    createCommand(ACTION_EDIT_RENAME_PIPELINE, tr("Rename Pipeline..."), "edit_rename_pipeline", tr("Assign a new name to the selected pipeline."));
+    createCommand(ACTION_EDIT_DELETE, tr("Delete Pipeline"), "edit_delete_pipeline", tr("Delete the selected object from the scene."));
 
-    createCommandAction(ACTION_SETTINGS_DIALOG, tr("Application Settings..."), "application_preferences", tr("Open the application settings dialog."), QKeySequence::Preferences);
+    createCommand(ACTION_SETTINGS_DIALOG, tr("Application Settings..."), "application_preferences", tr("Open the application settings dialog."), QKeySequence::Preferences);
 
-    createCommandAction(ACTION_RENDER_ACTIVE_VIEWPORT, tr("Render"), "render_active_viewport", tr("Render an image or animation of the current viewport."));
+    createCommand(ACTION_RENDER_ACTIVE_VIEWPORT, tr("Render"), "render_active_viewport", tr("Render an image or animation of the current viewport."));
 
-    createCommandAction(ACTION_VIEWPORT_MAXIMIZE, tr("Maximize Active Viewport"), "viewport_maximize", tr("Enlarge/reduce the active viewport."))->setCheckable(true);
-    createCommandAction(ACTION_VIEWPORT_ZOOM_SCENE_EXTENTS, tr("Zoom Scene Extents"), "viewport_zoom_scene_extents",
+    createCommand(ACTION_VIEWPORT_MAXIMIZE, tr("Maximize Active Viewport"), "viewport_maximize", tr("Enlarge/reduce the active viewport."))->setCheckable(true);
+    createCommand(ACTION_VIEWPORT_ZOOM_SCENE_EXTENTS, tr("Zoom Scene Extents"), "viewport_zoom_scene_extents",
 #ifndef Q_OS_MACOS
         tr("Zoom active viewport to show everything. Use CONTROL key to zoom all viewports at once."));
 #else
         tr("Zoom active viewport to show everything. Use COMMAND key to zoom all viewports at once."));
 #endif
-    createCommandAction(ACTION_VIEWPORT_ZOOM_SCENE_EXTENTS_ALL, tr("Zoom Scene Extents All"), nullptr, tr("Zoom all viewports to show everything."));
-    createCommandAction(ACTION_VIEWPORT_ZOOM_SELECTION_EXTENTS, tr("Zoom Selection Extents"), nullptr, tr("Zoom active viewport to show the selected objects."));
-    createCommandAction(ACTION_VIEWPORT_ZOOM_SELECTION_EXTENTS_ALL, tr("Zoom Selection Extents All"), nullptr, tr("Zoom all viewports to show the selected objects."));
-    createCommandAction(ACTION_CONFIGURE_VIEWPORT_GRAPHICS, tr("Configure Grap&hics..."), nullptr, tr("Change graphics settings for real-time interactive viewports."));
+    createCommand(ACTION_VIEWPORT_ZOOM_SCENE_EXTENTS_ALL, tr("Zoom Scene Extents All"), nullptr, tr("Zoom all viewports to show everything."));
+    createCommand(ACTION_VIEWPORT_ZOOM_SELECTION_EXTENTS, tr("Zoom Selection Extents"), nullptr, tr("Zoom active viewport to show the selected objects."));
+    createCommand(ACTION_VIEWPORT_ZOOM_SELECTION_EXTENTS_ALL, tr("Zoom Selection Extents All"), nullptr, tr("Zoom all viewports to show the selected objects."));
+    createCommand(ACTION_CONFIGURE_VIEWPORT_GRAPHICS, tr("Configure Grap&hics..."), nullptr, tr("Change graphics settings for real-time interactive viewports."));
 
     if(ViewportInputManager* vpInputManager = viewportInputManager()) {
-        createViewportModeAction(ACTION_VIEWPORT_ZOOM, vpInputManager->zoomMode(), tr("Zoom"), "viewport_mode_zoom", tr("Activate zoom mode."));
-        createViewportModeAction(ACTION_VIEWPORT_PAN, vpInputManager->panMode(), tr("Pan"), "viewport_mode_pan", tr("Activate pan mode to shift the region visible in the viewports."));
-        createViewportModeAction(ACTION_VIEWPORT_ORBIT, vpInputManager->orbitMode(), tr("Orbit Camera"), "viewport_mode_orbit", tr("Activate orbit mode to rotate the camera around the scene."));
-        createViewportModeAction(ACTION_VIEWPORT_FOV, vpInputManager->fovMode(), tr("Change Field Of View"), "viewport_mode_fov", tr("Activate field of view mode to change the perspective projection."));
-        createViewportModeAction(ACTION_VIEWPORT_PICK_ORBIT_CENTER, vpInputManager->pickOrbitCenterMode(), tr("Set Orbit Center"), nullptr, tr("Set the center of rotation of the viewport camera."))->setVisible(false);
-        createViewportModeAction(ACTION_SELECTION_MODE, vpInputManager->selectionMode(), tr("Select"), "edit_mode_select", tr("Select objects in the viewports."));
+        createViewportModeCommand(ACTION_VIEWPORT_ZOOM, vpInputManager->zoomMode(), tr("Zoom"), "viewport_mode_zoom", tr("Activate zoom mode."));
+        createViewportModeCommand(ACTION_VIEWPORT_PAN, vpInputManager->panMode(), tr("Pan"), "viewport_mode_pan", tr("Activate pan mode to shift the region visible in the viewports."));
+        createViewportModeCommand(ACTION_VIEWPORT_ORBIT, vpInputManager->orbitMode(), tr("Orbit Camera"), "viewport_mode_orbit", tr("Activate orbit mode to rotate the camera around the scene."));
+        createViewportModeCommand(ACTION_VIEWPORT_FOV, vpInputManager->fovMode(), tr("Change Field Of View"), "viewport_mode_fov", tr("Activate field of view mode to change the perspective projection."));
+        createViewportModeCommand(ACTION_VIEWPORT_PICK_ORBIT_CENTER, vpInputManager->pickOrbitCenterMode(), tr("Set Orbit Center"), nullptr, tr("Set the center of rotation of the viewport camera."))->setVisible(false);
+        createViewportModeCommand(ACTION_SELECTION_MODE, vpInputManager->selectionMode(), tr("Select"), "edit_mode_select", tr("Select objects in the viewports."));
     }
 
-    createCommandAction(ACTION_GOTO_START_OF_ANIMATION, tr("Go to Start of Animation"), "animation_goto_start", tr("Jump to the first frame of the animation."), Qt::Key_Home);
-    createCommandAction(ACTION_GOTO_END_OF_ANIMATION, tr("Go to End of Animation"), "animation_goto_end", tr("Jump to the last frame of the animation."), Qt::Key_End);
-    createCommandAction(ACTION_GOTO_PREVIOUS_FRAME, tr("Go to Previous Frame"), "animation_goto_previous_frame", tr("Move time slider one animation frame backward."), QKeyCombination(Qt::ALT, Qt::Key_Left));
-    createCommandAction(ACTION_GOTO_NEXT_FRAME, tr("Go to Next Frame"), "animation_goto_next_frame", tr("Move time slider one animation frame forward."), QKeyCombination(Qt::ALT, Qt::Key_Right));
-    createCommandAction(ACTION_START_ANIMATION_PLAYBACK, tr("Start Animation Playback"), "animation_play", tr("Start playing the animation in the viewports."));
-    createCommandAction(ACTION_STOP_ANIMATION_PLAYBACK, tr("Stop Animation Playback"), "animation_stop", tr("Stop playing the animation in the viewports."));
-    createCommandAction(ACTION_ANIMATION_SETTINGS, tr("Animation Settings"), "animation_settings", tr("Open the animation settings dialog."));
-    createCommandAction(ACTION_AUTO_KEY_MODE_TOGGLE, tr("Auto Key Mode"), "animation_auto_key_mode", tr("Toggle auto-key mode for creating animation keys."))->setCheckable(true);
+    createCommand(ACTION_GOTO_START_OF_ANIMATION, tr("Go to Start of Animation"), "animation_goto_start", tr("Jump to the first frame of the animation."), Qt::Key_Home);
+    createCommand(ACTION_GOTO_END_OF_ANIMATION, tr("Go to End of Animation"), "animation_goto_end", tr("Jump to the last frame of the animation."), Qt::Key_End);
+    createCommand(ACTION_GOTO_PREVIOUS_FRAME, tr("Go to Previous Frame"), "animation_goto_previous_frame", tr("Move time slider one animation frame backward."), QKeyCombination(Qt::ALT, Qt::Key_Left));
+    createCommand(ACTION_GOTO_NEXT_FRAME, tr("Go to Next Frame"), "animation_goto_next_frame", tr("Move time slider one animation frame forward."), QKeyCombination(Qt::ALT, Qt::Key_Right));
+    createCommand(ACTION_START_ANIMATION_PLAYBACK, tr("Start Animation Playback"), "animation_play", tr("Start playing the animation in the viewports."));
+    createCommand(ACTION_STOP_ANIMATION_PLAYBACK, tr("Stop Animation Playback"), "animation_stop", tr("Stop playing the animation in the viewports."));
+    createCommand(ACTION_ANIMATION_SETTINGS, tr("Animation Settings"), "animation_settings", tr("Open the animation settings dialog."));
+    createCommand(ACTION_AUTO_KEY_MODE_TOGGLE, tr("Auto Key Mode"), "animation_auto_key_mode", tr("Toggle auto-key mode for creating animation keys."))->setCheckable(true);
 
-    QAction* toggleAnimationPlaybackAction = createCommandAction(ACTION_TOGGLE_ANIMATION_PLAYBACK, tr("Play Animation"), "animation_play", tr("Start/stop animation playback. Hold down Shift key to play backwards."), Qt::Key_Space);
-    toggleAnimationPlaybackAction->setCheckable(true);
-    toggleAnimationPlaybackAction->setChecked(datasetContainer().isPlaybackActive());
-    connect(&datasetContainer(), &DataSetContainer::playbackChanged, toggleAnimationPlaybackAction, &QAction::setChecked);
-    connect(toggleAnimationPlaybackAction, &QAction::toggled, &datasetContainer(), &DataSetContainer::setAnimationPlayback);
+    Command* toggleAnimationPlaybackCommand = createCommand(ACTION_TOGGLE_ANIMATION_PLAYBACK, tr("Play Animation"), "animation_play", tr("Start/stop animation playback. Hold down Shift key to play backwards."), Qt::Key_Space);
+    toggleAnimationPlaybackCommand->setCheckable(true);
+    toggleAnimationPlaybackCommand->setChecked(datasetContainer().isPlaybackActive());
+    connect(&datasetContainer(), &DataSetContainer::playbackChanged, toggleAnimationPlaybackCommand, &Command::setChecked);
+    connect(toggleAnimationPlaybackCommand, &Command::toggled, &datasetContainer(), &DataSetContainer::setAnimationPlayback);
 
-    connect(getAction(ACTION_VIEWPORT_MAXIMIZE), &QAction::triggered, this, &ActionManager::on_ViewportMaximize_triggered);
-    connect(getAction(ACTION_VIEWPORT_ZOOM_SCENE_EXTENTS), &QAction::triggered, this, &ActionManager::on_ViewportZoomSceneExtents_triggered);
-    connect(getAction(ACTION_VIEWPORT_ZOOM_SELECTION_EXTENTS), &QAction::triggered, this, &ActionManager::on_ViewportZoomSelectionExtents_triggered);
-    connect(getAction(ACTION_VIEWPORT_ZOOM_SCENE_EXTENTS_ALL), &QAction::triggered, this, &ActionManager::on_ViewportZoomSceneExtentsAll_triggered);
-    connect(getAction(ACTION_VIEWPORT_ZOOM_SELECTION_EXTENTS_ALL), &QAction::triggered, this, &ActionManager::on_ViewportZoomSelectionExtentsAll_triggered);
-    connect(getAction(ACTION_GOTO_START_OF_ANIMATION), &QAction::triggered, this, &ActionManager::on_AnimationGotoStart_triggered);
-    connect(getAction(ACTION_GOTO_END_OF_ANIMATION), &QAction::triggered, this, &ActionManager::on_AnimationGotoEnd_triggered);
-    connect(getAction(ACTION_GOTO_PREVIOUS_FRAME), &QAction::triggered, this, &ActionManager::on_AnimationGotoPreviousFrame_triggered);
-    connect(getAction(ACTION_GOTO_NEXT_FRAME), &QAction::triggered, this, &ActionManager::on_AnimationGotoNextFrame_triggered);
-    connect(getAction(ACTION_START_ANIMATION_PLAYBACK), &QAction::triggered, this, &ActionManager::on_AnimationStartPlayback_triggered);
-    connect(getAction(ACTION_STOP_ANIMATION_PLAYBACK), &QAction::triggered, this, &ActionManager::on_AnimationStopPlayback_triggered);
-    connect(getAction(ACTION_EDIT_DELETE), &QAction::triggered, this, &ActionManager::on_EditDelete_triggered);
+    connect(getCommand(ACTION_VIEWPORT_MAXIMIZE), &Command::triggered, this, &ActionManager::on_ViewportMaximize_triggered);
+    connect(getCommand(ACTION_VIEWPORT_ZOOM_SCENE_EXTENTS), &Command::triggered, this, &ActionManager::on_ViewportZoomSceneExtents_triggered);
+    connect(getCommand(ACTION_VIEWPORT_ZOOM_SELECTION_EXTENTS), &Command::triggered, this, &ActionManager::on_ViewportZoomSelectionExtents_triggered);
+    connect(getCommand(ACTION_VIEWPORT_ZOOM_SCENE_EXTENTS_ALL), &Command::triggered, this, &ActionManager::on_ViewportZoomSceneExtentsAll_triggered);
+    connect(getCommand(ACTION_VIEWPORT_ZOOM_SELECTION_EXTENTS_ALL), &Command::triggered, this, &ActionManager::on_ViewportZoomSelectionExtentsAll_triggered);
+    connect(getCommand(ACTION_GOTO_START_OF_ANIMATION), &Command::triggered, this, &ActionManager::on_AnimationGotoStart_triggered);
+    connect(getCommand(ACTION_GOTO_END_OF_ANIMATION), &Command::triggered, this, &ActionManager::on_AnimationGotoEnd_triggered);
+    connect(getCommand(ACTION_GOTO_PREVIOUS_FRAME), &Command::triggered, this, &ActionManager::on_AnimationGotoPreviousFrame_triggered);
+    connect(getCommand(ACTION_GOTO_NEXT_FRAME), &Command::triggered, this, &ActionManager::on_AnimationGotoNextFrame_triggered);
+    connect(getCommand(ACTION_START_ANIMATION_PLAYBACK), &Command::triggered, this, &ActionManager::on_AnimationStartPlayback_triggered);
+    connect(getCommand(ACTION_STOP_ANIMATION_PLAYBACK), &Command::triggered, this, &ActionManager::on_AnimationStopPlayback_triggered);
+    connect(getCommand(ACTION_EDIT_DELETE), &Command::triggered, this, &ActionManager::on_EditDelete_triggered);
 }
 
 /******************************************************************************
@@ -147,7 +147,7 @@ DataSet* ActionManager::dataset() const
 void ActionManager::onDataSetChanged(DataSet* newDataSet)
 {
     // Turn off auto-key animation mode.
-    getAction(ACTION_AUTO_KEY_MODE_TOGGLE)->setChecked(false);
+    getCommand(ACTION_AUTO_KEY_MODE_TOGGLE)->setChecked(false);
 }
 
 /******************************************************************************
@@ -156,14 +156,14 @@ void ActionManager::onDataSetChanged(DataSet* newDataSet)
 void ActionManager::onAnimationIntervalChanged(int firstFrame, int lastFrame)
 {
     bool isAnimation = (lastFrame > firstFrame);
-    getAction(ACTION_GOTO_START_OF_ANIMATION)->setEnabled(isAnimation);
-    getAction(ACTION_GOTO_PREVIOUS_FRAME)->setEnabled(isAnimation);
-    getAction(ACTION_TOGGLE_ANIMATION_PLAYBACK)->setEnabled(isAnimation);
-    getAction(ACTION_GOTO_NEXT_FRAME)->setEnabled(isAnimation);
-    getAction(ACTION_GOTO_END_OF_ANIMATION)->setEnabled(isAnimation);
-    getAction(ACTION_AUTO_KEY_MODE_TOGGLE)->setEnabled(isAnimation);
-    if(!isAnimation && getAction(ACTION_AUTO_KEY_MODE_TOGGLE)->isChecked())
-        getAction(ACTION_AUTO_KEY_MODE_TOGGLE)->setChecked(false);
+    getCommand(ACTION_GOTO_START_OF_ANIMATION)->setEnabled(isAnimation);
+    getCommand(ACTION_GOTO_PREVIOUS_FRAME)->setEnabled(isAnimation);
+    getCommand(ACTION_TOGGLE_ANIMATION_PLAYBACK)->setEnabled(isAnimation);
+    getCommand(ACTION_GOTO_NEXT_FRAME)->setEnabled(isAnimation);
+    getCommand(ACTION_GOTO_END_OF_ANIMATION)->setEnabled(isAnimation);
+    getCommand(ACTION_AUTO_KEY_MODE_TOGGLE)->setEnabled(isAnimation);
+    if(!isAnimation && getCommand(ACTION_AUTO_KEY_MODE_TOGGLE)->isChecked())
+        getCommand(ACTION_AUTO_KEY_MODE_TOGGLE)->setChecked(false);
 }
 
 /******************************************************************************
@@ -171,7 +171,7 @@ void ActionManager::onAnimationIntervalChanged(int firstFrame, int lastFrame)
 ******************************************************************************/
 void ActionManager::onMaximizedViewportChanged(Viewport* maximizedViewport)
 {
-    getAction(ACTION_VIEWPORT_MAXIMIZE)->setChecked(maximizedViewport != nullptr);
+    getCommand(ACTION_VIEWPORT_MAXIMIZE)->setChecked(maximizedViewport != nullptr);
 }
 
 /******************************************************************************
@@ -179,7 +179,7 @@ void ActionManager::onMaximizedViewportChanged(Viewport* maximizedViewport)
 ******************************************************************************/
 void ActionManager::onViewportLayoutChanged(ViewportConfiguration* viewportConfig)
 {
-    getAction(ACTION_VIEWPORT_MAXIMIZE)->setEnabled(viewportConfig && viewportConfig->layoutRootCell() && !viewportConfig->layoutRootCell()->children().empty());
+    getCommand(ACTION_VIEWPORT_MAXIMIZE)->setEnabled(viewportConfig && viewportConfig->layoutRootCell() && !viewportConfig->layoutRootCell()->children().empty());
 }
 
 /******************************************************************************
@@ -187,9 +187,9 @@ void ActionManager::onViewportLayoutChanged(ViewportConfiguration* viewportConfi
 ******************************************************************************/
 void ActionManager::onSelectionChangeComplete(SelectionSet* selection)
 {
-    getAction(ACTION_EDIT_DELETE)->setEnabled(selection && !selection->nodes().empty());
-    getAction(ACTION_EDIT_CLONE_PIPELINE)->setEnabled(selection && !selection->nodes().empty());
-    getAction(ACTION_EDIT_RENAME_PIPELINE)->setEnabled(selection && !selection->nodes().empty());
+    getCommand(ACTION_EDIT_DELETE)->setEnabled(selection && !selection->nodes().empty());
+    getCommand(ACTION_EDIT_CLONE_PIPELINE)->setEnabled(selection && !selection->nodes().empty());
+    getCommand(ACTION_EDIT_RENAME_PIPELINE)->setEnabled(selection && !selection->nodes().empty());
 }
 
 /******************************************************************************
@@ -226,40 +226,96 @@ void ActionManager::deleteAction(QAction* action)
 }
 
 /******************************************************************************
-* Creates and registers a new command action with the ActionManager.
+* Registers a command with the ActionManager and creates its QAction view.
 ******************************************************************************/
-QAction* ActionManager::createCommandAction(const QString& id, const QString& title, const char* iconPath, const QString& statusTip, const QKeySequence& shortcut)
+Command* ActionManager::addCommand(Command* command)
 {
-    QAction* action = new QAction(title, this);
-    action->setObjectName(id);
-    if(!shortcut.isEmpty())
-        action->setShortcut(shortcut);
-    if(!statusTip.isEmpty())
-        action->setStatusTip(statusTip);
-    if(!shortcut.isEmpty())
-        action->setToolTip(QStringLiteral("%1 [%2]").arg(title).arg(shortcut.toString(QKeySequence::NativeText)));
-    if(iconPath)
-        action->setIcon((iconPath[0] == ':') ? QIcon(iconPath) : QIcon::fromTheme(iconPath));
+    OVITO_CHECK_POINTER(command);
+    OVITO_ASSERT_MSG(findCommand(command->id()) == nullptr, "ActionManager::addCommand()", qPrintable(QStringLiteral("There is already a command with the same ID: %1").arg(command->id())));
+
+    command->setParent(this);
+    _commands.push_back(command);
+    _commandsById.insert(command->id(), command);
+    createActionView(command);
+    return command;
+}
+
+/******************************************************************************
+* Creates and registers a new command with the ActionManager.
+******************************************************************************/
+Command* ActionManager::createCommand(const QString& id, const QString& title, const char* iconPath, const QString& statusTip, const QKeySequence& shortcut)
+{
+    return addCommand(new Command(id, title, iconPath ? QString::fromLatin1(iconPath) : QString(), statusTip, shortcut));
+}
+
+/******************************************************************************
+* Creates and registers a new command that activates a viewport input mode.
+******************************************************************************/
+Command* ActionManager::createViewportModeCommand(const QString& id, OORef<ViewportInputMode> inputMode, const QString& title, const char* iconPath, const QString& statusTip, const QKeySequence& shortcut, const QColor& highlightColor)
+{
+    return addCommand(new ViewportModeCommand(ui(), id, title, std::move(inputMode), highlightColor, iconPath ? QString::fromLatin1(iconPath) : QString(), statusTip, shortcut));
+}
+
+/******************************************************************************
+* Creates the QAction that presents the given command in a QtWidgets frontend.
+******************************************************************************/
+QAction* ActionManager::createActionView(Command* command)
+{
+    OVITO_ASSERT(!_actionViews.contains(command));
+
+    QAction* action = new QAction(this);
+    action->setObjectName(command->id());
+    _actionViews.insert(command, action);
+    _commandOfAction.insert(action, command);
+
+    // The command owns the state; the QAction only presents it. Conversely, the user operates the
+    // QAction, which reports the new check state back to the command.
+    connect(command, &Command::changed, action, [command, action]() { updateActionView(command, action); });
+    connect(action, &QAction::triggered, command, &Command::trigger);
+    connect(action, &QAction::toggled, command, &Command::setChecked);
+
+    updateActionView(command, action);
     addAction(action);
     return action;
 }
 
 /******************************************************************************
-* Creates and registers a new viewport mode action with the ActionManager.
+* Copies the state of a command to its QAction view.
 ******************************************************************************/
-QAction* ActionManager::createViewportModeAction(const QString& id, OORef<ViewportInputMode> inputHandler, const QString& title, const char* iconPath, const QString& statusTip, const QKeySequence& shortcut)
+void ActionManager::updateActionView(Command* command, QAction* action)
 {
-    QAction* action = new ViewportModeAction(ui(), title, this, std::move(inputHandler));
-    action->setObjectName(id);
-    if(!shortcut.isEmpty())
-        action->setShortcut(shortcut);
-    action->setStatusTip(statusTip);
-    if(!shortcut.isEmpty())
-        action->setToolTip(QStringLiteral("%1 [%2]").arg(title).arg(shortcut.toString(QKeySequence::NativeText)));
-    if(iconPath)
-        action->setIcon((iconPath[0] == ':') ? QIcon(iconPath) : QIcon::fromTheme(iconPath));
-    addAction(action);
-    return action;
+    action->setText(command->text());
+    action->setToolTip(command->toolTip());
+    action->setStatusTip(command->statusTip());
+    action->setShortcut(command->shortcut());
+    action->setCheckable(command->isCheckable());
+    action->setChecked(command->isChecked());
+    action->setEnabled(command->isEnabled());
+    action->setVisible(command->isVisible());
+    const QString& iconPath = command->iconPath();
+    if(!iconPath.isEmpty())
+        action->setIcon(iconPath.startsWith(QLatin1Char(':')) ? QIcon(iconPath) : QIcon::fromTheme(iconPath));
+}
+
+/******************************************************************************
+* Returns a list of all commands, for use by a QML frontend.
+******************************************************************************/
+QVariantList ActionManager::commandList() const
+{
+    QVariantList list;
+    list.reserve(_commands.size());
+    for(Command* command : _commands)
+        list.push_back(QVariant::fromValue(command));
+    return list;
+}
+
+/******************************************************************************
+* Invokes the command with the given ID.
+******************************************************************************/
+void ActionManager::triggerCommand(const QString& commandId) const
+{
+    if(Command* command = findCommand(commandId))
+        command->trigger();
 }
 
 /******************************************************************************
@@ -279,6 +335,8 @@ QVariant ActionManager::data(const QModelIndex& index, int role) const
         return QStringLiteral("%1 %2").arg(action->text(), action->statusTip());
     else if(role == ActionRole)
         return QVariant::fromValue(action);
+    else if(role == CommandRole)
+        return QVariant::fromValue(_commandOfAction.value(action, nullptr));
     else if(role == Qt::StatusTipRole)
         return action->statusTip();
     else if(role == Qt::DecorationRole)

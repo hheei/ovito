@@ -37,8 +37,8 @@ ModifyCommandPage::ModifyCommandPage(MainWindowUI& ui, QWidget* parent) : QWidge
     layout->setSpacing(4);
     layout->setColumnStretch(0,1);
 
-    QAction* manageModifierTemplatesAction = actionManager()->createCommandAction(ACTION_MODIFIER_MANAGE_MODIFIER_TEMPLATES, tr("Manage Modifier Templates..."), "modify_modifier_save_preset", tr("Open the dialog that lets you manage the saved modifier templates."));
-    connect(manageModifierTemplatesAction, &QAction::triggered, this, [this]() {
+    Command* manageModifierTemplatesCommand = actionManager()->createCommand(ACTION_MODIFIER_MANAGE_MODIFIER_TEMPLATES, tr("Manage Modifier Templates..."), "modify_modifier_save_preset", tr("Open the dialog that lets you manage the saved modifier templates."));
+    connect(manageModifierTemplatesCommand, &Command::triggered, this, [this]() {
         ApplicationSettingsDialog dlg(this->ui(), &ModifierTemplatesPage::OOClass());
         dlg.exec();
     });
@@ -149,13 +149,13 @@ ModifyCommandPage::ModifyCommandPage(MainWindowUI& ui, QWidget* parent) : QWidge
     editToolbar->addSeparator();
     editToolbar->addAction(actionManager()->getAction(ACTION_PIPELINE_TOGGLE_MODIFIER_GROUP));
 
-    editToolbar->addAction(manageModifierTemplatesAction);
+    editToolbar->addAction(actionManager()->actionView(manageModifierTemplatesCommand));
 
-    connect(actionManager()->getAction(ACTION_PIPELINE_RENAME_ITEM), &QAction::triggered, this, [this]() {
+    connect(actionManager()->getCommand(ACTION_PIPELINE_RENAME_ITEM), &Command::triggered, this, [this]() {
         _pipelineWidget->edit(_pipelineWidget->currentIndex());
     });
 
-    connect(actionManager()->getAction(ACTION_PIPELINE_COPY_ITEM), &QAction::triggered, this, [this]() {
+    connect(actionManager()->getCommand(ACTION_PIPELINE_COPY_ITEM), &Command::triggered, this, [this]() {
         // Collect all currently selected pipeline nodes.
         std::vector<OORef<PipelineNode>> nodes;
         for(RefTarget* obj : _pipelineListModel->selectedObjects()) {
@@ -176,8 +176,8 @@ ModifyCommandPage::ModifyCommandPage(MainWindowUI& ui, QWidget* parent) : QWidge
         }
     });
 
-    connect(actionManager()->getAction(ACTION_MODIFIER_EXPORT_SNIPPET), &QAction::triggered, this, &ModifyCommandPage::onExportModifierSnippet);
-    connect(actionManager()->getAction(ACTION_MODIFIER_IMPORT_SNIPPET), &QAction::triggered, this, &ModifyCommandPage::onImportModifierSnippet);
+    connect(actionManager()->getCommand(ACTION_MODIFIER_EXPORT_SNIPPET), &Command::triggered, this, &ModifyCommandPage::onExportModifierSnippet);
+    connect(actionManager()->getCommand(ACTION_MODIFIER_IMPORT_SNIPPET), &Command::triggered, this, &ModifyCommandPage::onImportModifierSnippet);
 
     layout->addWidget(_splitter, 2, 0, 1, 2);
     layout->setRowStretch(2, 1);

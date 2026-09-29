@@ -70,13 +70,13 @@ private:
     PropertiesPanel* _propertiesPanel;
 
     /// The GUI action that deletes the currently selected viewport layer.
-    QAction* _deleteLayerAction;
+    Command* _deleteLayerCommand;
 
     /// The GUI action that moves the currently selected viewport layer up in the stack.
-    QAction* _moveLayerUpAction;
+    Command* _moveLayerUpCommand;
 
     /// The GUI action that moves the currently selected viewport layer down in the stack.
-    QAction* _moveLayerDownAction;
+    Command* _moveLayerDownCommand;
 
     /// The splitter widget separating the layer list and the properties panel.
     QSplitter* _splitter;

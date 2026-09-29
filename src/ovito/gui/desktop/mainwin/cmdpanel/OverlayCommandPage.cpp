@@ -27,8 +27,8 @@ OverlayCommandPage::OverlayCommandPage(MainWindowUI& ui, QWidget* parent) : QWid
     layout->setContentsMargins(2,2,2,2);
     layout->setSpacing(4);
 
-    QAction* manageOverlayTemplatesAction = actionManager()->createCommandAction(ACTION_VIEWPORT_MANAGE_OVERLAY_TEMPLATES, tr("Manage Viewport Layer Templates..."), "modify_modifier_save_preset", tr("Open the dialog that lets you manage the saved viewport layer templates."));
-    connect(manageOverlayTemplatesAction, &QAction::triggered, this, [this]() {
+    Command* manageOverlayTemplatesCommand = actionManager()->createCommand(ACTION_VIEWPORT_MANAGE_OVERLAY_TEMPLATES, tr("Manage Viewport Layer Templates..."), "modify_modifier_save_preset", tr("Open the dialog that lets you manage the saved viewport layer templates."));
+    connect(manageOverlayTemplatesCommand, &Command::triggered, this, [this]() {
         ApplicationSettingsDialog dlg(this->ui(), &OverlayTemplatesPage::OOClass());
         dlg.exec();
     });
@@ -88,27 +88,27 @@ OverlayCommandPage::OverlayCommandPage(MainWindowUI& ui, QWidget* parent) : QWid
     editToolbar->setOrientation(Qt::Vertical);
     subLayout->addWidget(editToolbar);
 
-    _deleteLayerAction = actionManager()->createCommandAction(ACTION_VIEWPORT_LAYER_DELETE, tr("Delete Layer"), "modify_delete_modifier", tr("Remove the selected viewport layer from the stack."));
-    _deleteLayerAction->setEnabled(false);
-    connect(_deleteLayerAction, &QAction::triggered, this, &OverlayCommandPage::onDeleteLayer);
-    editToolbar->addAction(_deleteLayerAction);
+    _deleteLayerCommand = actionManager()->createCommand(ACTION_VIEWPORT_LAYER_DELETE, tr("Delete Layer"), "modify_delete_modifier", tr("Remove the selected viewport layer from the stack."));
+    _deleteLayerCommand->setEnabled(false);
+    connect(_deleteLayerCommand, &Command::triggered, this, &OverlayCommandPage::onDeleteLayer);
+    editToolbar->addAction(actionManager()->actionView(_deleteLayerCommand));
 
     editToolbar->addSeparator();
 
-    _moveLayerUpAction = actionManager()->createCommandAction(ACTION_VIEWPORT_LAYER_MOVE_UP, tr("Move Layer Up"), "overlay_move_up", tr("Move the selected viewport layer up in the stack."));
-    connect(_moveLayerUpAction, &QAction::triggered, this, &OverlayCommandPage::onLayerMoveUp);
-    editToolbar->addAction(_moveLayerUpAction);
-    _moveLayerDownAction = actionManager()->createCommandAction(ACTION_VIEWPORT_LAYER_MOVE_DOWN, tr("Move Layer Down"), "overlay_move_down", tr("Move the selected viewport layer down in the stack."));
-    connect(_moveLayerDownAction, &QAction::triggered, this, &OverlayCommandPage::onLayerMoveDown);
-    editToolbar->addAction(_moveLayerDownAction);
+    _moveLayerUpCommand = actionManager()->createCommand(ACTION_VIEWPORT_LAYER_MOVE_UP, tr("Move Layer Up"), "overlay_move_up", tr("Move the selected viewport layer up in the stack."));
+    connect(_moveLayerUpCommand, &Command::triggered, this, &OverlayCommandPage::onLayerMoveUp);
+    editToolbar->addAction(actionManager()->actionView(_moveLayerUpCommand));
+    _moveLayerDownCommand = actionManager()->createCommand(ACTION_VIEWPORT_LAYER_MOVE_DOWN, tr("Move Layer Down"), "overlay_move_down", tr("Move the selected viewport layer down in the stack."));
+    connect(_moveLayerDownCommand, &Command::triggered, this, &OverlayCommandPage::onLayerMoveDown);
+    editToolbar->addAction(actionManager()->actionView(_moveLayerDownCommand));
 
-    QAction* renameLayerAction = actionManager()->createCommandAction(ACTION_VIEWPORT_LAYER_RENAME, tr("Rename..."), "edit_rename_pipeline_item", tr("Give the selected viewport layer a different name."));
-    connect(renameLayerAction, &QAction::triggered, this, [this]() {
+    Command* renameLayerCommand = actionManager()->createCommand(ACTION_VIEWPORT_LAYER_RENAME, tr("Rename..."), "edit_rename_pipeline_item", tr("Give the selected viewport layer a different name."));
+    connect(renameLayerCommand, &Command::triggered, this, [this]() {
         _overlayListWidget->edit(_overlayListWidget->currentIndex());
     });
 
     editToolbar->addSeparator();
-    editToolbar->addAction(manageOverlayTemplatesAction);
+    editToolbar->addAction(actionManager()->actionView(manageOverlayTemplatesCommand));
 
     layout->addWidget(_splitter, 1);
 
@@ -170,16 +170,16 @@ void OverlayCommandPage::onItemSelectionChanged()
     ViewportOverlay* layer = selectedLayer();
     _propertiesPanel->setEditObject(layer);
     if(layer) {
-        _deleteLayerAction->setEnabled(true);
+        _deleteLayerCommand->setEnabled(true);
         const auto& overlays = overlayListModel()->selectedViewport()->overlays();
         const auto& underlays = overlayListModel()->selectedViewport()->underlays();
-        _moveLayerUpAction->setEnabled(!overlays.contains(layer) || overlays.indexOf(layer) < overlays.size() - 1);
-        _moveLayerDownAction->setEnabled(!underlays.contains(layer) || underlays.indexOf(layer) > 0);
+        _moveLayerUpCommand->setEnabled(!overlays.contains(layer) || overlays.indexOf(layer) < overlays.size() - 1);
+        _moveLayerDownCommand->setEnabled(!underlays.contains(layer) || underlays.indexOf(layer) > 0);
     }
     else {
-        _deleteLayerAction->setEnabled(false);
-        _moveLayerUpAction->setEnabled(false);
-        _moveLayerDownAction->setEnabled(false);
+        _deleteLayerCommand->setEnabled(false);
+        _moveLayerUpCommand->setEnabled(false);
+        _moveLayerDownCommand->setEnabled(false);
     }
 }
 

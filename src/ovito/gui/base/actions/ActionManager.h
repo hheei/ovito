@@ -6,6 +6,7 @@
 
 #include <ovito/gui/base/GUIBase.h>
 #include <ovito/core/dataset/animation/TimeInterval.h>
+#include <ovito/gui/base/actions/Command.h>
 
 namespace Ovito {
 
@@ -182,6 +183,7 @@ public:
     /// Item model roles supported by this QAbstractListModel.
     enum ModelRoles {
         ActionRole = Qt::UserRole,  ///< Pointer to the QAction object.
+        CommandRole,                ///< Pointer to the Command object.
         ShortcutRole,               ///< QKeySequence of the action's shortcut.
         SearchTextRole              ///< The text string used for seaching commands.
     };
@@ -206,27 +208,58 @@ public:
         return action;
     }
 
-    /// Returns the list of registered actions.
+    /// Returns the list of registered actions. Each command owns one action, which is its view in a QtWidgets frontend.
     const QVector<QAction*>& actions() const { return _actions; }
+
+    /// Returns the QAction view belonging to the given command, or null if the command is not registered here.
+    QAction* actionView(const Command* command) const { return _actionViews.value(command, nullptr); }
+
+    /// \brief Returns the command with the given ID or null.
+    /// \param commandId The identifier string of the command to return.
+    Command* findCommand(const QString& commandId) const { return _commandsById.value(commandId, nullptr); }
+
+    /// \brief Returns the command with the given ID. Asserts that the command exists.
+    Command* getCommand(const QString& commandId) const {
+        Command* command = findCommand(commandId);
+        OVITO_ASSERT_MSG(command != nullptr, "ActionManager::getCommand()", "Command does not exist.");
+        return command;
+    }
+
+    /// Returns the list of registered commands in the order in which they were created.
+    const QVector<Command*>& commands() const { return _commands; }
+
+    /// \brief Returns a list of all commands, for use by a QML frontend.
+    Q_INVOKABLE QVariantList commandList() const;
+
+    /// \brief Returns the command with the given ID, or null if there is no such command. Intended for use by a QML frontend.
+    Q_INVOKABLE Ovito::Command* command(const QString& commandId) const { return findCommand(commandId); }
+
+    /// \brief Invokes the command with the given ID. Does nothing if the command does not exist. Intended for use by a QML frontend.
+    Q_INVOKABLE void triggerCommand(const QString& commandId) const;
 
     /// \brief Registers a new action with the ActionManager.
     /// \param action The action to be registered. The ActionManager will take ownership of the object.
     void addAction(QAction* action);
 
-    /// \brief Creates and registers a new command action with the ActionManager.
-    QAction* createCommandAction(const QString& id,
+    /// \brief Registers a command with the ActionManager, which takes ownership of it and creates its QAction view.
+    /// \returns The registered command.
+    Command* addCommand(Command* command);
+
+    /// \brief Creates and registers a new command with the ActionManager. All state changes go through the returned command.
+    Command* createCommand(const QString& id,
                         const QString& title,
                         const char* iconPath = nullptr,
                         const QString& statusTip = QString(),
                         const QKeySequence& shortcut = QKeySequence());
 
-    /// \brief Creates and registers a new action with the ActionManager.
-    QAction* createViewportModeAction(const QString& id,
-                        OORef<ViewportInputMode> inputHandler,
+    /// \brief Creates and registers a new command that activates a viewport input mode.
+    Command* createViewportModeCommand(const QString& id,
+                        OORef<ViewportInputMode> inputMode,
                         const QString& title,
                         const char* iconPath = nullptr,
                         const QString& statusTip = QString(),
-                        const QKeySequence& shortcut = QKeySequence());
+                        const QKeySequence& shortcut = QKeySequence(),
+                        const QColor& highlightColor = QColor());
 
     /// \brief Removes the given action from the ActionManager and deletes it.
     /// \param action The action to be deletes.
@@ -290,8 +323,22 @@ protected:
 
 private:
 
+    /// Creates the QAction that presents the given command in a QtWidgets frontend and keeps it in sync with the command.
+    QAction* createActionView(Command* command);
+
+    /// Copies the state of a command to its QAction view.
+    static void updateActionView(Command* command, QAction* action);
+
     /// The list of registered actions.
     QVector<QAction*> _actions;
+
+    /// The registered commands in creation order, and the same commands indexed by their ID.
+    QVector<Command*> _commands;
+    QHash<QString, Command*> _commandsById;
+
+    /// The QAction that presents each command in a QtWidgets frontend, and the reverse mapping.
+    QHash<const Command*, QAction*> _actionViews;
+    QHash<const QAction*, Command*> _commandOfAction;
 };
 
 }   // End of namespace

@@ -65,7 +65,6 @@ namespace Ovito
     class SubObjectParameterUI;
     class VariantComboBoxParameterUI;
     class VectorParameterUI;
-    class ViewportModeAction;
     class FileExporterSettingsDialog;
     class CoordinateDisplayWidget;
     class CommandPanel;
@@ -75,6 +74,7 @@ namespace Ovito
     class OverlayCommandPage;
     class UtilityCommandPage;
     class ViewportMenu;
+    class ViewportModeAction;
     class StatusBar;
     class MenuToolButton;
     class PopupUpdateComboBox;

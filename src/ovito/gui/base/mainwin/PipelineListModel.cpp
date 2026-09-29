@@ -57,23 +57,23 @@ QT_WARNING_DISABLE_DEPRECATED
 QT_WARNING_POP
 
     // Create list item actions.
-    _deleteItemAction = actionManager()->createCommandAction(ACTION_MODIFIER_DELETE, tr("Delete Modifier"), "modify_delete_modifier", tr("Delete the selected modifier from the pipeline."));
-    connect(_deleteItemAction, &QAction::triggered, this, &PipelineListModel::deleteSelectedItems);
-    _moveItemUpAction = actionManager()->createCommandAction(ACTION_MODIFIER_MOVE_UP, tr("Move Modifier Up"), "modify_modifier_move_up", tr("Move the selected modifier up in the pipeline."));
-    connect(_moveItemUpAction, &QAction::triggered, this, &PipelineListModel::moveModifierUp);
-    _moveItemDownAction = actionManager()->createCommandAction(ACTION_MODIFIER_MOVE_DOWN, tr("Move Modifier Down"), "modify_modifier_move_down", tr("Move the selected modifier down in the pipeline."));
-    connect(_moveItemDownAction, &QAction::triggered, this, &PipelineListModel::moveModifierDown);
-    _toggleModifierGroupAction = actionManager()->createCommandAction(ACTION_PIPELINE_TOGGLE_MODIFIER_GROUP, tr("Group Modifiers"), "modify_modifier_group_create", tr("Creates or dissolves a group of modifiers in the pipeline editor."));
-    _toggleModifierGroupAction->setCheckable(true);
-    connect(_toggleModifierGroupAction, &QAction::triggered, this, &PipelineListModel::toggleModifierGroup);
-    _makeElementIndependentAction = actionManager()->createCommandAction(ACTION_PIPELINE_MAKE_INDEPENDENT, tr("Make Independent"), "modify_make_element_independent", tr("Duplicate an item shared by multiple pipelines to make it independent from the other pipeline(s)."));
-    connect(_makeElementIndependentAction, &QAction::triggered, this, &PipelineListModel::makeElementIndependent);
-    _copyItemToPipelineAction = actionManager()->createCommandAction(ACTION_PIPELINE_COPY_ITEM, tr("Copy To Pipeline..."), "modify_pipeline_copy_item_to", tr("Copy an item to another pipeline or within the current pipeline."));
-    _renamePipelineItemAction = actionManager()->createCommandAction(ACTION_PIPELINE_RENAME_ITEM, tr("Rename..."), "edit_rename_pipeline_item", tr("Rename the selected pipeline entry."));
-    _shareOrSplitVisualElementsAction = actionManager()->createCommandAction(ACTION_PIPELINE_GROUP_VIS_ELEMENTS, tr("Replace With Shared Element"), nullptr, tr("Combine several visual elements into one."));
-    connect(_shareOrSplitVisualElementsAction, &QAction::triggered, this, &PipelineListModel::shareOrSplitVisualElements);
-    _exportModifierSnippetAction = actionManager()->getAction(ACTION_MODIFIER_EXPORT_SNIPPET);
-    _importModifierSnippetAction = actionManager()->getAction(ACTION_MODIFIER_IMPORT_SNIPPET);
+    _deleteItemCommand = actionManager()->createCommand(ACTION_MODIFIER_DELETE, tr("Delete Modifier"), "modify_delete_modifier", tr("Delete the selected modifier from the pipeline."));
+    connect(_deleteItemCommand, &Command::triggered, this, &PipelineListModel::deleteSelectedItems);
+    _moveItemUpCommand = actionManager()->createCommand(ACTION_MODIFIER_MOVE_UP, tr("Move Modifier Up"), "modify_modifier_move_up", tr("Move the selected modifier up in the pipeline."));
+    connect(_moveItemUpCommand, &Command::triggered, this, &PipelineListModel::moveModifierUp);
+    _moveItemDownCommand = actionManager()->createCommand(ACTION_MODIFIER_MOVE_DOWN, tr("Move Modifier Down"), "modify_modifier_move_down", tr("Move the selected modifier down in the pipeline."));
+    connect(_moveItemDownCommand, &Command::triggered, this, &PipelineListModel::moveModifierDown);
+    _toggleModifierGroupCommand = actionManager()->createCommand(ACTION_PIPELINE_TOGGLE_MODIFIER_GROUP, tr("Group Modifiers"), "modify_modifier_group_create", tr("Creates or dissolves a group of modifiers in the pipeline editor."));
+    _toggleModifierGroupCommand->setCheckable(true);
+    connect(_toggleModifierGroupCommand, &Command::triggered, this, &PipelineListModel::toggleModifierGroup);
+    _makeElementIndependentCommand = actionManager()->createCommand(ACTION_PIPELINE_MAKE_INDEPENDENT, tr("Make Independent"), "modify_make_element_independent", tr("Duplicate an item shared by multiple pipelines to make it independent from the other pipeline(s)."));
+    connect(_makeElementIndependentCommand, &Command::triggered, this, &PipelineListModel::makeElementIndependent);
+    _copyItemToPipelineCommand = actionManager()->createCommand(ACTION_PIPELINE_COPY_ITEM, tr("Copy To Pipeline..."), "modify_pipeline_copy_item_to", tr("Copy an item to another pipeline or within the current pipeline."));
+    _renamePipelineItemCommand = actionManager()->createCommand(ACTION_PIPELINE_RENAME_ITEM, tr("Rename..."), "edit_rename_pipeline_item", tr("Rename the selected pipeline entry."));
+    _shareOrSplitVisualElementsCommand = actionManager()->createCommand(ACTION_PIPELINE_GROUP_VIS_ELEMENTS, tr("Replace With Shared Element"), nullptr, tr("Combine several visual elements into one."));
+    connect(_shareOrSplitVisualElementsCommand, &Command::triggered, this, &PipelineListModel::shareOrSplitVisualElements);
+    _exportModifierSnippetCommand = actionManager()->getCommand(ACTION_MODIFIER_EXPORT_SNIPPET);
+    _importModifierSnippetCommand = actionManager()->getCommand(ACTION_MODIFIER_IMPORT_SNIPPET);
 
     updateActions();
 }
@@ -870,92 +870,92 @@ void PipelineListModel::updateActions()
     RefTarget* currentObject = (_itemsRefreshPending.empty() && objects.size() == 1) ? objects.front() : nullptr;
 
     // Check if all selected objects are deletable.
-    _deleteItemAction->setEnabled(!objects.empty() && std::ranges::all_of(objects, [](RefTarget* obj) {
+    _deleteItemCommand->setEnabled(!objects.empty() && std::ranges::all_of(objects, [](RefTarget* obj) {
         return dynamic_object_cast<ModificationNode>(obj) || dynamic_object_cast<ModifierGroup>(obj);
     }));
     if(objects.size() == 1 && dynamic_object_cast<ModificationNode>(objects[0]))
-        _deleteItemAction->setText(tr("Delete Modifier"));
+        _deleteItemCommand->setText(tr("Delete Modifier"));
     else if(objects.size() == 1 && dynamic_object_cast<ModifierGroup>(objects[0]))
-        _deleteItemAction->setText(tr("Delete Modifier Group"));
+        _deleteItemCommand->setText(tr("Delete Modifier Group"));
     else
-        _deleteItemAction->setText(tr("Delete"));
+        _deleteItemCommand->setText(tr("Delete"));
 
     // Check if the selected object is a shared object which can be made independent.
-    _makeElementIndependentAction->setEnabled(
+    _makeElementIndependentCommand->setEnabled(
         isSharedObject(currentObject)
         && (dynamic_object_cast<ModificationNode>(currentObject) == nullptr || static_object_cast<ModificationNode>(currentObject)->modifierGroup() == nullptr || static_object_cast<ModificationNode>(currentObject)->pipelines(true).size() == 1));
 
     if(DataVis* visElement = dynamic_object_cast<DataVis>(currentObject); visElement && isSharedVisualElement(visElement)) {
-        _shareOrSplitVisualElementsAction->setText(tr("Split Into Multiple Elements"));
-        _shareOrSplitVisualElementsAction->setEnabled(true);
-        _shareOrSplitVisualElementsAction->setVisible(true);
+        _shareOrSplitVisualElementsCommand->setText(tr("Split Into Multiple Elements"));
+        _shareOrSplitVisualElementsCommand->setEnabled(true);
+        _shareOrSplitVisualElementsCommand->setVisible(true);
     }
     else if(objects.size() >= 1 && std::ranges::all_of(objects, [](RefTarget* obj) { return dynamic_object_cast<DataVis>(obj) != nullptr; })) {
-        _shareOrSplitVisualElementsAction->setText(tr("Collapse Into One Element"));
-        _shareOrSplitVisualElementsAction->setEnabled(canShareVisualElements(objects));
-        _shareOrSplitVisualElementsAction->setVisible(true);
+        _shareOrSplitVisualElementsCommand->setText(tr("Collapse Into One Element"));
+        _shareOrSplitVisualElementsCommand->setEnabled(canShareVisualElements(objects));
+        _shareOrSplitVisualElementsCommand->setVisible(true);
     }
     else {
-        _shareOrSplitVisualElementsAction->setEnabled(false);
-        _shareOrSplitVisualElementsAction->setVisible(false);
+        _shareOrSplitVisualElementsCommand->setEnabled(false);
+        _shareOrSplitVisualElementsCommand->setVisible(false);
     }
 
-    _copyItemToPipelineAction->setEnabled(std::ranges::any_of(objects, [](RefTarget* obj) {
+    _copyItemToPipelineCommand->setEnabled(std::ranges::any_of(objects, [](RefTarget* obj) {
         return dynamic_object_cast<PipelineNode>(obj) || dynamic_object_cast<ModifierGroup>(obj);
     }));
 
-    _exportModifierSnippetAction->setEnabled(!objects.empty() && std::ranges::all_of(objects, [](RefTarget* obj) {
+    _exportModifierSnippetCommand->setEnabled(!objects.empty() && std::ranges::all_of(objects, [](RefTarget* obj) {
         return dynamic_object_cast<ModificationNode>(obj) || dynamic_object_cast<ModifierGroup>(obj);
     }));
 
-    _importModifierSnippetAction->setEnabled(selectedPipeline() != nullptr);
+    _importModifierSnippetCommand->setEnabled(selectedPipeline() != nullptr);
 
-    _renamePipelineItemAction->setEnabled(ModificationNode::OOClass().isMember(currentObject) || ModifierGroup::OOClass().isMember(currentObject) || DataVis::OOClass().isMember(currentObject));
+    _renamePipelineItemCommand->setEnabled(ModificationNode::OOClass().isMember(currentObject) || ModifierGroup::OOClass().isMember(currentObject) || DataVis::OOClass().isMember(currentObject));
 
     // Update the state of the move up/down actions.
     if(ModificationNode* modNode = dynamic_object_cast<ModificationNode>(currentObject)) {
-        _moveItemDownAction->setText(tr("Move Modifier Down"));
-        _moveItemDownAction->setEnabled(
+        _moveItemDownCommand->setText(tr("Move Modifier Down"));
+        _moveItemDownCommand->setEnabled(
             modNode->input()
             && (dynamic_object_cast<ModificationNode>(modNode->input()) != nullptr || modNode->modifierGroup() != nullptr)
             && (modNode->input()->isPipelineBranch(true) == false || modNode->modifierGroup() != nullptr)
             && modNode->pipelines(true).empty() == false
             && (modNode->modifierGroup() == nullptr || modNode->modifierGroup()->nodes().size() > 1));
 
-        _moveItemUpAction->setText(tr("Move Modifier Up"));
-        _moveItemUpAction->setEnabled(
+        _moveItemUpCommand->setText(tr("Move Modifier Up"));
+        _moveItemUpCommand->setEnabled(
             (modNode->getPredecessorModNode() != nullptr || modNode->modifierGroup() != nullptr)
             && (modNode->isPipelineBranch(true) == false || modNode->modifierGroup() != nullptr)
             && modNode->pipelines(true).empty() == false
             && (modNode->modifierGroup() == nullptr || modNode->modifierGroup()->nodes().size() > 1));
     }
     else if(ModifierGroup* group = dynamic_object_cast<ModifierGroup>(currentObject)) {
-        _moveItemUpAction->setEnabled(false);
-        _moveItemDownAction->setEnabled(false);
-        _moveItemUpAction->setText(tr("Move Modifier Group Up"));
-        _moveItemDownAction->setText(tr("Move Modifier Group Down"));
+        _moveItemUpCommand->setEnabled(false);
+        _moveItemDownCommand->setEnabled(false);
+        _moveItemUpCommand->setText(tr("Move Modifier Group Up"));
+        _moveItemDownCommand->setText(tr("Move Modifier Group Down"));
 
         // Determine whether it would be possible to move the entire modifier group up and/or down.
         if(group->pipelines(true).empty() == false) {
             QVector<ModificationNode*> groupModNodes = group->nodes();
             if(ModificationNode* inputModNode = dynamic_object_cast<ModificationNode>(groupModNodes.back()->input())) {
                 OVITO_ASSERT(inputModNode->modifierGroup() != group);
-                _moveItemDownAction->setEnabled(!inputModNode->isPipelineBranch(true));
+                _moveItemDownCommand->setEnabled(!inputModNode->isPipelineBranch(true));
             }
-            _moveItemUpAction->setEnabled(groupModNodes.front()->getPredecessorModNode() != nullptr);
+            _moveItemUpCommand->setEnabled(groupModNodes.front()->getPredecessorModNode() != nullptr);
         }
     }
     else {
-        _moveItemUpAction->setEnabled(false);
-        _moveItemDownAction->setEnabled(false);
-        _moveItemUpAction->setText(tr("Move Up"));
-        _moveItemDownAction->setText(tr("Move Down"));
+        _moveItemUpCommand->setEnabled(false);
+        _moveItemDownCommand->setEnabled(false);
+        _moveItemUpCommand->setText(tr("Move Up"));
+        _moveItemDownCommand->setText(tr("Move Down"));
     }
 
     // Update the modifier grouping action.
-    _toggleModifierGroupAction->setChecked(false);
-    _toggleModifierGroupAction->setEnabled(false);
-    _toggleModifierGroupAction->setText(tr("Create Modifier Group"));
+    _toggleModifierGroupCommand->setChecked(false);
+    _toggleModifierGroupCommand->setEnabled(false);
+    _toggleModifierGroupCommand->setText(tr("Create Modifier Group"));
     // Are all selected objects modifier nodes and are they not in a group?
     if(!objects.empty() && std::ranges::all_of(objects, [](RefTarget* obj) {
             ModificationNode* modNode = dynamic_object_cast<ModificationNode>(obj);
@@ -970,15 +970,15 @@ void PipelineListModel::updateActions()
             }
         }
         if(isContiguousSequence) {
-            _toggleModifierGroupAction->setEnabled(true);
+            _toggleModifierGroupCommand->setEnabled(true);
         }
     }
     else if(dynamic_object_cast<ModifierGroup>(currentObject) != nullptr) {
-        _toggleModifierGroupAction->setEnabled(true);
-        _toggleModifierGroupAction->setChecked(true);
-        _toggleModifierGroupAction->setText(tr("Ungroup Modifiers"));
+        _toggleModifierGroupCommand->setEnabled(true);
+        _toggleModifierGroupCommand->setChecked(true);
+        _toggleModifierGroupCommand->setText(tr("Ungroup Modifiers"));
     }
-//    _toggleModifierGroupAction->setVisible(!objects.empty() && std::ranges::any_of(objects, [](RefTarget* obj) {
+//    _toggleModifierGroupCommand->setVisible(!objects.empty() && std::ranges::any_of(objects, [](RefTarget* obj) {
 //            return dynamic_object_cast<ModificationNode>(obj) || dynamic_object_cast<ModifierGroup>(obj);
 //        }));
 }

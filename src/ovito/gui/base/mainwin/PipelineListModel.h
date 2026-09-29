@@ -286,34 +286,34 @@ private:
     QBrush _disabledForegroundBrush;
 
     /// The action that deletes the selected list item.
-    QAction* _deleteItemAction;
+    Command* _deleteItemCommand;
 
     /// Action that moves the selected item up one entry in the list.
-    QAction* _moveItemUpAction;
+    Command* _moveItemUpCommand;
 
     /// Action that moves the selected item down one entry in the list.
-    QAction* _moveItemDownAction;
+    Command* _moveItemDownCommand;
 
     /// Action that creates or dissolves a modifier group.
-    QAction* _toggleModifierGroupAction;
+    Command* _toggleModifierGroupCommand;
 
     /// Action that creates an independent copy of a cloned pipeline object.
-    QAction* _makeElementIndependentAction;
+    Command* _makeElementIndependentCommand;
 
     /// Action that copies the selected pipeline item(s) to another pipeline in the scene.
-    QAction* _copyItemToPipelineAction;
+    Command* _copyItemToPipelineCommand;
 
     /// Action that renames selected pipeline item(s).
-    QAction* _renamePipelineItemAction;
+    Command* _renamePipelineItemCommand;
 
     /// Action that groups or splits selected visual elements.
-    QAction* _shareOrSplitVisualElementsAction;
+    Command* _shareOrSplitVisualElementsCommand;
 
     /// Action that exports the selected modifier(s) as text snippet.
-    QAction* _exportModifierSnippetAction;
+    Command* _exportModifierSnippetCommand;
 
     /// Action that imports modifier(s) from a text snippet.
-    QAction* _importModifierSnippetAction;
+    Command* _importModifierSnippetCommand;
 };
 
 }   // End of namespace

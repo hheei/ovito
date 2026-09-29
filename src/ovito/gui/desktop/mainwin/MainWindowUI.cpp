@@ -56,9 +56,6 @@ void MainWindowUI::initializeObject()
     // Create the input manager, the undo stack and the action manager. The main window owns them.
     initializeWorkbench(_mainWindow);
 
-    // Store current state of ACTION_AUTO_KEY_MODE_TOGGLE in a member variable for quick access in isAutoGenerateAnimationKeysEnabled().
-    QObject::connect(actionManager()->getAction(ACTION_AUTO_KEY_MODE_TOGGLE), &QAction::toggled, _mainWindow, [&](bool checked) { setAutoKeyModeEnabled(checked); });
-
     // Initialize the widget.
     _mainWindow->initializeWindow();
 

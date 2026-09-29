@@ -25,31 +25,31 @@ namespace Ovito {
 ******************************************************************************/
 WidgetActionManager::WidgetActionManager(QObject* parent, MainWindowUI& ui) : ActionManager(parent, ui)
 {
-    createViewportModeAction(ACTION_XFORM_MOVE_MODE, OORef<MoveMode>::create(), tr("Move"), "edit_mode_move", tr("Move objects."));
-    createViewportModeAction(ACTION_XFORM_ROTATE_MODE, OORef<RotateMode>::create(), tr("Rotate"), "edit_mode_rotate", tr("Rotate objects."));
-    createCommandAction(ACTION_MODIFIER_EXPORT_SNIPPET, tr("Export as Snippet..."), "export_as_text_snippet", tr("Export the selected modifier(s) as a shareable text snippet."));
-    createCommandAction(ACTION_MODIFIER_IMPORT_SNIPPET, tr("Import from Snippet..."), "import_from_text_snippet", tr("Create modifiers from a text snippet and insert them into the pipeline."));
+    createViewportModeCommand(ACTION_XFORM_MOVE_MODE, OORef<MoveMode>::create(), tr("Move"), "edit_mode_move", tr("Move objects."));
+    createViewportModeCommand(ACTION_XFORM_ROTATE_MODE, OORef<RotateMode>::create(), tr("Rotate"), "edit_mode_rotate", tr("Rotate objects."));
+    createCommand(ACTION_MODIFIER_EXPORT_SNIPPET, tr("Export as Snippet..."), "export_as_text_snippet", tr("Export the selected modifier(s) as a shareable text snippet."));
+    createCommand(ACTION_MODIFIER_IMPORT_SNIPPET, tr("Import from Snippet..."), "import_from_text_snippet", tr("Create modifiers from a text snippet and insert them into the pipeline."));
 
-    connect(getAction(ACTION_QUIT), &QAction::triggered, this, &WidgetActionManager::on_Quit_triggered);
-    connect(getAction(ACTION_HELP_ABOUT), &QAction::triggered, this, &WidgetActionManager::on_HelpAbout_triggered);
-    connect(getAction(ACTION_HELP_GRAPHICS_SYSINFO), &QAction::triggered, this, &WidgetActionManager::on_HelpSystemInfo_triggered);
-    connect(getAction(ACTION_HELP_SHOW_ONLINE_HELP), &QAction::triggered, this, &WidgetActionManager::on_HelpShowOnlineHelp_triggered);
-    connect(getAction(ACTION_HELP_SHOW_SCRIPTING_HELP), &QAction::triggered, this, &WidgetActionManager::on_HelpShowScriptingReference_triggered);
-    connect(getAction(ACTION_HELP_REQUEST_FEATURE), &QAction::triggered, this, &WidgetActionManager::on_HelpRequestFeature_triggered);
-    connect(getAction(ACTION_FILE_OPEN), &QAction::triggered, this, &WidgetActionManager::on_FileOpen_triggered);
-    connect(getAction(ACTION_FILE_SAVE), &QAction::triggered, this, &WidgetActionManager::on_FileSave_triggered);
-    connect(getAction(ACTION_FILE_SAVEAS), &QAction::triggered, this, &WidgetActionManager::on_FileSaveAs_triggered);
-    connect(getAction(ACTION_FILE_IMPORT), &QAction::triggered, this, &WidgetActionManager::on_FileImport_triggered);
-    connect(getAction(ACTION_FILE_REMOTE_IMPORT), &QAction::triggered, this, &WidgetActionManager::on_FileRemoteImport_triggered);
-    connect(getAction(ACTION_FILE_EXPORT), &QAction::triggered, this, &WidgetActionManager::on_FileExport_triggered);
-    connect(getAction(ACTION_FILE_NEW_WINDOW), &QAction::triggered, this, &WidgetActionManager::on_FileNewWindow_triggered);
-    connect(getAction(ACTION_SETTINGS_DIALOG), &QAction::triggered, this, &WidgetActionManager::on_Settings_triggered);
-    connect(getAction(ACTION_ANIMATION_SETTINGS), &QAction::triggered, this, &WidgetActionManager::on_AnimationSettings_triggered);
-    connect(getAction(ACTION_RENDER_ACTIVE_VIEWPORT), &QAction::triggered, this, &WidgetActionManager::on_RenderActiveViewport_triggered);
-    connect(getAction(ACTION_EDIT_CLONE_PIPELINE), &QAction::triggered, this, &WidgetActionManager::on_ClonePipeline_triggered);
-    connect(getAction(ACTION_EDIT_RENAME_PIPELINE), &QAction::triggered, this, &WidgetActionManager::on_RenamePipeline_triggered);
-    connect(getAction(ACTION_NEW_PIPELINE_FILESOURCE), &QAction::triggered, this, &WidgetActionManager::on_NewPipelineFileSource_triggered);
-    connect(getAction(ACTION_CONFIGURE_VIEWPORT_GRAPHICS), &QAction::triggered, this, &WidgetActionManager::on_ConfigureViewportGraphics_triggered);
+    connect(getCommand(ACTION_QUIT), &Command::triggered, this, &WidgetActionManager::on_Quit_triggered);
+    connect(getCommand(ACTION_HELP_ABOUT), &Command::triggered, this, &WidgetActionManager::on_HelpAbout_triggered);
+    connect(getCommand(ACTION_HELP_GRAPHICS_SYSINFO), &Command::triggered, this, &WidgetActionManager::on_HelpSystemInfo_triggered);
+    connect(getCommand(ACTION_HELP_SHOW_ONLINE_HELP), &Command::triggered, this, &WidgetActionManager::on_HelpShowOnlineHelp_triggered);
+    connect(getCommand(ACTION_HELP_SHOW_SCRIPTING_HELP), &Command::triggered, this, &WidgetActionManager::on_HelpShowScriptingReference_triggered);
+    connect(getCommand(ACTION_HELP_REQUEST_FEATURE), &Command::triggered, this, &WidgetActionManager::on_HelpRequestFeature_triggered);
+    connect(getCommand(ACTION_FILE_OPEN), &Command::triggered, this, &WidgetActionManager::on_FileOpen_triggered);
+    connect(getCommand(ACTION_FILE_SAVE), &Command::triggered, this, &WidgetActionManager::on_FileSave_triggered);
+    connect(getCommand(ACTION_FILE_SAVEAS), &Command::triggered, this, &WidgetActionManager::on_FileSaveAs_triggered);
+    connect(getCommand(ACTION_FILE_IMPORT), &Command::triggered, this, &WidgetActionManager::on_FileImport_triggered);
+    connect(getCommand(ACTION_FILE_REMOTE_IMPORT), &Command::triggered, this, &WidgetActionManager::on_FileRemoteImport_triggered);
+    connect(getCommand(ACTION_FILE_EXPORT), &Command::triggered, this, &WidgetActionManager::on_FileExport_triggered);
+    connect(getCommand(ACTION_FILE_NEW_WINDOW), &Command::triggered, this, &WidgetActionManager::on_FileNewWindow_triggered);
+    connect(getCommand(ACTION_SETTINGS_DIALOG), &Command::triggered, this, &WidgetActionManager::on_Settings_triggered);
+    connect(getCommand(ACTION_ANIMATION_SETTINGS), &Command::triggered, this, &WidgetActionManager::on_AnimationSettings_triggered);
+    connect(getCommand(ACTION_RENDER_ACTIVE_VIEWPORT), &Command::triggered, this, &WidgetActionManager::on_RenderActiveViewport_triggered);
+    connect(getCommand(ACTION_EDIT_CLONE_PIPELINE), &Command::triggered, this, &WidgetActionManager::on_ClonePipeline_triggered);
+    connect(getCommand(ACTION_EDIT_RENAME_PIPELINE), &Command::triggered, this, &WidgetActionManager::on_RenamePipeline_triggered);
+    connect(getCommand(ACTION_NEW_PIPELINE_FILESOURCE), &Command::triggered, this, &WidgetActionManager::on_NewPipelineFileSource_triggered);
+    connect(getCommand(ACTION_CONFIGURE_VIEWPORT_GRAPHICS), &Command::triggered, this, &WidgetActionManager::on_ConfigureViewportGraphics_triggered);
 
     setupCommandSearch();
 }
@@ -123,7 +123,7 @@ void WidgetActionManager::on_NewPipelineFileSource_triggered()
             scene->selection()->setNode(sceneNode);
 
             // Show the modify tab of the command panel.
-            actionManager()->getAction(ACTION_COMMAND_PANEL_MODIFY)->trigger();
+            actionManager()->getCommand(ACTION_COMMAND_PANEL_MODIFY)->trigger();
         }
     });
 }

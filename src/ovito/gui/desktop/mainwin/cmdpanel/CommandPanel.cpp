@@ -40,17 +40,17 @@ CommandPanel::CommandPanel(MainWindowUI& userInterface, QWidget* parent) : QWidg
         _tabWidget->tabBar()->setAccessibleTabName(i, _tabWidget->tabToolTip(i));
     setCurrentPage(MainWindow::MODIFY_PAGE);
 
-    QAction* showModifyPageAction = userInterface.actionManager()->createCommandAction(ACTION_COMMAND_PANEL_MODIFY, tr("Pipeline editor"), {}, tr("Switches to the pipeline editing tab."));
-    connect(showModifyPageAction, &QAction::triggered, this, [this]() { setCurrentPage(MainWindow::MODIFY_PAGE); });
+    Command* showModifyPageCommand = userInterface.actionManager()->createCommand(ACTION_COMMAND_PANEL_MODIFY, tr("Pipeline editor"), {}, tr("Switches to the pipeline editing tab."));
+    connect(showModifyPageCommand, &Command::triggered, this, [this]() { setCurrentPage(MainWindow::MODIFY_PAGE); });
 
-    QAction* showRenderPageAction = userInterface.actionManager()->createCommandAction(ACTION_COMMAND_PANEL_RENDER, tr("Render settings"), {}, tr("Switches to the image & animation rendering tab."));
-    connect(showRenderPageAction, &QAction::triggered, this, [this]() { setCurrentPage(MainWindow::RENDER_PAGE); });
+    Command* showRenderPageCommand = userInterface.actionManager()->createCommand(ACTION_COMMAND_PANEL_RENDER, tr("Render settings"), {}, tr("Switches to the image & animation rendering tab."));
+    connect(showRenderPageCommand, &Command::triggered, this, [this]() { setCurrentPage(MainWindow::RENDER_PAGE); });
 
-    QAction* showOverlayPageAction = userInterface.actionManager()->createCommandAction(ACTION_COMMAND_PANEL_OVERLAYS, tr("Viewport layers"), {}, tr("Switches to the viewport layers tab."));
-    connect(showOverlayPageAction, &QAction::triggered, this, [this]() { setCurrentPage(MainWindow::OVERLAY_PAGE); });
+    Command* showOverlayPageCommand = userInterface.actionManager()->createCommand(ACTION_COMMAND_PANEL_OVERLAYS, tr("Viewport layers"), {}, tr("Switches to the viewport layers tab."));
+    connect(showOverlayPageCommand, &Command::triggered, this, [this]() { setCurrentPage(MainWindow::OVERLAY_PAGE); });
 
-    QAction* showUtilityPageAction = userInterface.actionManager()->createCommandAction(ACTION_COMMAND_PANEL_UTILITIES, tr("Utilities"), {}, tr("Switches to the utilities tab."));
-    connect(showUtilityPageAction, &QAction::triggered, this, [this]() { setCurrentPage(MainWindow::UTILITY_PAGE); });
+    Command* showUtilityPageCommand = userInterface.actionManager()->createCommand(ACTION_COMMAND_PANEL_UTILITIES, tr("Utilities"), {}, tr("Switches to the utilities tab."));
+    connect(showUtilityPageCommand, &Command::triggered, this, [this]() { setCurrentPage(MainWindow::UTILITY_PAGE); });
 }
 
 /******************************************************************************

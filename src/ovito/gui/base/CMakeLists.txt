@@ -7,6 +7,7 @@ OVITO_STANDARD_PLUGIN(GuiBase
         app/GuiFrontendRegistry.cpp
         app/WorkbenchUI.cpp
         actions/ActionManager.cpp
+        actions/Command.cpp
         actions/ViewportModeAction.cpp
         actions/ViewportActions.cpp
         actions/AnimationActions.cpp

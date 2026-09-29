@@ -33,6 +33,11 @@ void WorkbenchUI::initializeWorkbench(QObject* parent)
     // Create the actions, which is how the frontends and the plugins expose commands to the user.
     setActionManager(createActionManager(parent));
 
+    // Keep track of the auto-key mode, which stores animation keys automatically while the user edits parameters.
+    if(Command* autoKeyModeCommand = actionManager()->findCommand(ACTION_AUTO_KEY_MODE_TOGGLE)) {
+        QObject::connect(autoKeyModeCommand, &Command::toggled, actionManager(), [this](bool checked) { setAutoKeyModeEnabled(checked); });
+    }
+
     // Start with a clean undo stack whenever a new dataset is loaded.
     QObject::connect(&datasetContainer(), &DataSetContainer::dataSetChanged, undoStack(), &UndoStack::clear);
 }

@@ -50,8 +50,8 @@ void ActionManager::on_AnimationGotoNextFrame_triggered()
 ******************************************************************************/
 void ActionManager::on_AnimationStartPlayback_triggered()
 {
-    if(!getAction(ACTION_TOGGLE_ANIMATION_PLAYBACK)->isChecked())
-        getAction(ACTION_TOGGLE_ANIMATION_PLAYBACK)->trigger();
+    if(!getCommand(ACTION_TOGGLE_ANIMATION_PLAYBACK)->isChecked())
+        getCommand(ACTION_TOGGLE_ANIMATION_PLAYBACK)->trigger();
 }
 
 /******************************************************************************
@@ -59,8 +59,8 @@ void ActionManager::on_AnimationStartPlayback_triggered()
 ******************************************************************************/
 void ActionManager::on_AnimationStopPlayback_triggered()
 {
-    if(getAction(ACTION_TOGGLE_ANIMATION_PLAYBACK)->isChecked())
-        getAction(ACTION_TOGGLE_ANIMATION_PLAYBACK)->trigger();
+    if(getCommand(ACTION_TOGGLE_ANIMATION_PLAYBACK)->isChecked())
+        getCommand(ACTION_TOGGLE_ANIMATION_PLAYBACK)->trigger();
 }
 
 }   // End of namespace
