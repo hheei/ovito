@@ -851,6 +851,31 @@ The frame time of the QML frontend is only comparable when the display's refresh
   of the frame a change moved; the numbers of the per-item versus per-window renderer service are in
   [UI_PLAN.md](UI_PLAN.md) deliverable 7.
 
+**Baseline of the four-viewport QML frontend** (`QSG_NO_VSYNC=1`, 1280x800, four viewports, medians of three runs, the
+datasets of section 9.1):
+
+| Scene | threaded loop | `QSG_RENDER_LOOP=basic` |
+|---|---|---|
+| 512 atoms | 117.0 fps (8.55 ms) | 173.5 fps (5.76 ms) |
+| 32768 atoms | 27.0 fps (37.04 ms) | 42.0 fps (23.81 ms) |
+
+Two isolate-experiments are worth repeating before optimizing the viewport, because they say where the frame time actually
+goes (both need temporary instrumentation, which is reverted afterwards):
+
+* **Per-item cost** - maximize one pane (so that one of the four items renders and the other three are invisible, with the
+  same total pane area) and measure again: 512 atoms goes from 8.55 ms to **6.99 ms**, 32768 atoms from 37.04 ms to
+  **11.63 ms**. The large change is *the rasterization of three panes that are no longer drawn* - it is not something a
+  single canvas item could save, because such an item would still render four panes. The fixed per-item share is bounded by
+  the small-scene pair: (8.55 - 6.99) / 3 = 0.52 ms per item, i.e. ~1.6 ms per frame, and on the `basic` loop the same
+  comparison shows no difference at all (5.76 ms versus 5.92 ms). The conclusion recorded in the plan is therefore "keep the
+  four items" and "optimize the panes, not the items".
+* **Frame-graph generation** - temporary timers around `ViewportWindow::generateFrameGraph()` and the hand-off:
+  0.29 ms per frame graph (1.16 ms per frame, 14%) at 512 atoms and 1.05 ms per graph (4.19 ms, 11%) at 32768 atoms, with
+  the render pass costing 0.05 ms of CPU time per pane and the hand-off nothing measurable. Generation is a tenth of the
+  frame; the rest is the scene graph and the rasterization of four panes.
+* **Cross-session noise** is real: the 32768-atom threaded figure moved between 23.5 fps and 27.0 fps across sessions on
+  this box, so only differences larger than about 10% (or medians of three with a matching control run) are worth acting on.
+
 ### 9.2.3 Testing the shell's parity surfaces
 
 `--qml-parity-check` verifies the surfaces the shell gained for parity with the classic frontend: the menu bar (every
@@ -987,12 +1012,45 @@ Traps of this round:
    `DataSetContainer::selectionChangeComplete`, which is emitted only for a real change, so a check that wants the model
    to adopt a node has to clear the selection first.
 
+### 9.2.7 Testing the picking pre-warm and the frontend selection
+
+`--qml-prewarm-check` verifies that the picking buffer of a viewport catches up **on its own** after the view changed:
+it waits for the buffer of the imported scene (which has to arrive without any pick being made), moves the camera of the
+viewport and requests a repaint, waits for the buffer to notice the change and to become current again - still without a
+pick - and then asserts that the first pick after the camera move names the object the second one names. It finishes by
+counting the frames of the settled window for one second: a pre-warm that refreshed the buffer over and over would look
+like a continuous renderer here. Disabling the pre-warm (`pickingPrewarmTimeout()` as a no-op) makes the check fail with
+*"the picking buffer did not catch up with the imported scene within 20 s"*, which is how the check was shown to have
+teeth.
+
+Traps of this round:
+
+1. **A bool is not a version.** The freshness of the picking buffer cannot be tracked with a boolean that a started pass
+   clears: a pass that was already rendered for the *previous* view then looks current, and the next hover answers from the
+   old camera without ever refreshing (the old code did exactly that, and the counter pair - contents generation versus the
+   generation the last completed pass was rendered for - is what replaces it).
+2. **Pre-warming on every frame graph would render continuously during a drag.** The refresh is therefore started by a
+   single-shot 150 ms timer that every new frame graph restarts, so it fires once after the interaction instead of once per
+   frame. The same reasoning applies to the `pickingBufferReady()` path: a pass that completed while the view changed again
+   restarts the timer instead of starting another pass right away.
+3. **The command line frontend selection is a CLI concern.** `--gui=<name>` reports the available frontends with their
+   descriptions, guesses a typo (unique prefix, or edit distance at most two) and names the fallback, but deliberately does
+   not open a dialog: the failure happens before a workbench exists, and a modal window there blocks every unattended run
+   (the CI smoke tests and the verify scripts check this path on purpose). The message is written for a launcher user as
+   well - it says that omitting `--gui` starts the default frontend.
+4. **A flaky abort inside Mesa.** One assert-enabled run of the spike suite aborted in `libGLX_mesa`/`libgallium`
+   (`double free or corruption (fasttop)` in `XGetGeometry` while the window rendered), i.e. in the software GL stack and
+   not in OVITO code, and it did not reproduce in the following runs of the same suite. When a crash backtrace ends in
+   `libgallium`/`libGLX_mesa`, re-run before investigating the frontend; the crash of a *test* process is not a check
+   failure (it has no `VERIFY_FAILED` line) and has to be told apart from one.
+
 ### 9.5 The CI smoke test and its render loop
 
 The Qt Quick smoke test of the GitHub workflow (`.github/workflows/ci.yml`) runs with `QSG_RENDER_LOOP=basic` on the
 two Linux jobs. It asserts that the frontend starts, renders frames, picks, lays out its panes, passes the shell's parity
-check (`--qml-parity-check`), exercises the shared offscreen service (`--qml-offscreen-check`) and imports a file - none of
-which depends on the render loop - while the runner has no GPU and few CPU cores, where the threaded loop's
+check (`--qml-parity-check`), exercises the shared offscreen service (`--qml-offscreen-check`), the picking pre-warm
+(`--qml-prewarm-check`) and imports a file - none of which depends on the render loop - while the runner has no GPU and few
+CPU cores, where the threaded loop's
 frame synchronization is a source of flakiness rather than of signal. Both loops are part of the local verification
 (section 9.4), so the loop that is left out of CI is covered elsewhere.
 

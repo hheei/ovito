@@ -468,24 +468,69 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      fresh pick proves the superseded picking target neither deadlocked nor read a freed target. The step runs in the four
      CI jobs. The desktop-only viewport grab shares `renderImage()` with the render-output path and is therefore not
      exercised separately.
-  7. **Measurement-driven viewport optimization pass** (each item decided by numbers, not by intuition; method in
+  7. **Measurement-driven viewport optimization pass — done** (each item decided by numbers, not by intuition; method in
      [UI_TEST_ENV.md](UI_TEST_ENV.md) section 9.4 — `QSG_NO_VSYNC=1`, both render loops, medians of three runs at 512 and
      32768 atoms):
      * **Single "viewport canvas" item** — four `QQuickRhiItem`s means four offscreen textures, four pass boundaries,
        four synchronize steps and four composites per window frame; one item drawing all panes (the layout is already
        computed in C++ by `QmlViewportLayout`) could share one resource frame and one pass. Prototype, measure, and keep
        it **only** if it wins at both scene sizes; otherwise record the number and keep four items.
+       *Outcome: decided against, and the number is recorded.* Measured instead of prototyped, because the cost a canvas
+       item can remove is exactly the cost of the three items it replaces, and that cost is measurable without writing the
+       item: with one pane maximized (one item rendering, the same total pane area, the other three items invisible),
+       the frame time changes from **8.55 ms to 6.99 ms** at 512 atoms and from **37.04 ms to 11.63 ms** at 32768 atoms
+       (medians of three runs, `QSG_NO_VSYNC=1`, threaded loop, four panes at 1280x800). The second pair looks like a
+       3.7x win but is not one a canvas item could take: it is the rasterization of three panes that are simply not drawn
+       any more. What a single item can remove is the *fixed per-item* share, and the 512-atom pair bounds it at
+       (8.55 - 6.99) / 3 = **0.52 ms per item**, i.e. about **1.6 ms per frame** for three saved items - 18% at 512 atoms
+       and 4% at 32768 atoms, and nothing measurable at all on the `basic` render loop (5.76 ms with four panes versus
+       5.92 ms with one). A 1.6 ms saving is invisible while the frame rate is above the display refresh (both
+       configurations are beyond 60 Hz at 512 atoms, and the Metal/D3D12 builds are faster still), and it would buy a new
+       item type that has to reproduce input routing, per-pane picking, hover, focus, HiDPI mapping, context menu and
+       teardown for four platforms - so the four items stay. The measurement also names what a future optimization should
+       target instead: the four *panes* (four rasterizations of the same scene), not the item machinery, which is the
+       direction a "reduced quality while dragging" mode would take. Both first-pass numbers (`QSG_NO_VSYNC=1`, threaded
+       loop, four panes, medians of three): **8.55 ms** at 512 atoms and **37.04 ms** at 32768 atoms.
      * **Picking pre-warm** — refresh the picking buffer on camera or scene change instead of on the next hover pick,
        which removes the documented one-frame staleness (review section 3.1). Frame time cannot decide this one: its
        acceptance is a **correctness and latency** check — after a camera move or a scene change, the first hover pick at
        a known position must return the object the second pick returns, the added offscreen pass must not push the hover
        response beyond the measured warm-path latency, and every camera change must not turn a static scene into a
        continuous renderer. If that cannot be shown, the on-demand pick path stays and the staleness remains documented.
+       *Outcome: implemented and accepted.* `QuickViewportWindow` no longer tracks staleness with a boolean that any pass
+       cleared, but with a counter pair: `renderFrameGraph()` counts every change of the rendered contents, a completed
+       pass records the counter it was rendered for, and `isPickingBufferCurrent()` answers whether the cached buffer
+       belongs to the current view (a booleans-based flag could mark a buffer current that a pass rendered for a
+       superseded view, which is exactly the case that made a hover answer from the previous camera). Whenever the view
+       changes, a single-shot 150 ms timer is restarted; when it fires, the buffer is refreshed **if it is behind the
+       view**. The delay is the whole trick: during a camera drag frame graphs arrive faster than 150 ms apart, so the
+       refreshes happen once after the interaction instead of once per frame (one offscreen pass per interaction, not per
+       frame), and a hover that follows an interaction is answered from the current view. The residual window - a hover
+       *within* 150 ms after the last redraw, and a hover while a pass is in flight - is still answered from the previous
+       buffer; the honest fix for it is the asynchronous pick API of Phase 5 (review item A3), which can wait for the pass
+       instead of answering immediately, and the pre-warm is what makes the staleness the exception instead of the rule.
      * **Frame-graph generation** — profile the per-frame, per-pane generation cost before optimizing it; four cameras
        mean four frame graphs, which is expected and may already be dominated by something else.
-     * **`--gui` diagnostics** — an unknown frontend name currently prints the available names and exits 1; also list the
-       names for a typo and make the message usable from a desktop launcher.
-- **Status**: **deliverables 1–6 are done; deliverable 7 (the measurement-driven optimization pass) is not started.** Phase 2 is complete (deliverables 1–7, exit gate
+       *Outcome: measured, nothing to optimize.* With temporary instrumentation (reverted again) around
+       `ViewportWindow::generateFrameGraph()`, `QuickViewportWindow::renderFrameGraph()` and the render pass, one frame of
+       four viewports decomposes into **0.29 ms per frame graph** (4 x 0.29 = 1.16 ms, 14% of the frame, 512 atoms;
+       1.05 ms per graph = 4.19 ms, 11%, at 32768 atoms), **0.05 ms per render pass** on the CPU side (0.19 ms per frame)
+       and **nothing measurable** for the hand-off. Generation is therefore a tenth of the frame, not the bottleneck, and
+       the remaining ~85% is Qt Quick's scene graph plus the rasterization of four panes - which is what the measurements
+       of the item above attribute to the panes rather than to the item machinery. No optimization was recorded here, and
+       the numbers are what make the "single canvas" decision above a measurement instead of an assumption.
+     * **`--gui` diagnostics** — an unknown frontend name printed a terse list of names and exited 1. It now prints the
+       available frontends with their descriptions, guesses what a typo meant (a strict prefix of exactly one name, or the
+       unique name within an edit distance of two), and names the way out (`Without the '-gui' parameter, OVITO starts the
+       default user interface.`), which is also the answer for a desktop launcher that passes a stale `--gui` argument.
+       *Decided against:* an error dialog. This point is reached before a workbench exists, so the dialog would be a
+       free-standing modal window, and every unattended run (the CI smoke tests, the verify scripts that check `--gui`
+       handling, a batch job) would wait for someone to dismiss it - for a message whose only content is a list and a
+       suggestion. The message is written for both audiences instead.
+     * *Verification of deliverable 7*: the numbers, the two decided-against items and the pre-warm's acceptance are
+       documented in [UI_TEST_ENV.md](UI_TEST_ENV.md) section 9.4 (frame times) and tested by the new
+       `--qml-prewarm-check`, which runs in the four CI jobs and fails when the pre-warm is disabled.
+- **Status**: **deliverables 1–7 are done** — Phase 2.5 is complete except for the exit gate's final pass; every review item A1–A9 is in one of the three states the gate asks for (see the table in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md) section 7), and each optimization of deliverable 7 is recorded with its measured medians, including the two that were decided against. Phase 2 is complete (deliverables 1–7, exit gate
   verified on Linux/OpenGL, Linux/Vulkan, macOS/Metal and Windows/D3D12), so this phase starts from a verified base; the
   audit decisions it produces are recorded as D30 onward in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md). Deliverable 1 (the
   action/editor inventory in that document's section 6 plus [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md)) is delivered and

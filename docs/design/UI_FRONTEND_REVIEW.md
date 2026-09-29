@@ -255,6 +255,14 @@ whose completion is delivered through the GUI event loop (the Qt Quick implement
 result. This design therefore has to name the completion thread and the dispatch rule, and Phase 5 of UI_PLAN.md carries
 the hover-pick deadlock test that both frontends must pass.
 
+*Partly addressed in Phase 2.5 (deliverable 7, audit decision D35).* The Qt Quick viewport now refreshes its picking
+buffer by itself once the view has settled (`QuickViewportWindow::pickingPrewarmTimeout()`), so the one-frame staleness
+after a camera move or a scene change is the exception rather than the rule and the first hover of a settled view is
+correct. The staleness that remains - a hover within 150 ms of the last redraw, or while a pass is in flight - is what
+this item still owns, together with the contract change itself: the blocking classic wrapper and the asynchronous QML
+implementation can only be unified once `pick()` can wait for the pass. The pre-warm is the part of A3 that does not
+change the interface.
+
 **Payoff.** Removes the classic frontend's per-hover-move stall and ends the second picking implementation.
 
 ### A4 — Offscreen rendering service (P1–P2, ~1–2 days) — **implemented in Phase 2.5**
