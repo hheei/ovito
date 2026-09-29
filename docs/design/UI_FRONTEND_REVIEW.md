@@ -145,7 +145,14 @@ viewport" work that UI_PLAN.md deferred to Phase 4.
 
 Ordered by priority. "Evidence" names the two implementations that currently duplicate the job.
 
-### A1 — Frontend-neutral command layer (P1, ~1–2 days)
+### A1 — Frontend-neutral command layer (P1, ~1–2 days) — **implemented**
+
+**Status.** Implemented as decision D26 of [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md): `gui/base/actions/Command.h`
+holds the neutral command, `ActionManager` owns the commands and mirrors them onto their `QAction` views, the 65
+creation and 36 `QAction::triggered` call sites were converted, `ViewportModeAction` survives as a thin `QAction` view
+of a `ViewportModeCommand` for the eight widget-based consumers, and the QML workbench binds its shortcuts and state to
+the same objects (verified by the spike's `--qml-command-check`). Still to do as part of the later phases: the QML
+menu bar and the pipeline/panel commands that currently live in the desktop command panel, and the icons (A9).
 
 **Evidence.** 76 action ids are declared centrally (`gui/base/actions/Actions.h`), and **51 of the 65
 `createCommandAction(...)` call sites are already in gui/base** — only 14 are desktop-only (command-panel pages,
@@ -168,6 +175,11 @@ checked/enabled/visible state, trigger — with:
 
 **Payoff.** Every command is implemented once, has one shortcut table and one enabled-state rule; the command palette
 planned for later phases gets its data for free; the QML module can eventually drop its QtWidgets dependency.
+
+**What was measured.** The QML process sees 43 commands of the 76 action ids through the command layer (the rest come
+from the desktop command panel, which the QML frontend does not have yet, and from the pipeline item commands of
+`PipelineListModel`). The QtWidgets side is unaffected: `getAction()` still returns the `QAction` for menu/toolbar
+insertion, and the 36 handler connects were re-targeted without a signature change.
 
 ### A2 — Viewport window management (P1, ~2–3 days)
 
@@ -263,7 +275,7 @@ rules in QML.
 | A8.2 | Application services look up the main window: `dynamic_object_cast<MainWindowUI>` | `NewGraphicsSystemService`, `UpdateNotificationService` (guarded since Phase 1) | a GUI-neutral "notify/confirm with details" interface next to `UserInterface::showMessageBox()` |
 | A8.3 | `--noviewports` is a desktop-registered option read by core | core/dataset/DataSet.cpp:54 | treat "no viewports" as a core command-line parameter, or let the frontend decide the default viewport configuration |
 | A8.4 | The `ovitoheadless` QPA plugin does not exist in the tree (O1) | core/app/StandaloneApplication.cpp | either ship the minimal plugin or print a clear error and require an explicit `QT_QPA_PLATFORM` |
-| A8.5 | `QAction` usage in gui/base's "shared" models | ActionManager, ViewportModeAction, AvailableModifiersModel, AvailableOverlaysModel, PipelineListModel | resolved by A1; until then, state clearly that gui/base is not widget-free and `GuiQml` links QtWidgets transitively |
+| A8.5 | `QAction` usage in gui/base's "shared" models | ActionManager (view only, state lives in `Command`), PipelineListModel (commands), AvailableModifiersModel/AvailableOverlaysModel (still `QAction`) | largely resolved by A1 - the remaining `QAction`s are views created by `ActionManager::actionView()`, so a QML frontend does not need them; the two availability models still register plain `QAction`s and should follow |
 
 ### A9 — Icons and theme assets (P3, ~1 day)
 
@@ -326,8 +338,9 @@ Open candidates, each with the measurement that must decide it:
 
 ## 7. Recommended order
 
-1. **Before Phase 3 UI work**: A1 (command layer) and A5 (state models) — they determine how much of every later
-   feature has to be written twice.
+1. **Before Phase 3 UI work**: A1 (command layer, **done**) and A5 (state models) — they determine how much of every
+   later feature has to be written twice. A1 landed first so that the pipeline view and the inspectors of Phase 4 can
+   bind to commands instead of creating a second command table.
 2. **Together with the pipeline/property work (Phase 4)**: A2 (viewport window management) and A7 (property model).
 3. **With Phases 5–7**: A3 (async picking), A4 (offscreen rendering service), A6 (import options).
 4. **As independent small chores**: A8.1–A8.5, A9, plus the four small gaps listed at the end of §5.

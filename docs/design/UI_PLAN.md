@@ -6,11 +6,13 @@
 >
 > **Status**: Proposed Roadmap; Phase 0 audit (partially), Phase 1 rendering spike and Phase 2 deliverables 1–7
 > executed — the frontend selection (`--gui=qml`), the shared `gui/base` workbench base class, the layout-derived
-> workbench shell and the import path with its empty/busy/cancelling/cancelled/error states are in the tree and verified
-> on Linux/OpenGL, see [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) and [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md).
+> workbench shell, the import path with its empty/busy/cancelling/cancelled/error states and the shared rendering/
+> picking core are in the tree and verified on Linux/OpenGL and macOS/Metal, see
+> [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) and [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md).
 > The comparison against the classic frontend, the duplication it identifies and the abstractions it proposes are
-> collected in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md); the command layer (A1) and the workbench state models
-> (A5) proposed there should be built **before** the pipeline and inspector work of Phases 4 and 6.
+> collected in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md); of those, the command layer (A1) is already implemented
+> (audit decision D26), and the workbench state models (A5) should follow **before** the pipeline and inspector work of
+> Phases 4 and 6.
 >
 > **Design Contract**: [UI_DESIGN.md](UI_DESIGN.md)
 
@@ -280,7 +282,11 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   1. Pipeline presentation using the Phase 0 reuse decision: roles, selection, source/visual-element rows, groups, shared objects, and evaluation status. New adapters, if needed, live under `src/ovito/gui/qml/models/`.
   2. Animation presentation for the scene interval, current time/frame, playback settings, controllers, and keyframe selection. Add scene selection adaptation only where the shared API needs it.
   3. Modifier chooser adaptation preserving discovery, categories/templates, applicability, and insertion semantics from shared services.
-  4. A QML-facing command bridge to shared actions and undo infrastructure. Implement discrete transactions and continuous begin/update/commit/cancel edits as defined in design section 5.3; synchronize enablement and shortcuts.
+  4. A QML-facing command bridge to shared actions and undo infrastructure (the command layer itself landed early as
+     review finding A1 / audit decision D26: the QML workbench reads and triggers the same `Command` objects the classic
+     frontend presents as `QAction`s, so this deliverable is the remaining shell consumption - menu bar, buttons,
+     command list). Implement discrete transactions and continuous begin/update/commit/cancel edits as defined in design
+     section 5.3; synchronize enablement and shortcuts.
   5. Define selection/status refresh and edit cancellation on target deletion, undo/redo, and dataset replacement. Do not retain row indices as object identity across deferred work.
   6. Session save/open and modified-session close handling using extracted shared operations and QML dialogs. Define scene-change and save-failure behavior before users rely on editing sessions.
 - **Exit Gate**: Verify insert/reorder/delete and their undo/redo, one undo step per continuous gesture, cancellation restoring the original value, and deletion/undo restoring coherent selection. Replace a dataset during an edit and confirm no stale writes. Save/reopen a modified scene and verify close cancellation and save failures preserve it.

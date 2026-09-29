@@ -165,6 +165,7 @@ frontend entry point that starts asynchronous work, not a picking-specific issue
 | D23 | The viewport items of one Qt Quick window share one `QuickRendererService` (a `RendererService` owned by the window) instead of one service per item. | The QRhi instance belongs to the window's scene graph, and so do the caches derived from it: pipelines are only valid for the QRhi that created them. Sharing removes the duplicate work: each item used to compile every shader pipeline of its own and to prepare and upload the same vertex data, which for four viewports is the dominant per-frame cost of a small scene (see the measurement in [UI_PLAN.md](UI_PLAN.md) deliverable 7). The service is created on the GUI thread when an item enters a window and parented to that window, because the GPU resources it owns must not outlive the QRhi instance; the renderers register with it, and it asks them to release their implementations when the window invalidates its scene graph. |
 | D24 | The pass sequence of a frame graph lives in `core/rendering/FrameGraphRenderPass` and is used by `RenderThread` and by the Qt Quick renderer alike. | The sequence is a contract with the renderer implementations (resource uploads before `beginPass()`, pre-passes before the scene pass, post-processing after it) and it existed twice, with the second copy already missing the warning indicator. A caller supplies the target, the frame graph, the renderer implementations it keeps per target and two callbacks for what its target adds to the pass (the classic frontend's watermark and warning indicator), so the ordering is written down once. |
 | D25 | The pane and handle objects of `QmlViewportLayout` are retired per kind. | A maximized layout keeps the panes but removes the handles; discarding both kinds of object whenever either had changed left the pane list empty while the geometries were still there, which lost the viewport item of every pane (defect F12). Retiring only what is replaced keeps the two lists consistent with the geometries they were derived from. |
+| D26 | The commands of the two frontends are frontend-neutral `Command` objects owned by `ActionManager`, and each command's `QAction` is a one-way view of it. Every command is created with `createCommand()`/`createViewportModeCommand()`, needs no `QAction` to be usable, and carries its own `id`, text, shortcut, tooltip, icon, checkable/checked state and handler. `ActionManager` exposes them to QML through a `commandList`/`command(id)`/`triggerCommand(id)` property set, and the QML workbench consumes them as `Shortcut` and button bindings. | The command layer is the answer to review finding A1: 51 of 65 command definitions already lived in `gui/base`, but they were *represented* as `QAction`s, so the QML frontend re-implemented the few commands it had and could not reuse the rest. Keeping the state in the command and mirroring it onto the `QAction` (never the other way round) keeps the classic frontend's menus, toolbars, shortcut table and enabled-state rules working unchanged while giving the QML frontend the same objects - a frontend-specific copy of the shortcut table or of the state rules is exactly the duplication the review was supposed to remove. `ViewportModeAction` therefore survives as a thin `QAction` view of a (neutral) `ViewportModeCommand`, because the eight plugin editors and toolbars that use it need `activateMode()`/`deactivateMode()` and a widget to add to a toolbar. |
 
 ---
 
@@ -178,9 +179,18 @@ error - through the file dialog, drag & drop, the status bar and the message dia
 `OVITO_BUILD_QML_FRONTEND=OFF` the build contains no QML sources and no QML target (verified by inspecting the
 generated build files and by building the classic frontend from that tree).
 
-What remains open from the phase: deliverable 7 (the carried-over Phase 1 items O1, O2, O4, O7/O11 - the shared
-picking target, the single render-pass helper and the per-window `RendererService`) and the runtime verification on
-macOS and Windows that the exit gate asks for (D3D12 has no test host, see the Phase 1 report).
+Deliverable 7 is implemented as well: the pass sequence of a frame graph lives in one shared
+`core/rendering/FrameGraphRenderPass` (D24), the viewport items of a window share one `RendererService` (D23, measured
+as a frame-time win), the picking target stays where it is because the QML viewport picks through
+`RenderThread::renderPickingFrame()` (O7 resolved by the asynchronous picking design, D11), the missing Vulkan API
+version of OVITO's own instances is set (O2) and the missing `ovitoheadless` QPA plugin is documented as an environment
+constraint (O1). The runtime verification on macOS/Metal is recorded in [UI_PLAN.md](UI_PLAN.md).
+
+The follow-up work proposed by the frontend comparison ([UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md)) has started:
+the frontend-neutral command layer of review finding A1 is in the tree (D26), which removes the second command table
+the QML frontend would otherwise have grown, and the QML workbench uses the shared Undo/Redo, maximize and viewport-mode
+commands instead of its own operations. What remains of that work plan is recorded in the review document itself (A5,
+A2, A4, A3 and the small parity gaps); Windows/D3D12 still has no test host (see the Phase 1 report).
 
 ## 4. Changes to Existing Code Made Under This Audit
 

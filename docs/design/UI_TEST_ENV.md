@@ -563,6 +563,35 @@ Traps and facts that cost time here, in order:
   `QmlFrontend::createWorkbench()` and colors the controls from `Theme.qml`; the styles of the platform are deliberately
   not used, so the workbench looks the same on every platform.
 
+## 9.2 Testing the shared command layer
+
+The commands of the workbench live in `gui/base` and are the objects both frontends use (`ovito::Command`, audit
+decision D26): the classic frontend displays each one through a `QAction` that mirrors it, the QML frontend binds
+shortcuts and buttons to the command. `--qml-command-check` verifies the layer from inside a QML process, which is the
+part that cannot be checked from the classic frontend:
+
+* the commands exist and their `QAction` view mirrors text, enabled and checked state (this is what the classic menus
+  display, so a one-way sync defect breaks the *classic* frontend);
+* the QML engine sees the same objects - the check evaluates `workbench.undoCommand.text`,
+  `commandManager.commandList.length` and `commandManager.triggerCommand('ViewportMaximize')` through
+  `QQmlExpression`, so the context property, the registered type and the invokable all have to work;
+* the state rules drive the commands: a transaction enables Undo (whose title carries the operation name), triggering
+  it reverts the edit and enables Redo; the playback command starts and stops the animation; the viewport-mode commands
+  activate a mode (an exclusive mode such as `SelectionMode` cannot be switched off again, and stays checked);
+  maximizing toggles the maximized viewport.
+
+Traps:
+
+* **A command that the shell names but the frontend does not provide fails silently.** `ViewportMaximize` exists in both
+  frontends, but the pipeline commands (`PipelineDelete`, ...) are created by the desktop command panel, so the QML
+  process has fewer commands than the classic one (43 of the 76 action ids today). `WorkbenchWindow.qml` warns once at
+  startup for a command it expects and does not get, instead of leaving a shortcut dead.
+* **`Q_INVOKABLE` alone is not a QML property.** `commandManager.commandList.length` returned 0 until `commandList()`
+  was also declared as a `Q_PROPERTY`; an invokable is callable but not readable as a property of an object.
+* **`enabled` needs a NOTIFY signal.** The QML bindings (`Shortcut.enabled`) only follow the command state if
+  `Command::changed()` is emitted for every property, which is why the command has a single `changed()` signal that
+  serves as the NOTIFY of all of its properties.
+
 ## 10. Quick checklist
 
 1. Build the frontend: `cmake --preset native -DOVITO_BUILD_QML_FRONTEND=ON && cmake --build --preset native -j 16`.
@@ -571,6 +600,8 @@ Traps and facts that cost time here, in order:
 4. Picking/selection: `--qml-pick X,Y` (grid probe, negative control, synthetic click through `SelectionMode`).
 5. Lifecycle: `--qml-lifecycle-cycles N`, `--qml-hide-show`, `--qml-resize WxH`.
    Import path: `--qml-import-check` (trajectory, unsupported file, cancelled import; see §9.1).
+   Command layer: `--qml-command-check` (the commands the QML workbench sees, their state rules and their handlers;
+   see §9.2).
 6. Frame rate: `--qml-frame-stats MS` (state vsync and the render loop; only compare equal configurations).
 7. Non-Linux validation: run the same commands on the macOS host (§5) — and **close the windows afterwards** (§5.3).
 8. Screenshots: `--qml-hold-ms` + a private `Xvfb` display + `ffmpeg -f x11grab` (§2.2); never `grabWindow()` (§9).
