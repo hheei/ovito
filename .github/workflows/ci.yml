@@ -457,23 +457,34 @@ jobs:
           $lines | Out-File -FilePath $dataset -Encoding ascii
 
           $env:PATH = "${{ github.workspace }}\build;$vcpkg\installed\x64-windows\bin;$env:PATH"
-          & "${{ github.workspace }}\build\ovito-qml-spike.exe" `
-              --qml-window-size 1280x800 `
-              --qml-startup-delay 3000 `
-              --qml-frame-stats 2000 `
-              --qml-lifecycle-cycles 2 `
-              --qml-layout-check `
-              --qml-command-check `
-              --qml-settings-check `
-              --qml-session-check `
-              --qml-library-check `
-              --qml-icon-check `
-              --qml-offscreen-check `
-              --qml-prewarm-check `
-              --qml-pick 300,300 `
-              --qml-parity-check `
-              --qml-import-check `
+          # The output is captured through files: the failing checks of the spike are what a red job has to show, and on
+          # Windows the diagnostics of the Qt process did not reach the log of the step at all (the step ran a full 37
+          # seconds and printed nothing while the spike exited with code 1).
+          $spikeOutput = Join-Path $env:RUNNER_TEMP "spike-output.log"
+          $spikeError = Join-Path $env:RUNNER_TEMP "spike-error.log"
+          $spikeArgs = @(
+              "--qml-window-size", "1280x800",
+              "--qml-startup-delay", "3000",
+              "--qml-frame-stats", "2000",
+              "--qml-lifecycle-cycles", "2",
+              "--qml-layout-check",
+              "--qml-command-check",
+              "--qml-settings-check",
+              "--qml-session-check",
+              "--qml-library-check",
+              "--qml-icon-check",
+              "--qml-offscreen-check",
+              "--qml-prewarm-check",
+              "--qml-pick", "300,300",
+              "--qml-parity-check",
+              "--qml-import-check",
               $dataset
-          if($LASTEXITCODE -ne 0) {
-            throw "The Qt Quick smoke test failed with exit code $LASTEXITCODE"
+          )
+          $spike = Start-Process -FilePath "${{ github.workspace }}\build\ovito-qml-spike.exe" `
+              -ArgumentList $spikeArgs -NoNewWindow -Wait -PassThru `
+              -RedirectStandardOutput $spikeOutput -RedirectStandardError $spikeError
+          Write-Host "--- output of the spike ---"
+          Get-Content $spikeOutput, $spikeError -ErrorAction SilentlyContinue
+          if($spike.ExitCode -ne 0) {
+            throw "The Qt Quick smoke test failed with exit code $($spike.ExitCode)"
           }
