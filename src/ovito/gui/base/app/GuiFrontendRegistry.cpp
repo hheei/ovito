@@ -4,6 +4,9 @@
 #include <ovito/gui/base/GUIBase.h>
 #include "GuiFrontendRegistry.h"
 
+#include <numeric>
+#include <vector>
+
 namespace Ovito {
 
 /******************************************************************************
@@ -59,6 +62,54 @@ QString GuiFrontendRegistry::frontendList() const
         lines.push_back(description.isEmpty() ? name : QStringLiteral("%1 - %2").arg(name, description));
     }
     return lines.join(QStringLiteral("\n"));
+}
+
+/******************************************************************************
+* Returns the name of the registered frontend that resembles the given name most, or an empty string if none does.
+******************************************************************************/
+QString GuiFrontendRegistry::suggestFrontendName(const QString& name) const
+{
+    if(name.isEmpty())
+        return {};
+
+    // The edit distance between two names, so that a typo like "qt-widegts" is still recognized.
+    const auto editDistance = [](const QString& a, const QString& b) {
+        std::vector<int> previous(b.size() + 1), current(b.size() + 1);
+        std::iota(previous.begin(), previous.end(), 0);
+        for(qsizetype i = 0; i < a.size(); i++) {
+            current[0] = int(i) + 1;
+            for(qsizetype j = 0; j < b.size(); j++) {
+                const int substitution = previous[j] + (a[i].toLower() == b[j].toLower() ? 0 : 1);
+                current[j + 1] = std::min({ previous[j + 1] + 1, current[j] + 1, substitution });
+            }
+            previous.swap(current);
+        }
+        return previous.back();
+    };
+
+    QString best;
+    int bestDistance = 3;
+    for(const auto& [registeredName, frontend] : _frontends) {
+        const int distance = editDistance(name, registeredName);
+        if(distance < bestDistance) {
+            bestDistance = distance;
+            best = registeredName;
+        }
+    }
+
+    // A name that is a strict prefix of exactly one registered name ("qt" for "qt-widgets") is a stronger hint than a
+    // small edit distance, which can point at an unrelated name ("qt" is two edits away from "qml" as well).
+    QString prefixMatch;
+    for(const auto& [registeredName, frontend] : _frontends) {
+        if(registeredName.startsWith(name, Qt::CaseInsensitive)) {
+            if(!prefixMatch.isEmpty())
+                return bestDistance <= 2 ? best : QString{};   // Ambiguous: two names start with the given text.
+            prefixMatch = registeredName;
+        }
+    }
+    if(!prefixMatch.isEmpty())
+        return prefixMatch;
+    return bestDistance <= 2 ? best : QString{};
 }
 
 }   // End of namespace

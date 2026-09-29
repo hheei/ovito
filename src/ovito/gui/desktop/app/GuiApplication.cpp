@@ -161,13 +161,29 @@ MainThreadOperation GuiApplication::startupApplication()
         const QString frontendName = cmdLineParser().value(QStringLiteral("gui"));
         const GuiFrontend* frontend = GuiFrontendRegistry::instance().findFrontend(frontendName);
         if(!frontend) {
-            // Report the problem on the terminal and abort the startup with a non-zero exit code. The regular error
-            // dialog is deliberately not used here: the request may come from a script that cannot dismiss it.
-            const QStringList availableFrontends = GuiFrontendRegistry::instance().frontendNames();
-            if(availableFrontends.isEmpty())
-                qCritical().noquote() << tr("This build of OVITO contains no user interface frontend.");
+            // Report the problem on the terminal and abort the startup with a non-zero exit code. A message box is
+            // deliberately not shown: this point is reached before a workbench exists, so the message would be a
+            // free-standing dialog, and a run that a script started (the CI smoke tests, a batch job) would then wait
+            // forever for someone to dismiss it. The message itself is written for both audiences - it names the
+            // available frontends, guesses what the user meant, and says how to get a working start either way.
+            const GuiFrontendRegistry& registry = GuiFrontendRegistry::instance();
+            const QStringList availableFrontends = registry.frontendNames();
+            QString message;
+            if(!cmdLineParser().isSet(QStringLiteral("gui")))
+                message = tr("The default user interface '%1' is not part of this build of OVITO.").arg(frontendName);
+            else if(availableFrontends.isEmpty())
+                message = tr("This build of OVITO contains no user interface frontend, so '-gui %1' cannot be honored.").arg(frontendName);
             else
-                qCritical().noquote() << tr("User interface '%1' is not available in this build of OVITO. Available user interfaces are: %2.").arg(frontendName, availableFrontends.join(QStringLiteral(", ")));
+                message = tr("The user interface '%1' is not available in this build of OVITO.").arg(frontendName);
+            if(const QString suggestion = registry.suggestFrontendName(frontendName); !suggestion.isEmpty())
+                message += QStringLiteral("\n") + tr("Did you mean '%1'?").arg(suggestion);
+            if(!availableFrontends.isEmpty()) {
+                message += QStringLiteral("\n") + tr("Available user interfaces:") + QStringLiteral("\n  ")
+                    + registry.frontendList().replace(QLatin1Char('\n'), QStringLiteral("\n  "));
+                if(cmdLineParser().isSet(QStringLiteral("gui")))
+                    message += QStringLiteral("\n") + tr("Without the '-gui' parameter, OVITO starts the default user interface.");
+            }
+            qCritical().noquote() << message;
             throw OperationCanceled();
         }
 

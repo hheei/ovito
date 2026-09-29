@@ -41,6 +41,15 @@ public:
     /// Returns the registered frontends and their descriptions, ready to be shown to the user.
     QString frontendList() const;
 
+    /**
+     * Returns the name of the registered frontend that resembles \a name most, or an empty string if none does.
+     *
+     * A user who mistypes the name (`--gui=qm`) should not have to compare a list of names character by character. The
+     * match is deliberately conservative - a name counts as "meant" only if it differs in at most two characters, or if
+     * the typo is a prefix of it and no other name is - because a wrong suggestion is worse than none.
+     */
+    QString suggestFrontendName(const QString& name) const;
+
 private:
 
     /// The registered frontends, ordered by name.
