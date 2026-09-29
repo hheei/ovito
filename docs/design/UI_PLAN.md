@@ -11,9 +11,9 @@
 > [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) and [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md).
 > The comparison against the classic frontend, the duplication it identifies and the abstractions it proposes are
 > collected in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md); of those, the command layer (A1) is implemented (audit
-> decision D26) and the workbench state models (A5) are partly implemented (D27: the recent files list and the shared
-> task progress model). What remains of A5 - the session operations, a selection model and a settings facade - should
-> follow **before** the pipeline and inspector work of Phases 4 and 6.
+> decision D26) and the workbench state models (A5) are largely implemented (D27: the recent files list and the shared
+> task progress model; D28: the session workflow). What remains of A5 - the Qt Quick session commands, a selection model
+> and a settings facade - should follow **before** the pipeline and inspector work of Phases 4 and 6.
 >
 > **Design Contract**: [UI_DESIGN.md](UI_DESIGN.md)
 

@@ -589,6 +589,26 @@ Traps:
   can still be there right after an operation returned - the check waits for it to disappear rather than reading it
   immediately.
 
+### 9.2.1 Testing the session workflow
+
+`--qml-session-check` verifies the session workflow of `WorkbenchUI` (audit decision D28), which the classic main window
+uses as well and which a Qt Quick session command will bind to: the scene is saved to a `.ovito` file (`saveSessionFile()`
+writes it, the workbench remembers the path, the session counts as unmodified), a change marks the session as modified
+(`isSessionModified()`), saving again through `saveSession()` clears that without asking for a file name, loading the file
+back with `loadSessionFile()` replaces the current scene by the saved one, the file becomes the most recently opened file,
+and `saveSession()` on a session without a file name reports the missing file dialog of the frontend instead of failing
+silently.
+
+Traps:
+
+* **The scene has to contain something.** The check runs before the import check (which ends with a canceled import and an
+  empty scene) and imports a small lattice of its own if the scene is empty - `loadSessionFile()` of an empty scene would
+  otherwise pass every assertion while verifying nothing.
+* **A loaded session replaces the data set**, so every pointer into the scene (the scene node, its children) is invalid
+  afterwards and has to be looked up again.
+* **The check writes user settings**: the recently opened files are persisted in `QSettings` under `file/mru`, like the
+  recent-files menu of the classic frontend does.
+
 ## 9.3 Testing the shared command layer
 
 The commands of the workbench live in `gui/base` and are the objects both frontends use (`ovito::Command`, audit
@@ -627,7 +647,8 @@ Traps:
 5. Lifecycle: `--qml-lifecycle-cycles N`, `--qml-hide-show`, `--qml-resize WxH`.
    Import path: `--qml-import-check` (trajectory, unsupported file, cancelled import; see §9.1).
    Command layer: `--qml-command-check` (the commands the QML workbench sees, their state rules and their handlers;
-   see §9.3). Workbench state (shared task progress model): part of `--qml-import-check` (§9.2).
+   see §9.3). Workbench state: the shared task progress model is covered by `--qml-import-check` (§9.2) and the session
+   workflow by `--qml-session-check` (§9.2.1).
 6. Frame rate: `--qml-frame-stats MS` (state vsync and the render loop; only compare equal configurations).
 7. Non-Linux validation: run the same commands on the macOS host (§5) — and **close the windows afterwards** (§5.3).
 8. Screenshots: `--qml-hold-ms` + a private `Xvfb` display + `ffmpeg -f x11grab` (§2.2); never `grabWindow()` (§9).
