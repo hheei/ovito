@@ -41,8 +41,10 @@ public:
     /// Registers the image provider of this class with a QML engine.
     static void registerImageProvider(QQmlEngine& engine);
 
-    /// Returns the source URL of an icon of a command or of the icon set.
-    Q_INVOKABLE QUrl url(const QString& iconPath) const;
+    /// Returns the source URL of an icon of a command or of the icon set. The theme the icon belongs to is part of the
+    /// URL, because QML caches an image by its URL: an Image therefore has to pass Icons.themeName on, which also makes
+    /// its binding depend on the theme, so that the shell's icons follow a change of the color scheme at runtime.
+    Q_INVOKABLE QUrl url(const QString& iconPath, const QString& themeName) const;
 
     /// Returns the name of the icon theme the icons are taken from.
     QString themeName() const;

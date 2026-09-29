@@ -29,7 +29,11 @@ Dialog {
 
     Column {
         spacing: theme.spacing * 2
-        width: Math.max(360, headerText.implicitWidth, detailsText.implicitWidth)
+
+        // The build version and the copyright notice are long single lines; the dialog must stay inside the workbench
+        // window (whose minimum width is 640 device-independent pixels) instead of growing past its edges.
+        readonly property real preferredWidth: Math.max(360, headerText.implicitWidth, detailsText.implicitWidth)
+        width: Math.min(preferredWidth, 560)
 
         Theme { id: theme }
 

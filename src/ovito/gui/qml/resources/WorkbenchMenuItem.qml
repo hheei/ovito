@@ -23,15 +23,21 @@ MenuItem {
 
     text: command ? command.text : ""
     // The icon of the command comes from the shared icon set, the same one the QAction of the classic frontend shows;
-    // commands without an icon simply leave the entry without one.
-    icon.source: (command && command.iconPath.length) ? Icons.url(command.iconPath) : ""
+    // commands without an icon simply leave the entry without one. The theme is passed in so that this binding is
+    // re-evaluated when the shell switches between the light and the dark icon theme.
+    icon.source: (command && command.iconPath.length) ? Icons.url(command.iconPath, Icons.themeName) : ""
     enabled: command ? command.enabled : false
+    visible: command ? command.visible : false
     checkable: command ? command.checkable : false
     checked: command ? command.checked : false
 
     onTriggered: {
         if(command)
             commandManager.triggerCommand(command.id)
+        // The item has just toggled its own 'checked' state, which replaces the binding to the command. Not every
+        // command changes its state when it is carried out - an active exclusive viewport mode stays active - so the
+        // state is read back from the command in any case.
+        syncChecked()
     }
 
     function syncChecked() {

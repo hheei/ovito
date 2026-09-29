@@ -130,22 +130,6 @@ private Q_SLOTS:
     /// Stores the result of the asynchronous picking pass.
     void pickingBufferReady();
 
-    /**
-     * Refreshes the picking buffer once the viewport has settled.
-     *
-     * Picking is asynchronous: a pick is answered from the buffer of the last completed pass, and a pass that is
-     * rendered *after* a change of the view makes the next hover correct again. Without this pre-warm the first hover
-     * after a camera move or a scene change would be answered from the buffer of the previous view, and only the
-     * following hover would be correct - while a refresh started by the hover itself would arrive too late for it.
-     *
-     * The pass is started only after the viewport has stopped rendering for a moment, so that dragging the camera
-     * (a stream of frame graphs) is not accompanied by a stream of offscreen picking passes; the cost of one picking
-     * pass is paid once per interaction instead of once per frame. A hover within that short window is still answered
-     * from the stale buffer, which is what a picking API that cannot block the GUI thread has to accept - Phase 5
-     * replaces `pick()` by an asynchronous API that can wait for the pass instead.
-     */
-    void pickingPrewarmTimeout();
-
     /// Reports a picking pass that terminated with an error instead of producing a buffer.
     void pickingBufferFailed(const Exception& exception);
 
@@ -179,9 +163,6 @@ private:
 
     /// The contents generation of the picking pass that is currently in flight.
     quint64 _pickingBufferPendingGeneration = 0;
-
-    /// Refreshes the picking buffer once this timer fires, i.e. once the viewport has settled after a change of the view.
-    QTimer _pickingPrewarmTimer;
 
     /// Indicates that the failure of a picking pass has already been reported to the user. Reset when a pass succeeds.
     bool _pickingFailureReported = false;

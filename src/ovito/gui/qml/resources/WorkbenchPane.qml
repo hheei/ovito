@@ -99,7 +99,7 @@ Item {
         // maximize command, plus the counterpart the shell needs for the way back.
         Image {
             anchors.centerIn: parent
-            source: Icons.url(paneItem.pane.maximized ? "viewport_restore" : "viewport_maximize")
+            source: Icons.url(paneItem.pane.maximized ? "viewport_restore" : "viewport_maximize", Icons.themeName)
             sourceSize.width: 16
             sourceSize.height: 16
             fillMode: Image.PreserveAspectFit

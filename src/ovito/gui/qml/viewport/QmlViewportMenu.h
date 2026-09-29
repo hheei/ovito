@@ -35,10 +35,10 @@ class OVITO_GUIQML_EXPORT QmlViewportMenu : public QObject
     Q_OBJECT
 
     /// Whether the menu is currently displayed for a viewport.
-    Q_PROPERTY(bool open READ isOpen NOTIFY opened)
+    Q_PROPERTY(bool open READ isOpen NOTIFY changed)
 
     /// The viewport item the menu was opened for, i.e. the item the QML scene pops the menu up on.
-    Q_PROPERTY(QQuickItem* item READ item NOTIFY opened)
+    Q_PROPERTY(QQuickItem* item READ item NOTIFY changed)
 
     /// The view type of the viewport the menu acts on, as a Viewport::ViewType value.
     Q_PROPERTY(int viewType READ viewType NOTIFY changed)
@@ -119,6 +119,9 @@ private:
 
     /// The viewport item the menu was opened for, or null while the menu is closed.
     QPointer<QQuickItem> _item;
+
+    /// The connection to the destruction of the viewport item the menu is currently displayed for.
+    QMetaObject::Connection _itemDestroyed;
 
     /// The viewport the menu acts on. It is kept weakly: the menu must not keep a viewport of a replaced data set alive.
     OOWeakRef<Viewport> _viewport;

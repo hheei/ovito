@@ -67,6 +67,8 @@
 
 #include <functional>
 #include <memory>
+#include <cstring>
+#include <ranges>
 
 namespace Ovito {
 
@@ -1247,8 +1249,8 @@ void runIconTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     if(reportedTheme.toString() != themeName)
         reportVerificationFailure(QStringLiteral("QML sees the icon theme \"%1\" while the process uses \"%2\"")
             .arg(reportedTheme.toString(), themeName));
-    const QUrl restoreUrl = evaluateInQml(ui, QStringLiteral("Icons.url(\"viewport_restore\").toString()")).toString();
-    const QUrl maximizeUrl = evaluateInQml(ui, QStringLiteral("Icons.url(\"viewport_maximize\").toString()")).toString();
+    const QUrl restoreUrl = evaluateInQml(ui, QStringLiteral("Icons.url(\"viewport_restore\", Icons.themeName).toString()")).toString();
+    const QUrl maximizeUrl = evaluateInQml(ui, QStringLiteral("Icons.url(\"viewport_maximize\", Icons.themeName).toString()")).toString();
 
     // 4. The icons of the shell are displayed: the maximize button of every pane shows the icon of the state of its pane,
     //    and no icon of the shell failed to load.
@@ -1287,8 +1289,18 @@ void runIconTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         }
         evaluateInQml(ui, QStringLiteral("viewportLayout.toggleMaximize(viewportLayout.activeViewportIndex)"));
 
+        // 6. An icon reaches the scene graph as an Image, which caches its pixmap by URL - so the URL has to depend on
+        //    the theme, or the shell would keep the icons of the old color scheme when the user switches between light
+        //    and dark. (Whether the operating system reports such a switch is out of the hands of the shell; only the
+        //    URL contract can be verified here.)
+        const QString otherTheme = IconTheme::themeName(!GuiSettings::instance().usingDarkTheme());
+        const QUrl otherThemeUrl = evaluateInQml(ui, QStringLiteral("Icons.url(\"viewport_restore\", \"%1\").toString()").arg(otherTheme)).toString();
+        if(otherThemeUrl == restoreUrl)
+            reportVerificationFailure(QStringLiteral("the URL of an icon does not depend on the theme, so an Image cannot refresh its pixmap when the color scheme changes"));
+
         qInfo() << "ICON_TEST theme" << themeName << "resolved" << iconPaths.size() << "icons," << "pane buttons"
-                << paneButtons << "of which switched to the restore icon:" << restored;
+                << paneButtons << "of which switched to the restore icon:" << restored
+                << "| the URL of an icon follows the theme:" << (otherThemeUrl != restoreUrl);
         continuation();
     });
 }
@@ -1468,8 +1480,16 @@ void renderOutputAgain(std::shared_ptr<OffscreenCheckState> state)
     state->renderFuture = startRenderOutput(state->ui, state->frameBuffer);
     state->outputsRendered++;
 
+    // A data set without render settings or without a viewport configuration cannot be rendered at all; the check
+    // reports that instead of waiting for a future that does not exist.
+    if(!state->renderFuture) {
+        reportVerificationFailure(QStringLiteral("the render output could not be started: the data set holds no render settings or no viewport configuration"));
+        state->continuation();
+        return;
+    }
+
     pollUntil(state->ui, 25, offscreenTimeoutMs,
-        [state]() { return !state->renderFuture || state->renderFuture->isFinished(); },
+        [state]() { return state->renderFuture->isFinished(); },
         [state](bool finished) {
         // A timeout callback has no task context of its own; waiting for the future and reading the image both need one.
         GuiTaskScope taskScope(*state->ui);
@@ -1803,12 +1823,24 @@ void countIdleFrames(QmlMainWindowUI* ui, int durationMs, std::function<void(int
     timer->start(durationMs);
 }
 
-/// Verifies the picking pre-warm (see QuickViewportWindow::pickingPrewarmTimeout()).
+/// Verifies that the picking buffer is refreshed on demand and by nothing else (see QuickViewportWindow::pick()).
 ///
-/// The check moves the camera without picking and expects the picking buffer to catch up on its own: that is the whole
-/// point of the pre-warm - the first hover after an interaction is answered from the current view, not from the view
-/// before it. It also verifies that a viewport which nobody touches stops rendering, because a pre-warm that refreshed
-/// the buffer over and over would be a continuous renderer in disguise.
+/// The check moves the camera without picking and expects the buffer to stay behind the view until a pick asks for a
+/// new pass: an offscreen pass that runs on its own overlaps a replacement of the data set and corrupts the heap of a
+/// release build (defect F20 of the Phase 1 report). It also verifies that a viewport which nobody touches stops
+/// rendering.
+// Issues a pick at the given position of the viewport. QuickViewportWindow::pick() starts an offscreen picking pass
+// when the cached buffer is behind the view, so a polling loop that hovers repeatedly converges on a current buffer.
+// The pick needs a task context of its own, because the polling callbacks run in a Qt timer where no OVITO task is
+// active (see UI_TEST_ENV.md section 9.2.6).
+static std::optional<ViewportWindow::PickResult> hoverPick(QmlMainWindowUI* ui, Viewport* viewport, const QPoint& pos)
+{
+    GuiTaskScope taskScope(*ui);
+    QuickViewportItem* item = itemForViewport(ui, viewport);
+    QuickViewportWindow* viewportWindow = item ? item->viewportWindow() : nullptr;
+    return viewportWindow ? viewportWindow->pick(QPointF(pos)) : std::nullopt;
+}
+
 void runPrewarmTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
     GuiTaskScope taskScope(*ui);
@@ -1817,44 +1849,55 @@ void runPrewarmTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     QuickViewportWindow* viewportWindow = item ? item->viewportWindow() : nullptr;
     Viewport* viewport = viewportWindow ? viewportWindow->viewport() : nullptr;
     if(!viewport) {
-        reportVerificationFailure(QStringLiteral("the workbench has no viewport to check the picking pre-warm with"));
+        reportVerificationFailure(QStringLiteral("the workbench has no viewport to check the picking freshness with"));
         continuation();
         return;
     }
 
-    // Wait for the buffer that belongs to the scene as it was imported, i.e. for the camera fit that the import
-    // requested. It has to arrive without a pick being made, which is the first half of the pre-warm.
-    pollUntil(ui, 10, 20000,
-        [ui, viewport]() { return pickingBufferIsCurrent(ui, viewport); },
-        [ui, viewport, continuation](bool current) {
+    // A position to probe: the center of the viewport item (a probe outside the item reports nothing and would look
+    // like a picking failure).
+    QuickViewportItem* item2 = item ? itemForViewport(ui, viewport) : nullptr;
+    if(!item2) {
+        reportVerificationFailure(QStringLiteral("the viewport item disappeared while the picking freshness was checked"));
+        continuation();
+        return;
+    }
+    const QPoint probePos(int(item2->width() / 2), int(item2->height() / 2));
+    qInfo() << "PICKFRESH_TEST picking" << probePos << "in an item of" << item2->size();
+
+    // A pick asks for a pass and cannot be answered yet, because a picking buffer is rendered asynchronously and pick()
+    // never blocks the GUI thread. Hovering repeatedly converges on a buffer of the current view, which is what a
+    // mouse moving over the viewport does in the real frontend.
+    pollUntil(ui, 100, 20000,
+        [ui, viewport, probePos]() {
+            hoverPick(ui, viewport, probePos);
+            return pickingBufferIsCurrent(ui, viewport);
+        },
+        [ui, viewport, probePos, continuation](bool current) {
 
         if(!current) {
             reportVerificationFailure(QStringLiteral("the picking buffer did not catch up with the imported scene within 20 s"));
             continuation();
             return;
         }
-        qInfo() << "PREWARM_TEST the picking buffer caught up with the imported scene without a pick";
+        qInfo() << "PICKFRESH_TEST the picking buffer caught up with the imported scene after a pick";
 
-        // The position of the probe: the center of the viewport item, clamped into it (a probe outside the item
-        // reports nothing and would look like a picking failure).
         QuickViewportItem* item = itemForViewport(ui, viewport);
         QuickViewportWindow* viewportWindow = item ? item->viewportWindow() : nullptr;
         if(!item || !viewportWindow) {
-            reportVerificationFailure(QStringLiteral("the viewport item disappeared while the pre-warm was checked"));
+            reportVerificationFailure(QStringLiteral("the viewport item disappeared while the picking freshness was checked"));
             continuation();
             return;
         }
-        const QPoint probePos(int(item->width() / 2), int(item->height() / 2));
-        qInfo() << "PREWARM_TEST picking" << probePos << "in an item of" << item->size();
         const std::optional<ViewportWindow::PickResult> beforeMove = viewportWindow->pick(QPointF(probePos));
-        qInfo() << "PREWARM_TEST before the camera move, the probe contains" << describePick(beforeMove);
+        qInfo() << "PICKFRESH_TEST before the camera move, the probe contains" << describePick(beforeMove);
 
         // Move the camera and ask for a repaint. Nobody picks while the buffer is behind the view.
         viewport->setCameraPosition(viewport->cameraPosition() + Vector3(1.0, 1.0, 0.0));
         viewport->updateViewport();
-        qInfo() << "PREWARM_TEST moved the camera and requested a repaint";
+        qInfo() << "PICKFRESH_TEST moved the camera and requested a repaint";
 
-        // The buffer has to notice the new view first ...
+        // The buffer has to notice the new view ...
         pollUntil(ui, 5, 5000,
             [ui, viewport]() { return !pickingBufferIsCurrent(ui, viewport); },
             [ui, viewport, probePos, continuation](bool stale) {
@@ -1865,44 +1908,60 @@ void runPrewarmTest(QmlMainWindowUI* ui, std::function<void()> continuation)
                 return;
             }
 
-            // ... and then become current again on its own, without any pick asking for it.
-            pollUntil(ui, 5, 5000,
-                [ui, viewport]() { return pickingBufferIsCurrent(ui, viewport); },
-                [ui, viewport, probePos, continuation](bool current) {
+            // ... and it must stay behind the view: an offscreen pass that no pick asked for is what defect F20 of
+            // the Phase 1 report is about, so nothing may refresh the buffer on its own here.
+            countIdleFrames(ui, 1000, [ui, viewport, probePos, continuation](int frames) {
 
-                if(!current) {
-                    reportVerificationFailure(QStringLiteral("the picking buffer did not refresh itself within 5 s of the camera move"));
+                qInfo() << "PICKFRESH_TEST the settled viewport rendered" << frames << "frame(s) within 1 s while the buffer was behind the view";
+
+                if(pickingBufferIsCurrent(ui, viewport)) {
+                    reportVerificationFailure(QStringLiteral("the picking buffer refreshed itself without a pick asking for it"));
                     continuation();
                     return;
                 }
-                qInfo() << "PREWARM_TEST the picking buffer refreshed itself after the camera move, without a pick";
 
                 QuickViewportItem* item = itemForViewport(ui, viewport);
                 QuickViewportWindow* viewportWindow = item ? item->viewportWindow() : nullptr;
                 if(!viewportWindow) {
-                    reportVerificationFailure(QStringLiteral("the viewport item disappeared before the picks of the pre-warm check"));
+                    reportVerificationFailure(QStringLiteral("the viewport item disappeared before the picks of the freshness check"));
                     continuation();
                     return;
                 }
 
-                // The first pick of the pre-warmed view has to name the object the second one names: if it were
-                // answered from a buffer of the previous view, it would point at whatever used to be under the cursor.
-                const std::optional<ViewportWindow::PickResult> firstPick = viewportWindow->pick(QPointF(probePos));
-                const std::optional<ViewportWindow::PickResult> secondPick = viewportWindow->pick(QPointF(probePos));
-                qInfo() << "PREWARM_TEST after the camera move, the probe contains" << describePick(firstPick);
-                if(!samePick(firstPick, secondPick))
-                    reportVerificationFailure(QStringLiteral("the first pick after the camera move (%1) differs from the second (%2), so it was answered from the previous view")
-                        .arg(describePick(firstPick), describePick(secondPick)));
-                else
-                    qInfo() << "PREWARM_TEST both picks after the camera move agree on" << describePick(firstPick);
+                // A pick starts the pass, and once it has been rendered the picks agree on what is under the cursor.
+                const std::optional<ViewportWindow::PickResult> stalePick = viewportWindow->pick(QPointF(probePos));
+                qInfo() << "PICKFRESH_TEST the pick that starts the refresh contains" << describePick(stalePick);
 
-                // A view that nobody touches must not keep rendering - the pre-warm refreshes the picking buffer once
-                // and stops, it does not turn the viewport into a continuous renderer.
-                countIdleFrames(ui, 1000, [continuation](int frames) {
-                    if(frames > 0)
-                        qInfo() << "PREWARM_TEST the settled viewport rendered" << frames << "frame(s) within 1 s";
+                pollUntil(ui, 100, 20000,
+                    [ui, viewport, probePos]() {
+                        hoverPick(ui, viewport, probePos);
+                        return pickingBufferIsCurrent(ui, viewport);
+                    },
+                    [ui, viewport, probePos, continuation](bool current) {
+
+                    if(!current) {
+                        reportVerificationFailure(QStringLiteral("the picking buffer did not refresh within 20 s of the pick that asked for it"));
+                        continuation();
+                        return;
+                    }
+
+                    QuickViewportItem* item = itemForViewport(ui, viewport);
+                    QuickViewportWindow* viewportWindow = item ? item->viewportWindow() : nullptr;
+                    if(!viewportWindow) {
+                        reportVerificationFailure(QStringLiteral("the viewport item disappeared before the picks of the freshness check"));
+                        continuation();
+                        return;
+                    }
+
+                    const std::optional<ViewportWindow::PickResult> firstPick = viewportWindow->pick(QPointF(probePos));
+                    const std::optional<ViewportWindow::PickResult> secondPick = viewportWindow->pick(QPointF(probePos));
+                    qInfo() << "PICKFRESH_TEST after the camera move, the probe contains" << describePick(firstPick);
+                    if(!samePick(firstPick, secondPick))
+                        reportVerificationFailure(QStringLiteral("the first pick of the refreshed view (%1) differs from the second (%2)")
+                            .arg(describePick(firstPick), describePick(secondPick)));
                     else
-                        qInfo() << "PREWARM_TEST the settled viewport rendered no frame within 1 s";
+                        qInfo() << "PICKFRESH_TEST both picks of the refreshed view agree on" << describePick(firstPick);
+
                     continuation();
                 });
             });
@@ -1913,11 +1972,47 @@ void runPrewarmTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 /// Verifies the features the shell gained for parity with the classic frontend: the menus of the workbench present the
 /// shared commands, the viewport has a context menu, the status line lists the running tasks, the window state is
 /// remembered and an import reports what it did with the file.
+/// Verifies the keyboard focus chain of the shell: a keyboard user starts at the import control, and the chain continues
+/// into the viewports - the pane that takes the focus is the one keyboard events of the viewport input modes arrive at.
+void verifyFocusOrder(QmlMainWindowUI* ui)
+{
+    QQuickView* view = ui->view();
+    QQuickWindow* window = view;
+    QQuickItem* rootObject = view ? view->rootObject() : nullptr;
+    QQuickItem* importButton = rootObject ? rootObject->findChild<QQuickItem*>(QStringLiteral("importButton")) : nullptr;
+    if(!rootObject || !importButton) {
+        reportVerificationFailure(QStringLiteral("the shell has no import control to put the keyboard focus on"));
+        return;
+    }
+
+    // nextItemInFocusChain() follows the chain the scene declares, which is the order Tab walks.
+    QQuickItem* first = window->contentItem()->nextItemInFocusChain();
+    QVector<QQuickItem*> visited;
+    for(QQuickItem* item = first; item && visited.size() < 32 && !visited.contains(item); item = item->nextItemInFocusChain())
+        visited.push_back(item);
+    const bool reachesViewport = std::ranges::any_of(visited, [](QQuickItem* item) {
+        for(QQuickItem* parent = item; parent; parent = parent->parentItem())
+            if(qobject_cast<QuickViewportItem*>(parent))
+                return true;
+        return false;
+    });
+
+    qInfo() << "PARITY_TEST the keyboard focus chain holds" << visited.size() << "stop(s); the first one is the import"
+            << "control:" << (first == importButton) << "and it reaches a viewport:" << reachesViewport;
+    if(first != importButton)
+        reportVerificationFailure(QStringLiteral("the first keyboard focus stop of the shell is not the import control"));
+    if(visited.size() < 5)
+        reportVerificationFailure(QStringLiteral("the keyboard focus chain of the shell holds only %1 stop(s)").arg(visited.size()));
+    if(!reachesViewport)
+        reportVerificationFailure(QStringLiteral("the keyboard focus chain of the shell does not reach any viewport"));
+}
+
 void runParityTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
     QQuickItem* rootObject = ui->view() ? ui->view()->rootObject() : nullptr;
     verifyMenuEntries(rootObject ? rootObject->findChild<QObject*>(QStringLiteral("workbenchMenuBar")) : nullptr,
         QStringLiteral("menu bar of the workbench"), false);
+    verifyFocusOrder(ui);
 
     verifyContextMenu(ui, [ui, continuation]() {
         verifyAboutDialog(ui, [ui, continuation]() {

@@ -311,6 +311,11 @@ void GuiSettings::rememberDirectory(const QString& dialogClass, const QString& d
     if(directory.isEmpty())
         return;
 
+    // The setting is owned by this facade, so every caller respects it: the classic frontend used to check it at some
+    // call sites only and remembered the directories anyway at others, such as the import dialog.
+    if(!keepDirectoryHistory())
+        return;
+
     QStringList history = recentDirectories(dialogClass);
     const qsizetype index = history.indexOf(directory);
     if(index >= 0)

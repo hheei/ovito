@@ -29,6 +29,13 @@ Menu {
         function onOpened(item, x, y) {
             contextMenu.popup(item, x, y)
         }
+
+        // The model closes itself when its viewport goes away (the items are rebuilt when the data set or the layout
+        // changes); a menu that outlives its viewport would offer entries that act on nothing.
+        function onChanged() {
+            if(!viewportMenu.open)
+                contextMenu.close()
+        }
     }
 
     WorkbenchPlaceholderMenuItem {

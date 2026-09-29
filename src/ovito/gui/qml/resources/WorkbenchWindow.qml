@@ -107,6 +107,7 @@ Rectangle {
 
         Button {
             id: importButton
+            objectName: "importButton"   // the keyboard focus check of the spike looks the control up by this name
             anchors.right: parent.right
             anchors.rightMargin: theme.spacing
             anchors.verticalCenter: parent.verticalCenter
@@ -114,7 +115,7 @@ Rectangle {
             focus: true
             text: workbench.importCommand ? workbench.importCommand.text : qsTr("Import Data…")
             // The button carries the icon of the command it runs, taken from the shared icon set.
-            icon.source: (workbench.importCommand && workbench.importCommand.iconPath.length) ? Icons.url(workbench.importCommand.iconPath) : ""
+            icon.source: (workbench.importCommand && workbench.importCommand.iconPath.length) ? Icons.url(workbench.importCommand.iconPath, Icons.themeName) : ""
 
             enabled: workbench.importCommand ? workbench.importCommand.enabled : true
             Accessible.name: qsTr("Import data files into the current scene")
@@ -281,9 +282,15 @@ Rectangle {
         id: dropArea
         anchors.fill: parent
         onDropped: (drop) => {
-            if(drop.hasUrls)
+            // A drop that carries no file URL (dragged text, for example) is not an import request, so the workbench
+            // rejects it instead of pretending to have accepted it.
+            if(drop.hasUrls) {
+                drop.acceptProposedAction()
                 workbenchController.importFiles(drop.urls)
-            drop.acceptProposedAction()
+            }
+            else {
+                drop.accepted = false
+            }
         }
 
         Rectangle {

@@ -26,10 +26,9 @@ MenuBar {
 
         WorkbenchMenuItem { command: commandManager.command("FileImport") }
 
-        WorkbenchPlaceholderMenuItem {
-            itemText: qsTr("Load Remote File…")
-            ownerPhase: "Phase 7"
-        }
+        // No entry for the remote import: the SSH client is a build option that is off by default and the parity matrix
+        // lists remote access as not ported. An entry that promises it in a later phase would be a promise this shell
+        // cannot keep, and the shared command has no handler in this frontend either.
 
         WorkbenchPlaceholderMenuItem {
             itemText: qsTr("Export Data…")
@@ -51,13 +50,6 @@ MenuBar {
         WorkbenchPlaceholderMenuItem {
             itemText: qsTr("Save Session State As…")
             ownerPhase: "Phase 3"
-        }
-
-        MenuSeparator {}
-
-        WorkbenchPlaceholderMenuItem {
-            itemText: qsTr("New Window")
-            ownerPhase: "Phase 7"
         }
 
         MenuSeparator {}
