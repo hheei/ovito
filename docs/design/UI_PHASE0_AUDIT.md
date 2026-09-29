@@ -1,6 +1,6 @@
 # OVITO Modern Workbench UI — Phase 0 Audit Record
 
-> **Companion documents**: [UI_DESIGN.md](UI_DESIGN.md), [UI_PLAN.md](UI_PLAN.md), [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md)
+> **Companion documents**: [UI_DESIGN.md](UI_DESIGN.md), [UI_PLAN.md](UI_PLAN.md), [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md), [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md)
 >
 > **Status**: Executed for the three audits that gate Phase 1 (build entry, viewport/rendering, shared models).
 > The remaining Phase 0 items (full action/editor inventory and the expanded parity matrix) are still pending.

@@ -7,7 +7,10 @@
 > **Status**: Proposed Roadmap; Phase 0 audit (partially), Phase 1 rendering spike and Phase 2 deliverables 1–7
 > executed — the frontend selection (`--gui=qml`), the shared `gui/base` workbench base class, the layout-derived
 > workbench shell and the import path with its empty/busy/cancelling/cancelled/error states are in the tree and verified
-> on Linux/OpenGL, see [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) and [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md)
+> on Linux/OpenGL, see [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) and [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md).
+> The comparison against the classic frontend, the duplication it identifies and the abstractions it proposes are
+> collected in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md); the command layer (A1) and the workbench state models
+> (A5) proposed there should be built **before** the pipeline and inspector work of Phases 4 and 6.
 >
 > **Design Contract**: [UI_DESIGN.md](UI_DESIGN.md)
 
