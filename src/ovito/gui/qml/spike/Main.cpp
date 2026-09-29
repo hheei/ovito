@@ -38,6 +38,10 @@
 #include <ovito/core/viewport/ViewportConfiguration.h>
 #include <ovito/core/viewport/Viewport.h>
 #include <ovito/core/viewport/ViewportSettings.h>
+#include <ovito/core/rendering/FrameBuffer.h>
+#include <ovito/core/rendering/OffscreenRenderTarget.h>
+#include <ovito/core/rendering/RenderSettings.h>
+#include <ovito/core/dataset/pipeline/ModificationNode.h>
 #include <ovito/core/app/Application.h>
 #include <ovito/core/utilities/Exception.h>
 
@@ -1068,15 +1072,36 @@ void verifyImportNotice(QmlMainWindowUI* ui, std::function<void()> continuation)
 * This check builds both library models, walks their rows and verifies that each row offers a registered command and
 * the QAction that presents it.
 ******************************************************************************/
+/// The models of the pipeline panel and of the modifier and layer libraries.
+struct WorkbenchModels {
+    PipelineListModel* pipelineList = nullptr;
+    AvailableModifiersModel* modifiers = nullptr;
+    AvailableOverlaysModel* overlays = nullptr;
+};
+
+/// Creates the workbench models once per process and returns them again on later calls.
+///
+/// Their constructors register commands with fixed ids (one per pipeline item, one per library entry), and the action
+/// manager refuses a second command with the same id - so a process may hold only one instance of each model. A
+/// frontend is in the same position, which is why the models are created once here and shared by the checks.
+WorkbenchModels& workbenchModels(QmlMainWindowUI* ui)
+{
+    static WorkbenchModels models;
+    if(models.pipelineList == nullptr) {
+        models.pipelineList = new PipelineListModel(*ui, ui->view());
+        models.modifiers = new AvailableModifiersModel(ui->view(), *ui, models.pipelineList);
+        models.overlays = new AvailableOverlaysModel(ui->view(), *ui, new OverlayListModel(ui->view(), *ui));
+    }
+    return models;
+}
+
 void runLibraryTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
     // Creating the models instantiates OVITO objects, which requires a task context when this runs from a Qt callback.
     GuiTaskScope taskScope(*ui);
 
-    auto* pipelineListModel = new PipelineListModel(*ui, ui->view());
-    auto* modifiersModel = new AvailableModifiersModel(ui->view(), *ui, pipelineListModel);
-    auto* overlayListModel = new OverlayListModel(ui->view(), *ui);
-    auto* overlaysModel = new AvailableOverlaysModel(ui->view(), *ui, overlayListModel);
+    auto* modifiersModel = workbenchModels(ui).modifiers;
+    auto* overlaysModel = workbenchModels(ui).overlays;
 
     int entries = 0;
     int categories = 0;
@@ -1315,6 +1340,407 @@ void runDeviceTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         }
         continuation();
     });
+}
+
+/******************************************************************************
+* Renders the scene into the given frame buffer through RenderSettings, which is the render output path of both
+* frontends: one offscreen render target per viewport of the configuration, assembled into the frame buffer.
+******************************************************************************/
+std::shared_ptr<Future<void>> startRenderOutput(QmlMainWindowUI* ui, const std::shared_ptr<FrameBuffer>& frameBuffer)
+{
+    DataSet* dataset = ui->datasetContainer().currentSet();
+    RenderSettings* renderSettings = dataset ? dataset->renderSettings() : nullptr;
+    OORef<const ViewportConfiguration> viewportConfig = dataset ? dataset->viewportConfig() : nullptr;
+    if(!renderSettings || !viewportConfig)
+        return {};
+
+    OORef<const AnimationSettings> animationSettings;
+    if(Viewport* viewport = viewportConfig->activeViewport()) {
+        if(Scene* scene = viewport->scene())
+            animationSettings = scene->animationSettings();
+    }
+    return std::make_shared<Future<void>>(renderSettings->render(*viewportConfig, std::move(animationSettings), frameBuffer));
+}
+
+/******************************************************************************
+* Returns whether two images of the same size differ in at least one pixel. The comparison walks a band of scan lines,
+* because a rendered image differs in many pixels and the check only has to tell "the same" from "not the same".
+******************************************************************************/
+bool imagesDiffer(const QImage& a, const QImage& b)
+{
+    if(a.isNull() || b.isNull() || a.size() != b.size() || a.format() != b.format())
+        return true;
+    const int step = std::max(1, a.height() / 64);
+    for(int y = 0; y < a.height(); y += step) {
+        if(std::memcmp(a.constScanLine(y), b.constScanLine(y), a.bytesPerLine()) != 0)
+            return true;
+    }
+    return false;
+}
+
+/******************************************************************************
+* Returns the number of modifiers of the given class name in the first pipeline of the scene, or -1 if the scene has
+* no such pipeline. Walking the chain needs only classes of the core, so the check works without the particles plugin.
+******************************************************************************/
+int countPipelineModifiers(QmlMainWindowUI* ui, const QString& className)
+{
+    const Scene* scene = ui->datasetContainer().activeScene();
+    if(!scene || scene->children().empty())
+        return -1;
+    const Pipeline* pipeline = scene->children().front()->pipeline();
+    if(!pipeline)
+        return -1;
+
+    int count = 0;
+    for(const PipelineNode* node = pipeline->head(); node; ) {
+        const ModificationNode* modificationNode = dynamic_object_cast<ModificationNode>(node);
+        if(!modificationNode)
+            break;
+        if(const Modifier* modifier = modificationNode->modifier()) {
+            if(modifier->getOOClass().name().contains(className))
+                count++;
+        }
+        node = modificationNode->input();
+    }
+    return count;
+}
+
+/// The state of the offscreen rendering check while it runs across several event loop turns. The check renders the
+/// scene twice (before and after the ambient-occlusion sampling recolored the particles) and resizes the viewports in
+/// between, so that the sampling, a picking pass and the render output are in flight at the same time.
+struct OffscreenCheckState
+{
+    QmlMainWindowUI* ui = nullptr;
+    std::function<void()> continuation;
+    PipelineListModel* pipelineListModel = nullptr;
+    std::shared_ptr<FrameBuffer> baselineFrameBuffer;
+    QImage baselineImage;
+    std::shared_ptr<FrameBuffer> frameBuffer;
+    std::shared_ptr<Future<void>> renderFuture;
+    QSizeF viewportItemSizeBeforeResize;
+    int outputsRendered = 0;
+};
+
+/// Timeout of the offscreen passes of the check. Rendering an image is quick, but the ambient-occlusion sampling of
+/// the pipeline evaluation may need a few seconds before it recolored the particles.
+constexpr int offscreenTimeoutMs = 90000;
+
+/// Waits until the picking pass that the resize superseded has been rendered again.
+void verifyPickingAfterResize(std::shared_ptr<OffscreenCheckState> state)
+{
+    GuiTaskScope taskScope(*state->ui);
+
+    const QDateTime started = QDateTime::currentDateTime();
+    pollUntil(state->ui, 25, pickTimeoutMs,
+        [state]() {
+            if(QuickViewportItem* item = firstViewportItem(state->ui)) {
+                // The layout has to follow the resize before a picking buffer for the new size can exist.
+                if(item->size() == state->viewportItemSizeBeforeResize)
+                    return false;
+                if(QuickViewportWindow* viewportWindow = item->viewportWindow())
+                    return scanPicking(viewportWindow, item->size()).hits > 0;
+            }
+            return false;
+        },
+        [state, started](bool satisfied) {
+            if(satisfied)
+                qInfo() << "OFFSCREEN_TEST picking works again" << started.msecsTo(QDateTime::currentDateTime())
+                        << "ms after the resize superseded the picking target";
+            else {
+                reportVerificationFailure(QStringLiteral("no object was picked after the resize had superseded the picking target"));
+                reportPickingState(state->ui, QPoint(8, 8));
+            }
+            state->continuation();
+        });
+}
+
+/// Renders the scene again and compares the image with the baseline. The image differs once the ambient-occlusion
+/// sampling has recolored the particles, so the comparison doubles as the signal that the sampling ran to completion.
+void renderOutputAgain(std::shared_ptr<OffscreenCheckState> state)
+{
+    // The pointer above only lives inside this call: a callback of the event loop has no task context of its own, and
+    // starting a render output (which asks the render thread for an offscreen target) needs the user interface.
+    GuiTaskScope taskScope(*state->ui);
+
+    DataSet* dataset = state->ui->datasetContainer().currentSet();
+    state->frameBuffer = std::make_shared<FrameBuffer>(dataset->renderSettings()->outputImageWidth(),
+                                                       dataset->renderSettings()->outputImageHeight());
+    state->renderFuture = startRenderOutput(state->ui, state->frameBuffer);
+    state->outputsRendered++;
+
+    pollUntil(state->ui, 25, offscreenTimeoutMs,
+        [state]() { return !state->renderFuture || state->renderFuture->isFinished(); },
+        [state](bool finished) {
+        // A timeout callback has no task context of its own; waiting for the future and reading the image both need one.
+        GuiTaskScope taskScope(*state->ui);
+
+        if(!finished) {
+            reportVerificationFailure(QStringLiteral("the render output did not finish within %1 s").arg(offscreenTimeoutMs / 1000));
+            state->continuation();
+            return;
+        }
+        try {
+            state->renderFuture->waitForFinished();
+        }
+        catch(const Exception& ex) {
+            reportVerificationFailure(QStringLiteral("the render output failed: %1").arg(ex.messages().join(QStringLiteral("; "))));
+            state->continuation();
+            return;
+        }
+
+        const QImage image = state->frameBuffer->image();
+        if(image.isNull() || image.size() != state->frameBuffer->size()) {
+            reportVerificationFailure(QStringLiteral("the render output produced no image of the requested size"));
+            state->continuation();
+            return;
+        }
+
+        if(!imagesDiffer(image, state->baselineImage)) {
+            // The scene renders like before as long as the sampling has not recolored the particles. Give it time.
+            if(state->outputsRendered < 30) {
+                QTimer::singleShot(250, state->ui->view(), [state]() { renderOutputAgain(state); });
+                return;
+            }
+            reportVerificationFailure(QStringLiteral("the ambient occlusion sampling did not change the rendered image"));
+            state->continuation();
+            return;
+        }
+
+        qInfo() << "OFFSCREEN_TEST the render output" << image.size() << "shows the ambient occlusion shading after"
+                << state->outputsRendered << "render pass(es)";
+        verifyPickingAfterResize(state);
+    });
+}
+
+/// Renders the baseline image, inserts the ambient-occlusion modifier through its shared command and starts the passes
+/// that render at the same time: the sampling of the pipeline evaluation, a picking pass and a second render output.
+void runOffscreenCheckWithSelection(std::shared_ptr<OffscreenCheckState> state)
+{
+    GuiTaskScope taskScope(*state->ui);
+
+    QmlMainWindowUI* ui = state->ui;
+    DataSet* dataset = ui->datasetContainer().currentSet();
+    RenderSettings* renderSettings = dataset ? dataset->renderSettings() : nullptr;
+    if(!renderSettings) {
+        reportVerificationFailure(QStringLiteral("the data set has no render settings, so the render output cannot be checked"));
+        state->continuation();
+        return;
+    }
+    if(countPipelineModifiers(ui, QStringLiteral("AmbientOcclusion")) != 0) {
+        reportVerificationFailure(QStringLiteral("the pipeline contains an ambient occlusion modifier before the check inserted one"));
+        state->continuation();
+        return;
+    }
+
+    // The baseline: how the scene renders before the sampling recolored the particles.
+    state->baselineFrameBuffer = std::make_shared<FrameBuffer>(renderSettings->outputImageWidth(), renderSettings->outputImageHeight());
+    state->renderFuture = startRenderOutput(ui, state->baselineFrameBuffer);
+    state->outputsRendered++;
+    if(!state->renderFuture) {
+        reportVerificationFailure(QStringLiteral("the render output could not be started"));
+        state->continuation();
+        return;
+    }
+
+    pollUntil(ui, 25, offscreenTimeoutMs,
+        [state]() { return state->renderFuture->isFinished(); },
+        [state](bool finished) {
+        GuiTaskScope taskScope(*state->ui);
+
+        QmlMainWindowUI* ui = state->ui;
+        if(!finished) {
+            reportVerificationFailure(QStringLiteral("the baseline render output did not finish within %1 s").arg(offscreenTimeoutMs / 1000));
+            state->continuation();
+            return;
+        }
+        try {
+            state->renderFuture->waitForFinished();
+            state->baselineImage = state->baselineFrameBuffer->image();
+        }
+        catch(const Exception& ex) {
+            reportVerificationFailure(QStringLiteral("the baseline render output failed: %1").arg(ex.messages().join(QStringLiteral("; "))));
+            state->continuation();
+            return;
+        }
+        if(state->baselineImage.isNull()) {
+            reportVerificationFailure(QStringLiteral("the baseline render output produced no image"));
+            state->continuation();
+            return;
+        }
+
+        // Insert the ambient-occlusion modifier through the shared command of its library entry, the way the frontends
+        // do it. Its sampling loop submits one picking-only pass per sample from the pipeline evaluation's worker thread.
+        Command* insertCommand = nullptr;
+        for(Command* command : ui->actionManager()->commands()) {
+            if(command->id().contains(QStringLiteral("AmbientOcclusionModifier"))) {
+                insertCommand = command;
+                break;
+            }
+        }
+        if(!insertCommand) {
+            reportVerificationFailure(QStringLiteral("this build provides no command that inserts the ambient occlusion modifier"));
+            state->continuation();
+            return;
+        }
+        if(!insertCommand->isEnabled()) {
+            reportVerificationFailure(QStringLiteral("the command \"%1\" is disabled, so the pipeline cannot adopt the modifier").arg(insertCommand->id()));
+            state->continuation();
+            return;
+        }
+        insertCommand->trigger();
+        if(countPipelineModifiers(ui, QStringLiteral("AmbientOcclusion")) != 1) {
+            reportVerificationFailure(QStringLiteral("triggering \"%1\" did not insert the modifier into the pipeline").arg(insertCommand->id()));
+            state->continuation();
+            return;
+        }
+        qInfo() << "OFFSCREEN_TEST the ambient occlusion modifier was inserted through the shared command"
+                << insertCommand->id();
+
+        // Start a picking pass of the Qt Quick viewport, so that it renders while the sampling runs. The result of
+        // this pass is not awaited: the resize below supersedes its target, and the check waits for the pass that
+        // follows it (see verifyPickingAfterResize()).
+        const QList<QuickViewportItem*> items = viewportItems(ui);
+        if(items.isEmpty()) {
+            reportVerificationFailure(QStringLiteral("the workbench has no viewport to pick in"));
+            state->continuation();
+            return;
+        }
+        state->viewportItemSizeBeforeResize = items.front()->size();
+        if(QuickViewportWindow* viewportWindow = items.front()->viewportWindow())
+            (void)viewportWindow->pick(QPointF(items.front()->width() * 0.5, items.front()->height() * 0.5));
+
+        // Resize the workbench while the sampling, the picking pass and the render output are in flight: the new size
+        // makes the picking service replace its offscreen target while a pass may still be reading the old one.
+        if(QQuickWindow* window = ui->view()) {
+            window->resize(window->width() + 40, window->height() + 30);
+            qInfo() << "OFFSCREEN_TEST resized the workbench while the sampling, a picking pass and the render output are in flight";
+        }
+
+        renderOutputAgain(state);
+    });
+}
+
+/// Creates the models the check uses, selects the pipeline they operate on and continues with the check once the
+/// pipeline list model has adopted the selection.
+void startOffscreenCheckAfterImport(std::shared_ptr<OffscreenCheckState> state)
+{
+    QmlMainWindowUI* ui = state->ui;
+
+    // The library command inserts the modifier into the pipeline that the pipeline list model has selected, and the
+    // model adopts the scene selection one event loop turn after the selection was set. The library model is the one
+    // that registers the insert commands, so it is created here even though the check only uses one of them.
+    state->pipelineListModel = workbenchModels(ui).pipelineList;
+    if(workbenchModels(ui).modifiers->rowCount() == 0)
+        reportVerificationFailure(QStringLiteral("the modifier library is empty, so no modifier can be inserted"));
+
+    // The model adopts the selection when the container announces that it *changed*, and the node the import selected
+    // is already in the set: setting it again would be no change at all, so it is deselected first.
+    if(Scene* scene = ui->datasetContainer().activeScene(); scene && !scene->children().empty()) {
+        scene->selection()->clear();
+        scene->selection()->setNode(scene->children().front());
+    }
+
+    pollUntil(ui, 25, 5000,
+        [state]() { return state->pipelineListModel->selectedPipeline() != nullptr; },
+        [state](bool selected) {
+            if(!selected) {
+                reportVerificationFailure(QStringLiteral("the pipeline list model selected no pipeline, so the modifier library could not insert anything"));
+                state->continuation();
+                return;
+            }
+            runOffscreenCheckWithSelection(state);
+        });
+}
+
+/******************************************************************************
+* Verifies the shared offscreen rendering service (class OffscreenRenderTarget) end to end: that it refuses a pass
+* which does not match the kind of its target, and that the ambient-occlusion sampling, a picking pass and a full
+* render output run to completion at the same time, including a picking target that a resize supersedes in flight.
+******************************************************************************/
+void runOffscreenTest(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    // Creating the pipeline list model and triggering a command instantiates OVITO objects and opens transactions.
+    GuiTaskScope taskScope(*ui);
+
+    DataSet* dataset = ui->datasetContainer().currentSet();
+    if(!dataset || !dataset->renderSettings() || !dataset->viewportConfig() || sceneObjectCount(ui) == 0) {
+        reportVerificationFailure(QStringLiteral("the offscreen check needs a data set with a scene and render settings"));
+        continuation();
+        return;
+    }
+
+    // Passes that do not match the kind of their target are refused before any GPU work is submitted: the checks run
+    // before the frame graph is used, which is why an empty one suffices here. In a build with active assertions the
+    // refusal aborts the process instead, which is exactly the loudness the service is supposed to have, so the case is
+    // skipped there.
+#if !defined(OVITO_DEBUG) && !defined(QT_FORCE_ASSERTS)
+    if(SceneRenderer* renderer = dataset->renderSettings()->renderer()) {
+        {
+            OffscreenRenderTarget target(*ui, OffscreenRenderTarget::Kind::Visual);
+            bool refused = false;
+            try {
+                (void)target.renderPicking(OORef<FrameGraph>(), *renderer, QSize(32, 32));
+            }
+            catch(const Exception&) {
+                refused = true;
+            }
+            if(!refused)
+                reportVerificationFailure(QStringLiteral("the service accepted a picking pass on a target created for color images"));
+        }
+        {
+            OffscreenRenderTarget target(*ui, OffscreenRenderTarget::Kind::PickingOnly);
+            bool refused = false;
+            try {
+                (void)target.renderImage(OORef<FrameGraph>(), *renderer, std::make_shared<FrameBuffer>(64, 64), TaskProgress::Ignore);
+            }
+            catch(const Exception&) {
+                refused = true;
+            }
+            if(!refused)
+                reportVerificationFailure(QStringLiteral("the service accepted a color image on a target that holds only the picking buffers"));
+        }
+        qInfo() << "OFFSCREEN_TEST a pass that does not match the kind of its target is refused";
+    }
+    else
+        qInfo() << "OFFSCREEN_TEST (skipped) the data set has no active scene renderer";
+#else
+    qInfo() << "OFFSCREEN_TEST (skipped) a mismatch of the target kind aborts this build, which is the point of the check";
+#endif
+
+    auto state = std::make_shared<OffscreenCheckState>();
+    state->ui = ui;
+    state->continuation = std::move(continuation);
+
+    // The scene the earlier checks left behind may hold no particles at all - the parity check imports a file that the
+    // LAMMPS importer misdetects - and the sampling has to recolor particles for the rendered image to change. So the
+    // check imports a lattice of its own and waits until the file source has evaluated it.
+    const QString dataFile = writeLatticeFile(QDir::tempPath() + QStringLiteral("/ovito-qml-offscreen-check.xyz"), 8, 3.6);
+    if(dataFile.isEmpty()) {
+        state->continuation();
+        return;
+    }
+    if(QmlWorkbenchController* controller = ui->workbenchController())
+        controller->importFiles({QUrl::fromLocalFile(dataFile)});
+    else {
+        reportVerificationFailure(QStringLiteral("the workbench has no controller that could import the data file"));
+        state->continuation();
+        return;
+    }
+
+    pollUntil(ui, 50, 20000,
+        [ui]() {
+            const FileSource* fileSource = firstFileSource(ui);
+            return fileSource && fileSource->numberOfSourceFrames() >= 1 && sceneObjectCount(ui) == 1;
+        },
+        [state](bool ready) {
+            if(!ready) {
+                reportVerificationFailure(QStringLiteral("the data file of the offscreen check was not imported"));
+                state->continuation();
+                return;
+            }
+            GuiTaskScope taskScope(*state->ui);
+            startOffscreenCheckAfterImport(state);
+        });
 }
 
 /// Verifies the features the shell gained for parity with the classic frontend: the menus of the workbench present the
@@ -2015,6 +2441,8 @@ protected:
             tr("Verify the modifier and viewport layer libraries, whose entries are commands of the shared command layer.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-icon-check"),
             QStringLiteral("Verify that the shell shows the icons of the shared icon set.")));
+        parser.addOption(QCommandLineOption(QStringLiteral("qml-offscreen-check"),
+            tr("Verify the shared offscreen rendering service: the ambient-occlusion sampling, a picking pass and a render output at the same time.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-device-check"),
             tr("Verify that the frontend reports a missing graphics device, which depends on the platform plugin.")));
         parser.addOption(QCommandLineOption(QStringLiteral("qml-parity-check"),
@@ -2109,6 +2537,7 @@ protected:
         const bool deviceCheck = cmdLineParser().isSet(QStringLiteral("qml-device-check"));
         const bool iconCheck = cmdLineParser().isSet(QStringLiteral("qml-icon-check"));
         const bool libraryCheck = cmdLineParser().isSet(QStringLiteral("qml-library-check"));
+        const bool offscreenCheck = cmdLineParser().isSet(QStringLiteral("qml-offscreen-check"));
         const int lifecycleCycles = cmdLineParser().value(QStringLiteral("qml-lifecycle-cycles")).toInt();
         QSize resizeSize;
         const QStringList resizeArguments = cmdLineParser().value(QStringLiteral("qml-resize")).split(QLatin1Char('x'));
@@ -2121,7 +2550,7 @@ protected:
         const int holdMs = cmdLineParser().value(QStringLiteral("qml-hold-ms")).toInt();
 
         // Interactive mode: without a verification option, keep the window open.
-        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck && !commandCheck && !sessionCheck && !settingsCheck && !parityCheck && !deviceCheck && !libraryCheck && !iconCheck)
+        if(!verifyPicking && frameStatsDuration <= 0 && !hideShowTest && !resizeSize.isValid() && lifecycleCycles <= 0 && !layoutCheck && !importCheck && !commandCheck && !sessionCheck && !settingsCheck && !parityCheck && !deviceCheck && !libraryCheck && !iconCheck && !offscreenCheck)
             return;
 
         int delay = cmdLineParser().value(QStringLiteral("qml-startup-delay")).toInt();
@@ -2238,6 +2667,14 @@ protected:
             // picking check, because this check clicks in a viewport and changes the camera for a moment.
             _verificationSteps.push_back([ui = mainWinUI](std::function<void()> next) {
                 runParityTest(ui, std::move(next));
+            });
+        }
+        if(offscreenCheck) {
+            // After the parity check and before the import check: it inserts a modifier into the pipeline of the scene
+            // and resizes the workbench, so it needs the scene the earlier checks left behind and must not disturb the
+            // imports that follow it.
+            _verificationSteps.push_back([ui = mainWinUI](std::function<void()> next) {
+                runOffscreenTest(ui, std::move(next));
             });
         }
         if(importCheck) {
