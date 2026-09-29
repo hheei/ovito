@@ -2,8 +2,10 @@
 
 > **Companion documents**: [UI_DESIGN.md](UI_DESIGN.md), [UI_PLAN.md](UI_PLAN.md), [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md), [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md), [UI_TEST_ENV.md](UI_TEST_ENV.md)
 >
-> **Status**: Review only. Nothing in this document is implemented; the proposals are ordered by the phase in which
-> they would pay off. Measurements were taken on the Linux/OpenGL host described in UI_TEST_ENV.md unless noted.
+> **Status**: Partly implemented. A1 (command layer), the first half of A5 (recent files list, shared task progress
+> model, session workflow) and A2 in reduced form (viewport renderer registry) are in the tree; the remaining items are
+> collected as **Phase 2.5** of [UI_PLAN.md](UI_PLAN.md). Measurements were taken on the Linux/OpenGL host described in
+> UI_TEST_ENV.md unless noted.
 
 This document answers one question: **where does the new Qt Quick workbench differ from the classic QtWidgets
 frontend, and which of those differences should be removed by a shared abstraction before more UI is built on top?**
@@ -377,9 +379,19 @@ Open candidates, each with the measurement that must decide it:
 
 ## 7. Recommended order
 
-1. **Before Phase 3 UI work**: A1 (command layer, **done**) and A5 (state models) — they determine how much of every
-   later feature has to be written twice. A1 landed first so that the pipeline view and the inspectors of Phase 4 can
-   bind to commands instead of creating a second command table.
-2. **Together with the pipeline/property work (Phase 4)**: A2 (viewport window management) and A7 (property model).
-3. **With Phases 5–7**: A3 (async picking), A4 (offscreen rendering service), A6 (import options).
-4. **As independent small chores**: A8.1–A8.5, A9, plus the four small gaps listed at the end of §5.
+**Where this landed.** The remaining items of this review are collected as **Phase 2.5** of
+[UI_PLAN.md](UI_PLAN.md): A4, A8 and A9, the finish of the Phase 0 inventory, and the four small gaps — one phase that is
+about removing differences rather than adding features. A3, A6 and A7 are explicitly assigned to Phases 5, 7 and 4 there,
+because each of them changes semantics that those phases are already touching.
+
+1. **Already done**: A1 (command layer) and the first half of A5 (recent files list, shared task progress model, session
+   workflow), plus A2 in reduced form (the viewport renderer registry). These were the load-bearing shared layers, and
+   they landed before the phases that need them.
+2. **New Phase 2.5, before the Phase 3 presentation models**: A4 (offscreen rendering service), A8.1–A8.5 (the remaining
+   core/frontend couplings), A9 (shared icons), the four small gaps of §5, and the finish of the Phase 0 inventory.
+3. **Phase 4, with the pipeline and property work**: A7 (property model) — the largest single duplication the migration
+   can avoid — plus the selection model of A5.
+4. **Phase 5, with the interaction work**: A3 (asynchronous pick API), because `SelectionMode`, `NavigationModes` and
+   `XFormModes` are what consume a pick on every mouse move.
+5. **Phase 7, with the remaining desktop parity**: A6 (import options), since the import *flow* is already shared and the
+   missing part is the option UI.

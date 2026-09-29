@@ -17,6 +17,11 @@
 > used by both frontends) and the small UX gaps, followed by the rest of A5 (the Qt Quick session commands, a selection
 > model and a settings facade) **before** the pipeline and inspector work of Phases 4 and 6.
 >
+> Phase 2 is complete and its exit gate is verified, so the review items above plus the small parity gaps are collected in
+> the new **Phase 2.5**. It is deliberately *not* a feature phase: A4, A8 and A9, the finish of the Phase 0 inventory and
+> the four small gaps land there, while A3, A6 and A7 are explicitly assigned to Phases 5, 7 and 4 (they change semantics
+> that those phases are already touching).
+>
 > **Design Contract**: [UI_DESIGN.md](UI_DESIGN.md)
 
 ---
@@ -87,6 +92,9 @@ Phase 1: Viewport Technical Spike (QQuickRhiItem Feasibility)
    │
    ▼
 Phase 2: Minimal QML Shell & Build Scaffolding
+   │
+   ▼
+Phase 2.5: Shared-Layer Cleanup & Small Parity Gaps
    │
    ▼
 Phase 3: Presentation Models & Command Layer
@@ -283,6 +291,109 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   * Packaging QML resources for three platforms has already produced one gap (the macOS `@rpath` issue, O9). Mitigation:
     verify from the deployed layout in this phase, not only from the build tree.
 
+### Phase 2.5: Shared-Layer Cleanup & Small Parity Gaps
+- **Objective**: Finish the work that the frontend review ([UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md)) assigns to the
+  *shared* layers, and close the small parity gaps, **before** the presentation models of Phase 3 bind to the shell. These
+  are the items that are cheap while the relevant code is being touched and expensive later, when both frontends have
+  grown their own version of them.
+- **Why this is its own phase**: every later phase adds *features*; this one removes *differences*. Keeping it separate
+  keeps the regression surface of a change identifiable — the Windows round showed how much time a single shared-code
+  change can cost when it hides inside unrelated work (defect F13), and the classic frontend has to survive every one of
+  these changes.
+- **Deliverables**:
+  1. **Finish the Phase 0 inventory**: the action/editor inventory and the expanded parity matrix (Phase 0 deliverables 1,
+     3 and 4) are still pending. This is the last phase that works on the *difference* between the two frontends rather
+     than on features, and the matrix is what tells Phases 3–7 what is left. Record per row: implemented / scheduled in
+     phase X / deliberately out of scope, with a source reference and an acceptance case.
+  2. **The small parity gaps of review section 5** — each one user-visible and cheap:
+     * **Viewport context menu** (currently a no-op): the classic menu is
+       [ViewportMenu.cpp](../../src/ovito/gui/desktop/viewport/ViewportMenu.cpp) — Preview Mode, Show Grid, Constrain
+       Rotation, View Type, Adjust View…, Window Layout, Pipeline Visibility and Create Camera. Drive it from the *same*
+       shared commands and the viewport API instead of re-deriving the semantics; the layout mutations behind "Window
+       Layout" (insert/delete viewport) stay in Phase 4, where the classic code path
+       (`ViewportsPanel::showSplitterContextMenu`) is the reference implementation.
+     * **Menu bar and discoverability**: a menu bar mirroring the existing commands (File: import/export/quit; Edit:
+       undo/redo/delete; View: viewport, zoom and maximize; Help: manual/about), with each item bound to a `Command` and a
+       single owner of every shortcut (a menu item must not install a second `QKeySequence`). This also gives macOS the
+       About/Quit/Preferences reachability it lacks today, where Qt moves those entries into the global menu.
+     * **Per-task progress**: the status bar shows one aggregate bar; the shared `TaskProgressModel` already exposes one
+       row per running task, so present them (`text`, `value`, `maximum`) and keep the existing Cancel for shell-started
+       operations. Per-task cancellation stays out of scope: a `TaskProgress` carries no handle to its `Task`.
+     * **Window state**: remember window size/position, the last used theme and the pane-layout policy through the
+       settings facade of deliverable 3, so a second launch does not look like a first launch.
+  3. **Settings facade (the remainder of review item A5)**: one small `gui/base` service that owns the names and defaults
+     of the keys the frontends persist (window geometry, renderer selection is already in `ViewportRendererRegistry`,
+     per-dialog directory history, UI theme), so neither frontend names storage paths itself. The *session* UI stays in
+     Phase 3 deliverable 6, and the selection/hover model in Phase 4.
+  4. **Remaining core/frontend couplings (review item A8)**:
+     * **A8.1** — `StandardRenderer` still includes `RenderThread.h` for three static calls (`pickGraphicsApi()`,
+       `enumerateAdapters()`, `selectedAdapterName()`); move them behind `RendererService` or a small graphics-API
+       utility, which completes the extraction started in Phase 1.
+     * **A8.2** — replace the two `dynamic_object_cast<MainWindowUI>` sites in application services with a GUI-neutral
+       "notify/confirm with details" interface next to `UserInterface::showMessageBox()`.
+     * **A8.3** — `--noviewports` is registered by the desktop frontend and read by core
+       (`core/dataset/DataSet.cpp`); make it a core-level parameter or let the frontend decide the default viewport
+       configuration.
+     * **A8.4** — decide O1 (the `ovitoheadless` QPA plugin does not exist in this tree): either ship a minimal plugin or
+       fail with a clear message that names the platform plugin instead of attempting a nonexistent one. Whichever way,
+       the requirement is documented for users, not only for tests.
+     * **A8.5** — `AvailableModifiersModel` and `AvailableOverlaysModel` still register plain `QAction`s; convert them to
+       `Command`s so Phase 4's modifier library (and the QML command list) can consume them.
+  5. **Shared presentation assets (review item A9)**: publish the classic icon set
+     (`gui/base/resources/icons/ovito-dark|light`) and its tint rule for QML use, replacing the drawn glyphs the shell
+     uses today, so both frontends speak one visual language.
+  6. **Offscreen rendering service (review item A4)**: one core-facing service over the four `RenderThread` offscreen
+     entry points (`createOffscreenTarget`, `renderOffscreenFrame`, `renderAOFrame`, `renderPickingFrame`) plus a shared
+     `PickingBufferTarget`, used by the classic viewport grab, the QML picking pass and — in Phase 7 — render output.
+     Today three call sites own their target, flags and readback, and misuse is caught by runtime assertions rather than
+     by the interface. Render *settings* and the output dialog remain Phase 7.
+  7. **Measurement-driven viewport optimization pass** (each item decided by numbers, not by intuition; method in
+     [UI_TEST_ENV.md](UI_TEST_ENV.md) section 9.5 — `QSG_NO_VSYNC=1`, both render loops, medians of three runs at 512 and
+     32768 atoms):
+     * **Single "viewport canvas" item** — four `QQuickRhiItem`s means four offscreen textures, four pass boundaries,
+       four synchronize steps and four composites per window frame; one item drawing all panes (the layout is already
+       computed in C++ by `QmlViewportLayout`) could share one resource frame and one pass. Prototype, measure, and keep
+       it **only** if it wins at both scene sizes; otherwise record the number and keep four items.
+     * **Picking pre-warm** — refresh the picking buffer on camera or scene change instead of on the next hover pick,
+       which removes the documented one-frame staleness (review section 3.1).
+     * **Frame-graph generation** — profile the per-frame, per-pane generation cost before optimizing it; four cameras
+       mean four frame graphs, which is expected and may already be dominated by something else.
+     * **`--gui` diagnostics** — an unknown frontend name currently prints the available names and exits 1; also list the
+       names for a typo and make the message usable from a desktop launcher.
+- **Status**: **Not started.** Phase 2 is complete (deliverables 1–7, exit gate verified on Linux/OpenGL, Linux/Vulkan,
+  macOS/Metal and Windows/D3D12), so this phase starts from a verified base; the audit decisions it produces are recorded
+  as D30 onward in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md).
+- **Non-goals** (each assigned to a phase where its semantics are already being changed, so they are not silently lost):
+  * **A3** (one asynchronous pick API) belongs to Phase 5: it changes the `pick()` contract that `SelectionMode`,
+    `NavigationModes` and `XFormModes` call on every mouse move, and the classic frontend's blocking behaviour has to be
+    decided together with the interaction work.
+  * **A6** (import plan / options model) belongs to Phase 7: the missing piece is the option *UI* (format override,
+    import-mode dialog), not the import flow, which Phase 2 already shares.
+  * **A7** (property model foundation) belongs to Phase 4, immediately before the first inspector, and is the one item of
+    this list that must not be deferred past its phase: it is the largest single duplication the migration can avoid.
+  * Pipeline/selection models, timeline and keyframes, render settings and output, data inspector, command list (the
+    "command palette" consumption of A1), settings *dialogs* and the snippet import/export UI keep their own phases.
+- **Exit Gate**: every review item A1–A9 is either implemented here or explicitly assigned to a later phase in this
+  document; each closed gap has an automated check in `OvitoQmlSpike` (context menu, menu-bar commands including
+  undo/redo enablement, per-task list) that also runs in the four CI jobs, or a documented manual check; the classic
+  frontend still passes `ctest --preset native`, `--nogui`, and a graphical run in its own session, and the QML frontend
+  still passes the full spike set on Linux (and on macOS/Windows whenever a host is available); every optimization
+  decision — including the ones decided *against* — is recorded with its measured medians.
+- **Risks**:
+  * *Small wins with a shared-code blast radius.* Mitigation: land the phase as separate grouped commits per deliverable,
+    with the classic-frontend checks after each, exactly as in Phases 1–2; a `gui/base`-only change still needs the
+    assert-enabled build when it touches invariants (`WorkbenchUI`, `QmlViewportLayout` and `Command` all had assert-only
+    defects that NDEBUG hides).
+  * *A menu bar can steal shortcuts.* Keep every `QKeySequence` in the `Command` and let exactly one place install it;
+    verify on macOS, where Qt relocates entries into the global menu and can silently drop duplicates.
+  * *A context menu can fork `ViewportMenu` semantics.* Drive it from the shared commands and the viewport API, and keep
+    the layout mutations in one implementation (Phase 4).
+  * *Platform-specific build traps recur.* Header-only exported classes and conditionally compiled sources have already
+    caused MSVC link and AUTOMOC failures (defects F15, F16): define special members out of line and clear a stale
+    `*_autogen` directory when a source joins a target.
+
+---
+
 ### Phase 3: Presentation Models & Command Layer
 - **Objective**: Expose shared state and editing operations with explicit lifecycle and undo semantics.
 - **Deliverables**:
@@ -291,9 +402,10 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   3. Modifier chooser adaptation preserving discovery, categories/templates, applicability, and insertion semantics from shared services.
   4. A QML-facing command bridge to shared actions and undo infrastructure (the command layer itself landed early as
      review finding A1 / audit decision D26: the QML workbench reads and triggers the same `Command` objects the classic
-     frontend presents as `QAction`s, so this deliverable is the remaining shell consumption - menu bar, buttons,
-     command list). Implement discrete transactions and continuous begin/update/commit/cancel edits as defined in design
-     section 5.3; synchronize enablement and shortcuts.
+     frontend presents as `QAction`s). The menu bar, the undo/redo/import entry points and the per-task list land in
+     Phase 2.5, so what remains here is the *model* side: the command list ("palette") consumption, the commands of the
+     pipeline panel, and the enablement/shortcut synchronization of every panel that Phase 4 adds. Implement discrete
+     transactions and continuous begin/update/commit/cancel edits as defined in design section 5.3.
   5. Define selection/status refresh and edit cancellation on target deletion, undo/redo, and dataset replacement. Do not retain row indices as object identity across deferred work.
   6. Session save/open and modified-session close handling using extracted shared operations and QML dialogs. Define scene-change and save-failure behavior before users rely on editing sessions.
 - **Exit Gate**: Verify insert/reorder/delete and their undo/redo, one undo step per continuous gesture, cancellation restoring the original value, and deletion/undo restoring coherent selection. Replace a dataset during an edit and confirm no stale writes. Save/reopen a modified scene and verify close cancellation and save failures preserve it.
@@ -376,14 +488,15 @@ These lists identify starting controls, not complete editor specifications. Incl
 
 ## 5. Immediate Next Step
 
-**Phase 2**, scoped above: first the frontend-selection seam and the `gui/base` extractions (deliverables 1–3), because
-every later step depends on a real entry point and on a workbench that is not entangled with `gui/desktop`; then the shell,
-the import path and the packaging work. Two items from the Phase 0 audit remain open and should be finished alongside,
-because they are cheap while the relevant code is being touched: the **action/editor inventory and the expanded parity
-matrix** (Phase 0 deliverables 1, 3 and 4, still pending) and the **D3D12 runtime evidence** that the Phase 1 gate left
-open.
+**Phase 2.5**, scoped above: the shared-layer cleanup and the small parity gaps, in the order of its deliverables — the
+parity matrix first (it is what says what is left), then the visible gaps, the couplings, the assets, the offscreen
+service, and finally the measurement-driven optimization pass. Two of its items stay open deliberately: the D3D12 runtime
+evidence that Phase 1 left open is now recorded (Phase 2 closed it on hardware and through WARP), while the action/editor
+inventory and the expanded parity matrix are unowned today and are deliverable 1 of this phase.
 
-Phase 1 is closed to the extent this environment allows: the rendering bridge, the picking path and the performance
-baseline are documented in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md), and the architecture status stays **proposed** only
-because of the outstanding D3D12 runtime result. This roadmap describes planned work; no phase is marked complete by this
-document revision.
+Phase 1 and Phase 2 are closed to the extent this environment allows: the rendering bridge, the picking path and the
+performance baseline are documented in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md), the shell, import path and packaging in
+[UI_PLAN.md](UI_PLAN.md) and the audits in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md); the testing recipes and traps are in
+[UI_TEST_ENV.md](UI_TEST_ENV.md). The architecture status remains **proposed** until the owner freezes it — the technical
+preconditions (rendering bridge, picking, teardown, four platforms, assert-enabled run, performance baseline) are met. This
+roadmap describes planned work; no phase is marked complete by this document revision.
