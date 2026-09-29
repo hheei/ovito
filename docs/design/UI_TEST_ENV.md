@@ -562,6 +562,15 @@ This is a gap of **CI automation**, not of the D3D12 gate: the cross-API verific
 Windows x86_64 host (SSH host `kitty`, GeForce GTX 1080, Windows 11) in §5.5, where the spike passed on D3D12, on WARP and
 on Vulkan. The Windows job exists to keep that working without needing the machine at hand.
 
+**A trap that cost a CI cycle:** `install-qt-action` exports `QT_ROOT_DIR` (the Qt prefix) and the plugin/QML paths, but
+`Qt6_DIR` - which it sets for CMake - is **not** visible as an environment variable inside the steps. The Windows
+configure step therefore passed an empty `CMAKE_PREFIX_PATH` (CMake still found Qt through the `qmake` on `PATH`) and the
+smoke-test step aborted in `Split-Path ... $env:Qt6_DIR` with *Cannot bind argument to parameter 'Path' because it is
+null*, before the spike was even started. Both Windows steps use `QT_ROOT_DIR` now (with an explicit check that the Qt
+plugins directory exists), and the `${{ env.Qt6_DIR }}` uses in the Linux and macOS jobs are left as they are: they
+expand to an empty string there as well, which is harmless because the action puts the Qt libraries on
+`LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH` itself.
+
 Prerequisites that the runner images do **not** provide and that the workflow installs, each of which fails the job loudly
 if missing:
 

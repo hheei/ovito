@@ -397,7 +397,7 @@ jobs:
           cmake -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_TOOLCHAIN" `
-            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR" `
+            -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" `
             -DBOOST_ROOT="${{ github.workspace }}\.boost" -DBoost_NO_BOOST_CMAKE=ON `
             -DOVITO_BUILD_CPP_TESTS=ON `
             -DOVITO_BUILD_QML_FRONTEND=ON
@@ -435,9 +435,14 @@ jobs:
           # OVITO's build tree contains a qt.conf that points at a plugins/ directory - the layout of an installed
           # package. Qt's own plugins and its QML modules therefore have to be pointed at explicitly, or the
           # "windows" platform plugin and the QtQuick.Controls module cannot be found (UI_TEST_ENV.md 5.5).
+          # The prefix comes from QT_ROOT_DIR, which install-qt-action exports: Qt6_DIR is the variable it only sets for
+          # CMake (and which is empty in a step that reads it as an environment variable).
           # QSG_RHI_BACKEND is deliberately not set: the frontend selects Direct3D 12 itself on Windows, and this
           # step is the regression check for that.
-          $qtPrefix = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $env:Qt6_DIR))
+          $qtPrefix = $env:QT_ROOT_DIR
+          if(-not (Test-Path "$qtPrefix\plugins")) {
+            throw "Qt not found: QT_ROOT_DIR is '$qtPrefix'"
+          }
           $env:QT_PLUGIN_PATH = "$qtPrefix\plugins"
           $env:QT_QPA_PLATFORM_PLUGIN_PATH = "$qtPrefix\plugins\platforms"
           $env:QML_IMPORT_PATH = "$qtPrefix\qml"
