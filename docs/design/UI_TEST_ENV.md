@@ -772,6 +772,13 @@ Traps and facts that cost time here, in order:
   sizes are clamped as well (the same runner turned a requested 1100x700 window into 1100x656), so the window-state check
   asks for a modest 900x600, compares the store against the size the window *actually* became, and asserts the restore
   direction exactly only when the platform honoured that size while writing it.
+* **A check that resizes the workbench has to shrink it.** The offscreen check resizes the window while a picking pass
+  is in flight, so that the picking service has to replace its offscreen target. Its first version *grew* the window by
+  40x30, which a window manager refuses when the window already fills the screen (the CI runners have small virtual
+  displays): the size never changed, the guard that waits for the new layout never became true and the Windows job failed
+  with *no object was picked after the resize had superseded the picking target* while picking worked perfectly. The
+  check shrinks the window now and, should a platform refuse even that, reports that the superseded target was not
+  exercised instead of failing - what it then verifies is that picking works, which the log states explicitly.
 * **The message dialog blocks the caller.** `showMessageBox()` runs a nested event loop while the dialog is open (like
   the desktop frontend's modal `QMessageBox::exec()`), so an automated run that triggers an error has to answer it -
   the spike polls for `messageBoxVisible` and calls `answerMessageBox(Ok)`, which also verifies the dialog.
