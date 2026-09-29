@@ -851,11 +851,51 @@ The frame time of the QML frontend is only comparable when the display's refresh
   of the frame a change moved; the numbers of the per-item versus per-window renderer service are in
   [UI_PLAN.md](UI_PLAN.md) deliverable 7.
 
+### 9.2.3 Testing the shell's parity surfaces
+
+`--qml-parity-check` verifies the surfaces the shell gained for parity with the classic frontend: the menu bar (every
+entry either presents a command of the shared command layer or is disabled and names the phase that delivers it), the
+viewport context menu (opened with a right-click on the title label of a pane, with all four delivered actions driven and
+restored), the About dialog of the shared About command, one status-line row per running task, the remembered window
+state, and the report about the last import.
+
+Traps that cost time, in the order they were met:
+
+1. **Clicking a viewport caption**: `ViewportWindow::contextMenuArea()` is a rectangle of the *rendered frame graph*, i.e.
+   in device pixels, while a `QQuickItem` receives mouse events in device-independent coordinates - divide by
+   `window()->devicePixelRatio()`. The check waits (up to 5 s) for an item whose caption area is non-empty, because the
+   area is only known after the viewport has rendered a frame graph, and because the viewport items are rebuilt when the
+   data set or the layout changes (so never hold an item pointer across steps, and never wait for one either).
+2. **Creating a progress record from a timer**: `TaskProgress`'s constructor and its setters call
+   `this_task::throwIfCanceled()`, which dereferences a null task outside a task scope. A check that fabricates a second
+   running task for the one-row-per-task case must open a `GuiTaskScope` first (audit open item O8).
+3. **Reading the frame count of an import**: the number of source frames is discovered when the file source is evaluated,
+   which is *after* `FileSourceImporter::importFileSet()` returned. The continuation of `FileSource::requestFrameList()`
+   must be kept alive (hold the returned future in a member - a future nobody awaits cancels the continuation it carries),
+   and the `FileSource` has to be taken from `Pipeline::source()`, not by casting the `Pipeline` itself (which silently
+   makes the branch unreachable).
+4. **Asserting on a status message**: the shared `BaseViewportWindow::leaveEvent()` calls
+   `UserInterface::clearStatusBarMessage()`, so anything reported only through `statusMessage` disappears as soon as the
+   mouse leaves a viewport. The report about the last import therefore lives in a separate, persistent `importNotice`,
+   and the check asserts on that.
+5. **Menu items**: `QQuickMenuItem` toggles its own `checked` state when clicked and thereby destroys a binding, so every
+   checkable entry re-syncs from its model. The walk reads QML-declared properties (`command`, `ownerPhase`) through
+   `QQmlProperty`, because `QObject::property()` cannot see properties that only exist in QML; it recognizes entries by
+   `inherits("QQuickMenuItem")` and skips `QQuickMenuSeparator`.
+6. **Expected noise at the end of a run**: after `VERIFICATION_DONE`, `Theme.qml` logs
+   `TypeError: Cannot read property 'usingDarkTheme' of null` once per theme instance. The QML context property is being
+   torn down while the bindings re-evaluate; this is not a defect, and the QML errors of a run have to be judged before
+   that line.
+
+The evidence screenshot of this round was taken with the recipe of section 2.2 (private `Xvfb` plus `ffmpeg -f x11grab`)
+from the *product* frontend (`ovito --gui=qml <file>`, which shows the menu bar and the persistent import notice) and is
+stored as `docs/design/evidence/phase25_parity_shell.png`.
+
 ### 9.5 The CI smoke test and its render loop
 
 The Qt Quick smoke test of the GitHub workflow (`.github/workflows/ci.yml`) runs with `QSG_RENDER_LOOP=basic` on the
-two Linux jobs. It asserts that the frontend starts, renders frames, picks, lays out its panes and imports a file -
-none of which depends on the render loop - while the runner has no GPU and few CPU cores, where the threaded loop's
+two Linux jobs. It asserts that the frontend starts, renders frames, picks, lays out its panes, passes the shell's parity
+check (`--qml-parity-check`) and imports a file - none of which depends on the render loop - while the runner has no GPU and few CPU cores, where the threaded loop's
 frame synchronization is a source of flakiness rather than of signal. Both loops are part of the local verification
 (section 9.4), so the loop that is left out of CI is covered elsewhere.
 

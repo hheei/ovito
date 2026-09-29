@@ -346,8 +346,15 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      visible consequence is worth knowing while reading the screenshots of this document: the shell now renders *light*
      where the platform reports no color scheme (Xvfb), which is what the classic frontend does there.
   3. **The small parity gaps of review section 5** — each one user-visible and cheap. The rule for all of them: an item
-     that does not yet have a handler is shipped as a **disabled placeholder whose tooltip names the owning phase**, never
-     as an enabled entry that silently does nothing.
+     that does not yet have a handler is shipped as a **disabled placeholder whose text names the owning phase**, never
+     as an enabled entry that silently does nothing (a QML menu item is not an item and cannot carry a tooltip).
+     **Delivered** (audit decision D31): the workbench has an in-window menu bar bound to the shared commands and a
+     viewport context menu driven by the new `QmlViewportMenu`; the status line lists one row per running task; the window
+     size, position and maximized state are remembered through `GuiSettings`; and the last import is reported by a
+     persistent `importNotice` naming the detected format and the number of source frames. `--qml-parity-check` verifies all
+     five and runs in the four CI jobs. Two deviations from the classic frontend are deliberate and documented in D31: the
+     menu bar is drawn in the window (the native macOS menu bar would require QtWidgets, which this frontend does not
+     link) and the context menu offers Show Grid unconditionally (the classic entry exists only in an `OVITO_DEBUG` build).
      * **Viewport context menu** (currently a no-op): the classic menu is
        [ViewportMenu.cpp](../../src/ovito/gui/desktop/viewport/ViewportMenu.cpp). Drive it from the *same* shared commands
        and the viewport API, and split it by what exists today:
@@ -437,7 +444,7 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        mean four frame graphs, which is expected and may already be dominated by something else.
      * **`--gui` diagnostics** — an unknown frontend name currently prints the available names and exits 1; also list the
        names for a typo and make the message usable from a desktop launcher.
-- **Status**: **deliverables 1 and 2 are done; deliverables 3–7 are not started.** Phase 2 is complete (deliverables 1–7, exit gate
+- **Status**: **deliverables 1–3 are done; deliverables 4–7 are not started.** Phase 2 is complete (deliverables 1–7, exit gate
   verified on Linux/OpenGL, Linux/Vulkan, macOS/Metal and Windows/D3D12), so this phase starts from a verified base; the
   audit decisions it produces are recorded as D30 onward in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md). Deliverable 1 (the
   action/editor inventory in that document's section 6 plus [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md)) is delivered and
@@ -640,5 +647,5 @@ performance baseline are documented in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md),
 [UI_TEST_ENV.md](UI_TEST_ENV.md). The architecture status remains **proposed** until the owner freezes it — the technical
 preconditions (rendering bridge, picking, teardown, four platforms, assert-enabled run, performance baseline) are met. This
 roadmap describes planned work: Phases 1 and 2 are recorded as verified above, Phase 2.5 is under way with its
-first two deliverables (the parity matrix and the settings facade) delivered, and its remaining deliverables as well as
-Phases 3–9 have not started.
+first three deliverables (the parity matrix, the settings facade and the shell's parity gaps) delivered, and its remaining
+deliverables as well as Phases 3–9 have not started.

@@ -45,7 +45,7 @@ them together with what would be needed.
 | Session and data files from the command line | `GuiApplication::initializeUserInterface` (positional arguments, `defaults.ovito`) | ✅ shared: the loading path only needs a `UserInterface` | 2 (done) | `ovito --gui=qml data.xyz` imports it; a `.ovito` argument loads the session |
 | `defaults.ovito` auto-load | `GuiApplication::initializeUserInterface` via `QStandardPaths` | ✅ same shared path | 2 (done) | start with a `defaults.ovito` in the app data directory |
 | Window title and dirty marker | `DataSetContainer::filePathChanged` plus `UndoStack::cleanChanged` | ✅ `QmlWorkbenchController::windowTitle` | 2 (done) | `--qml-session-check` asserts the title follows save/load |
-| Window state persistence (size, position) | `QSettings` plus `QMainWindow::saveGeometry` | ▶ Phase 2.5 d3 through the settings facade of d2 (`GuiSettings` owns the keys and defaults) | 2.5 | launch, resize, relaunch; the geometry returns |
+| Window state persistence (size, position) | `QSettings` plus `QMainWindow::saveGeometry` | ✅ `GuiSettings` (`app/window/geometry`, `app/window/maximized`); the shell applies the remembered state before showing its window and writes it back with a 500 ms debounce | 2.5 (done) | `--qml-parity-check`: a resize reaches the settings store and a remembered geometry is applied again |
 | Minimum window size | `MainWindow` minimum size | ✅ 640x400 minimum on the `QQuickView` | 2 (done) | resize below the minimum, the layout stays usable |
 | Unsaved-changes prompt when closing | `MainWindow::closeEvent` → `askForSaveChanges` | ▶ Phase 3 d6 (the shared `WorkbenchUI::askForSaveChanges` exists, the close event still needs wiring) | 3 | close with a modified session: Yes saves, No discards, Cancel keeps the window |
 | About and Quit reachable on macOS | help menu and the native Quit | ▶ Phase 2.5 d3 (About as a small QML dialog bound to the shared command; **Preferences stays a disabled placeholder** naming Phase 7) | 2.5 | spike menu walk: `HelpAbout` and `Quit` act, `Settings` is disabled and its tooltip names Phase 7 |
@@ -59,7 +59,7 @@ them together with what would be needed.
 | One command table for both frontends | `ActionManager` (76 ids, 43 commands created there) | ✅ finding A1: `Command` is the state owner, each `QAction` a one-way view | 2 (done) | `--qml-command-check` compares `commandManager.commandList.length` with the manager's commands |
 | Commands that act in the QML shell | 23 of the 43 shared commands | ✅ | 2 (done) | the command check exercises undo, redo, delete, maximize, the viewport modes and playback |
 | Commands that still need a QML handler or placeholder | the 20 `WidgetActionManager` slots | ▶ Phase 2.5 d3 for the visible set; handlers arrive with their area (3 file/session, 4 pipeline, 5 animation, 7 render/settings) | 2.5 | menu walk: every entry is either enabled **and** acting, or disabled with a tooltip naming its phase |
-| Menu bar | `MainWindow::buildMenus` (File, Edit, View, Modify, Overlays, Rendering, Utilities, Help, …) | ▶ Phase 2.5 d3 (macOS gets the native menu bar) | 2.5 | screenshot plus the menu walk; on macOS the About/Quit entries appear in the application menu |
+| Menu bar | `MainWindow::buildMenus` (File, Edit and Help; the viewport commands live in its toolbar) | ✅ File/Edit/View/Help drawn in the window and bound to the shared commands; unimplemented entries are disabled and name their phase. Deliberate deviations: no native macOS menu bar (it needs QtWidgets), no accelerators in the items (the shell owns each shortcut once) and a View menu the classic frontend does not have | 2.5 (done) | `--qml-parity-check` walks every entry: enabled entries present a command, disabled ones name a phase |
 | Shortcut ownership (one owner per `QKeySequence`) | `QAction` shortcuts | ▶ Phase 2.5 d3 (the shell currently installs four: Ctrl+O, Ctrl+Z, redo, Ctrl+Shift+M) | 2.5 | no two commands share a sequence; every presented command is reachable by keyboard |
 | Quick command search | `SearchActions` (`ACTION_COMMAND_QUICK_SEARCH`) | ▶ Phase 8 (command palette; the preview belongs to the palette phase) | 8 | — |
 | Toolbar and action cards | `MainWindow` toolbar, `ActionCardsPopup` | ▶ Phase 8 (the shell uses plain buttons; card-based discovery is an enhancement) | 8 | — |
@@ -141,7 +141,7 @@ The scope of this area is defined by the audited editors, not by reflection over
 | Rubber-band/manual selection | `ManualSelectionModifierEditor` gizmo | ▶ Phase 6 | 6 | draw a selection region in a pane |
 | Move/rotate modes (XForm) | `XFormModes` (desktop) | ▶ Phase 5 | 5 | move and rotate an object, one undo step each |
 | Dragging overlay labels | `MoveOverlayInputMode` (desktop) | ▶ Phase 5/6 | 5 | drag a text label and undo it |
-| Viewport context menu | `ViewportMenu` (12 entries) | ▶ Phase 2.5 d3 for the delivered subset (Show Grid, Constrain Rotation, View Type, Maximize/Restore), placeholders for the rest | 2.5 | spike context-menu probe: each entry's state and handler; the disabled ones name their phase |
+| Viewport context menu | `ViewportMenu` (12 entries) | ✅ `QmlViewportMenu` plus `ViewportContextMenu.qml` deliver View Type, Show Grid, Constrain Rotation and Maximize/Restore; Adjust View, Preview Mode, Window Layout, Pipeline Visibility, Create Camera and Configure Viewport Graphics are disabled placeholders naming their phase. Deviation: Show Grid is offered in release builds too, where the classic entry is inside an `#ifdef OVITO_DEBUG` block | 2.5 (done) | `--qml-parity-check` right-clicks the title label of a pane, drives all four delivered actions and restores them |
 | Split and remove viewport ("Window Layout") | `ViewportsPanel::showSplitterContextMenu` | ▶ Phase 4 d5 | 4 | split horizontally/vertically, remove, each with undo and with correct window/item teardown |
 | Create camera | `ViewportMenu::onCreateCamera` | ▶ Phase 4 d6 | 4 | create, verify the view is unchanged, undo removes the node |
 | Per-viewport graphics settings | `ConfigureViewportGraphicsDialog` over the shared registry (A2) | ▶ Phase 7 (the registry is shared, the dialog is not) | 7 | switch the renderer from the shell; an unavailable renderer falls back with one warning |
@@ -157,7 +157,7 @@ The scope of this area is defined by the audited editors, not by reflection over
 | Keyframe markers and their editing (select, move, delete) | `AnimationTrackBar` plus `AnimationKeyEditorDialog` | ▶ Phase 5 d1/d3 | 5 | add, move and delete keys with undo; the dialog's list matches the track |
 | Parameter animation from the inspector | numeric editor plus the key-editor button | ▶ Phase 5 d3 | 5 | animate a modifier parameter; the key list and the animated value agree |
 | Animation settings (interval, auto-adjust, FPS, loop, playback rate) | `AnimationSettingsDialog` | ▶ Phase 5 d2 | 5 | change the interval and the rate; auto-adjust on a trajectory |
-| Auto key mode | `ACTION_ANIMATION_TOGGLE_RECORDING` with wiring in `WorkbenchUI` | ✅ wiring shared (the visible toggle arrives with the menu bar) | 2 (done) / 2.5 for the toggle's UI | toggle it, change a property, a key appears |
+| Auto key mode | `ACTION_ANIMATION_TOGGLE_RECORDING` with wiring in `WorkbenchUI` | ✅ wiring shared and the menu bar presents the toggle | 2.5 (done) | toggle it, change a property, a key appears |
 
 ### 3.9 Render settings and output
 
@@ -220,7 +220,7 @@ The scope of this area is defined by the audited editors, not by reflection over
 
 | Capability | Classic reference | Qt Quick | Phase | Acceptance case |
 |---|---|---|---|---|
-| Keyboard shortcuts for the presented commands | `QAction` shortcuts | ▶ Phase 2.5 d3 (the menu bar owns them, one owner per sequence) | 2.5 | menu walk plus a duplicate-sequence check |
+| Keyboard shortcuts for the presented commands | `QAction` shortcuts | ✅ the shell's central `Shortcut` objects are the only owner of each sequence and the menu items deliberately show none, so a command cannot fire twice | 2.5 (done) | the command check triggers the commands; the menu walk asserts the items carry no shortcut |
 | Keyboard focus order | Qt widget focus chain | ▶ Phase 2.5 d3 (import control → panes → status bar) | 2.5 | tab through the shell without dead ends; the first focus stop is the import control |
 | Screen-reader names and roles | `QWidget` accessible names | ▶ Phase 8 (recorded as an enhancement, not parity) | 8 | — |
 | HiDPI scaling | `devicePixelRatio` handling | ✅ measured (picking uses device pixels, like the classic pick radius) | 1 (done) | `QT_SCALE_FACTOR=1.5` and `=2` runs |
@@ -234,6 +234,8 @@ The scope of this area is defined by the audited editors, not by reflection over
 | Selection shared between pipeline, viewport and inspector | `SelectionSet` | ▶ Phase 4 (rest of A5) | 4 | select in one place, all three agree |
 | File drag & drop | `MainWindow::dropEvent` | ✅ | 2 (done) | see 3.3 |
 | Pipeline item drag & drop | `PipelineListModel::performDragAndDropOperation` | ▶ Phase 4 | 4 | see 3.4 |
+| Import diagnostics (detected format and frame count) | none - the classic frontend reports nothing but the pipeline title | ✅ a persistent `importNotice` on the workbench controller names the format the file was read as and, once the file source is evaluated, the number of source frames | 2.5 (done) | `--qml-parity-check` imports an XYZ file whose comment mentions atoms (defect F6): the notice names "LAMMPS Data" and 1 source frame while the scene stays empty |
+| One progress row per running task | one aggregate bar (`TaskDisplayWidget` reads `TaskProgressModel::activeText()/activeValue()`) | ✅ one row per `TaskProgressModel` row in the status line; per-task cancellation is **not** supported | 2.5 (done) | `--qml-parity-check` holds two progress records and asserts two rows appear |
 | Long-running operation can be cancelled, half-done work is removed | `ProgressDialog` plus `OperationCanceled` handling | ✅ shell-level; per-task cancellation is **not** supported because `TaskProgress` carries no task handle | 2 (done) | the import check's cancellation case |
 | Thread-safety of presentation-layer callbacks | — | ✅ `GuiTaskScope` opens a bound task for QML entry points (fix O8) | 2 (done) | assert-enabled spike run |
 | Deployed-tree resource loading | CMake install layout | ✅ verified on Linux (installed prefix: the QML frontend renders the scene, the classic frontend loads its plugins and creates its windows), macOS bundle and Windows build tree | 2.5 (done) | `cmake --install` into a prefix and run both frontends from there ([UI_TEST_ENV.md](UI_TEST_ENV.md) §2.3) |
