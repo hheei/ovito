@@ -99,8 +99,12 @@ void WorkbenchUI::importFiles(const std::vector<QUrl>& urls, const FileImporterC
     // Find out how the imported data should be merged into the current scene.
     const FileImporter::ImportMode importMode = determineImportMode(scene, urls, urlImporters.front().second.get());
 
-    // Run the import operation.
-    runFileImport(*urlImporters.front().second, scene, std::move(urlImporters), importMode);
+    // Run the import operation. The first element is copied into a reference before the vector is moved into the
+    // call, because a compiler may evaluate the arguments of a function call in any order: MSVC moves the vector
+    // first, after which `urlImporters.front()` would read from the emptied container (a null dereference - see
+    // defect F13 in docs/design/UI_PHASE1_SPIKE.md).
+    FileImporter& importer = *urlImporters.front().second;
+    runFileImport(importer, scene, std::move(urlImporters), importMode);
 
     if(importMode == FileImporter::ResetScene) {
         undoStack()->clear();

@@ -5,6 +5,7 @@
 OVITO_STANDARD_PLUGIN(GuiBase
     SOURCES
         app/GuiFrontendRegistry.cpp
+        app/GuiTaskScope.cpp
         app/WorkbenchUI.cpp
         app/TaskProgressModel.cpp
         actions/ActionManager.cpp

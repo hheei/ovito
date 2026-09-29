@@ -73,6 +73,13 @@ void QmlMainWindowUI::initializeWindow()
 {
     OVITO_ASSERT(!_view);
 
+#ifdef Q_OS_WIN
+    // Direct3D 11 - the backend Qt Quick picks by default on Windows - cannot use the shaders that OVITO's renderer
+    // ships, because they are baked for HLSL shader model 6.0 and contain no 5.0 variant. Direct3D 12 is the backend
+    // of the Windows platform matrix of this project anyway (see AGENTS.md), so select it before the window exists.
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D12);
+#endif
+
     // Create the window that displays the workbench UI.
     auto* view = new QQuickView();
     view->setResizeMode(QQuickView::SizeRootObjectToView);

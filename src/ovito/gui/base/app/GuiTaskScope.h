@@ -41,8 +41,11 @@ class OVITO_GUIBASE_EXPORT GuiTaskScope
 public:
 
     /// Opens a task context for the given user interface.
-    explicit GuiTaskScope(UserInterface& userInterface, bool isInteractive = true) :
-        _operation(userInterface, MainThreadOperation::Bound, isInteractive) {}
+    explicit GuiTaskScope(UserInterface& userInterface, bool isInteractive = true);
+
+    /// Closes the task context. Defined out of line, because MSVC needs the symbol of a class that is imported from
+    /// another DLL even when it would be trivial to generate it in every translation unit (see defect F13).
+    ~GuiTaskScope();
 
     /// Returns the task that provides the context. Cancelling it cancels the work the callback started.
     const TaskPtr& task() const { return _operation.task(); }
