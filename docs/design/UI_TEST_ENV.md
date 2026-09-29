@@ -768,6 +768,60 @@ Traps:
   a single-frame scene), so the check imports a small trajectory of its own when the workbench shows a static structure -
   otherwise a healthy command is reported as broken just because the test data has one frame.
 
+### 9.4 Frame-time measurements of the Qt Quick viewport
+
+The frame time of the QML frontend is only comparable when the display's refresh rate is out of the picture:
+
+* `QSG_NO_VSYNC=1` removes the refresh-rate cap of the Qt Quick render loop. Without it every configuration that can keep up
+  reports the same number (60 Hz on a 60 Hz display), which hides both regressions and improvements.
+* `QSG_RENDER_LOOP=basic` removes the scene graph's own threading and is the loop in which a change of the rendering path
+  shows up most clearly; measure both loops, because a change can affect them differently.
+* Measure medians of at least three runs per configuration and per dataset size, and keep the window size and the dataset
+  identical. The interesting sizes are a small scene (a few hundred atoms - the frame is dominated by the fixed cost of the
+  four viewports) and a large one (tens of thousands of atoms - the frame is dominated by the geometry).
+* A headless Linux recipe: `xvfb-run -a --server-args="-screen 0 1400x900x24"` with `QT_QPA_PLATFORM=xcb`,
+  `QSG_NO_VSYNC=1` and the spike's `--qml-frame-stats 2000`. Both loops and both dataset sizes are needed to see which part
+  of the frame a change moved; the numbers of the per-item versus per-window renderer service are in
+  [UI_PLAN.md](UI_PLAN.md) deliverable 7.
+
+### 9.5 The CI smoke test and its render loop
+
+The Qt Quick smoke test of the GitHub workflow (`.github/workflows/ci.yml`) runs with `QSG_RENDER_LOOP=basic` on the
+two Linux jobs. It asserts that the frontend starts, renders frames, picks, lays out its panes and imports a file -
+none of which depends on the render loop - while the runner has no GPU and few CPU cores, where the threaded loop's
+frame synchronization is a source of flakiness rather than of signal. Both loops are part of the local verification
+(section 9.4), so the loop that is left out of CI is covered elsewhere.
+
+Note that CTest runs *before* the smoke test in those jobs, and that a job which fails in the smoke test reports the
+spike's exit code: the spike exits non-zero when one of its checks fails, and a crash of the process (139) is not a
+check failure but a defect of its own.
+
+### 9.6 Reviewing these documents with an LLM review CLI
+
+The design documents in this directory can be reviewed by `ocr` (open-code-review). Three traps cost a round each and are
+worth knowing before the next pass:
+
+* **Markdown is filtered out.** `ocr review --preview` lists `docs/design/UI_PLAN.md` as `unsupported_ext`, and a `--rule`
+  cannot override the built-in extension check (`ocr scan --path …` rejects it too). Workaround: copy the documents
+  *verbatim* to `ocrplan/<name>.ts` — verbatim, so the reported line numbers map straight back to the real file — and stage
+  the copies with `git add -N`, because untracked files are only picked up once git knows them. `.ocr-review/` is git-ignored
+  and therefore invisible to the review; do not use that directory. Delete the copies afterwards (`git reset -q ocrplan`,
+  `rm -rf ocrplan`).
+* **The code-oriented default rule is the wrong lens.** Point `--rule` at a rule file whose `**/ocrplan/*.ts` entry states
+  that the file is a Markdown plan (not code, the extension is only a filter workaround) and lists the axes to judge it on:
+  internal consistency, ownership of every item by exactly one phase, verifiability of each exit gate, existence of the
+  named files/classes/decisions/options, risk and sequencing, and actionability.
+* **It reads the repository, so keep every claim checkable.** A finding is only useful because the reviewers can open the
+  named sources — a plan sentence naming a class, file or defect number *is* verified against the tree. Treat a finding
+  about a missing or misnamed reference as a defect in the document, and expect real ones: two review passes on these
+  documents produced 19 and then 12 findings, including a deliverable that promised three menu entries while only two had
+  handlers, and a "deferred to phase X" item whose phase did not list it.
+
+Practicalities: one pass over two documents takes roughly 6–12 minutes and about 1.5 M tokens, `--audience agent` plus
+`--output <file>` keeps the text reviewable afterwards (never pipe it through `tail`), and the run must be started detached
+(`setsid nohup ocr review … &`) because a tool call in this environment is terminated before the review finishes. Poll it
+with plain sleeps, not with a wait tool.
+
 ## 10. Quick checklist
 
 1. Build the frontend: `cmake --preset native -DOVITO_BUILD_QML_FRONTEND=ON && cmake --build --preset native -j 16`.
@@ -784,31 +838,3 @@ Traps:
 8. Screenshots: `--qml-hold-ms` + a private `Xvfb` display + `ffmpeg -f x11grab` (§2.2); never `grabWindow()` (§9).
 9. Windows/D3D12 and further macOS coverage: push the work to a `feature/**` branch and read the CI smoke-test logs
    (§6). The CI smoke test verifies numerically (frame statistics, picking, layout) and uploads no screenshot.
-
-### 9.5 Frame-time measurements of the Qt Quick viewport
-
-The frame time of the QML frontend is only comparable when the display's refresh rate is out of the picture:
-
-* `QSG_NO_VSYNC=1` removes the refresh-rate cap of the Qt Quick render loop. Without it every configuration that can keep up
-  reports the same number (60 Hz on a 60 Hz display), which hides both regressions and improvements.
-* `QSG_RENDER_LOOP=basic` removes the scene graph's own threading and is the loop in which a change of the rendering path
-  shows up most clearly; measure both loops, because a change can affect them differently.
-* Measure medians of at least three runs per configuration and per dataset size, and keep the window size and the dataset
-  identical. The interesting sizes are a small scene (a few hundred atoms - the frame is dominated by the fixed cost of the
-  four viewports) and a large one (tens of thousands of atoms - the frame is dominated by the geometry).
-* A headless Linux recipe: `xvfb-run -a --server-args="-screen 0 1400x900x24"` with `QT_QPA_PLATFORM=xcb`,
-  `QSG_NO_VSYNC=1` and the spike's `--qml-frame-stats 2000`. Both loops and both dataset sizes are needed to see which part
-  of the frame a change moved; the numbers of the per-item versus per-window renderer service are in
-  [UI_PLAN.md](UI_PLAN.md) deliverable 7.
-
-### 9.6 The CI smoke test and its render loop
-
-The Qt Quick smoke test of the GitHub workflow (`.github/workflows/ci.yml`) runs with `QSG_RENDER_LOOP=basic` on the
-two Linux jobs. It asserts that the frontend starts, renders frames, picks, lays out its panes and imports a file -
-none of which depends on the render loop - while the runner has no GPU and few CPU cores, where the threaded loop's
-frame synchronization is a source of flakiness rather than of signal. Both loops are part of the local verification
-(section 9.5), so the loop that is left out of CI is covered elsewhere.
-
-Note that CTest runs *before* the smoke test in those jobs, and that a job which fails in the smoke test reports the
-spike's exit code: the spike exits non-zero when one of its checks fails, and a crash of the process (139) is not a
-check failure but a defect of its own.

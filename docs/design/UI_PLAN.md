@@ -401,7 +401,7 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      in flight, a superseded request must neither deadlock nor read a freed target, and releasing the resources with a
      request in flight must fail loudly rather than silently. Render *settings* and the output dialog remain Phase 7.
   7. **Measurement-driven viewport optimization pass** (each item decided by numbers, not by intuition; method in
-     [UI_TEST_ENV.md](UI_TEST_ENV.md) section 9.5 — `QSG_NO_VSYNC=1`, both render loops, medians of three runs at 512 and
+     [UI_TEST_ENV.md](UI_TEST_ENV.md) section 9.4 — `QSG_NO_VSYNC=1`, both render loops, medians of three runs at 512 and
      32768 atoms):
      * **Single "viewport canvas" item** — four `QQuickRhiItem`s means four offscreen textures, four pass boundaries,
        four synchronize steps and four composites per window frame; one item drawing all panes (the layout is already
