@@ -773,6 +773,32 @@ Traps:
 * **The check writes user settings**: the recently opened files are persisted in `QSettings` under `file/mru`, like the
   recent-files menu of the classic frontend does.
 
+### 9.2.2 Testing the shared settings facade
+
+`--qml-settings-check` verifies `gui/base/app/GuiSettings` (audit decision D30), the one place that owns which settings
+the workbenches persist and with which default:
+
+* the QML scene reaches the facade (`guiSettings.usingDarkTheme`) and the shell's theme resolves to the *same* value
+  (`workbench.darkTheme`) - that is what proves the palette follows the shared rule instead of the shell deciding for
+  itself;
+* every accessor round-trips: the window rectangle and the maximized flag of a frontend without widgets, the opaque
+  `QWidget` blobs of the classic main window, the directory-history flag, the preferred file dialog, the session-file
+  directory, the per-dialog-class directory history and the flags the first start sets (GPU adapter confirmation, and the
+  multi-file import mode in a professional build).
+
+Traps:
+
+* **The check writes to the settings store**, so it restores every value it changes. One entry stays behind: the directory
+  history of a file-dialog class that exists only for this check (`spike-settings-check`). Run the spike with an isolated
+  `XDG_CONFIG_HOME` (section 2.2) to keep the store untouched. Because the setters treat an empty value as "nothing
+  stored" and remove the key, a check run adds no empty entries to a fresh settings file.
+* **Following the system color scheme is compulsory on Linux and macOS**, so the stored flag cannot be flipped there and
+  the check only asserts that it is on; its round trip runs on Windows and in the CI jobs.
+* **The color scheme decides the palette of the shell.** Where the platform reports no scheme at all
+  (`Qt::ColorScheme::Unknown`, which is what Xvfb reports) both frontends are *light*. Screenshots taken before Phase 2.5
+  therefore show a dark shell and newer ones a light one; the viewport pixels are unaffected, the surrounding chrome is
+  not - compare captures across that change with care.
+
 ## 9.3 Testing the shared command layer
 
 The commands of the workbench live in `gui/base` and are the objects both frontends use (`ovito::Command`, audit
@@ -805,6 +831,9 @@ Traps:
   playback if the animation interval holds more than one frame (`SceneAnimationPlayback::startAnimationPlayback` refuses
   a single-frame scene), so the check imports a small trajectory of its own when the workbench shows a static structure -
   otherwise a healthy command is reported as broken just because the test data has one frame.
+* **The check needs a scene object to rename.** Its transaction edit renames the current scene node, so a run without a
+  data file - `ovito-qml-spike --qml-command-check` with the empty default scene - fails with "the scene has no object to
+  rename". Pass a data file (the CI smoke test does) or run the other checks without this one.
 
 ### 9.4 Frame-time measurements of the Qt Quick viewport
 
@@ -869,8 +898,9 @@ with plain sleeps, not with a wait tool.
 5. Lifecycle: `--qml-lifecycle-cycles N`, `--qml-hide-show`, `--qml-resize WxH`.
    Import path: `--qml-import-check` (trajectory, unsupported file, cancelled import; see §9.1).
    Command layer: `--qml-command-check` (the commands the QML workbench sees, their state rules and their handlers;
-   see §9.3). Workbench state: the shared task progress model is covered by `--qml-import-check` (§9.2) and the session
-   workflow by `--qml-session-check` (§9.2.1).
+   see §9.3). Workbench state: the shared task progress model is covered by `--qml-import-check` (§9.2), the session
+   workflow by `--qml-session-check` (§9.2.1) and the settings facade by `--qml-settings-check` (§9.2.2). Pass a data
+   file when the command and pick checks are part of the run, because they need a scene object.
 6. Frame rate: `--qml-frame-stats MS` (state vsync and the render loop; only compare equal configurations).
 7. Non-Linux validation: run the same commands on the macOS host (§5) — and **close the windows afterwards** (§5.3).
 8. Screenshots: `--qml-hold-ms` + a private `Xvfb` display + `ffmpeg -f x11grab` (§2.2); never `grabWindow()` (§9).

@@ -339,7 +339,12 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      of the keys the frontends persist (window geometry, renderer selection is already in `ViewportRendererRegistry`,
      per-dialog directory history, UI theme), so neither frontend names storage paths itself. This is deliverable 2 and
      not deliverable 3 on purpose: the window state of deliverable 3 persists through it. The *session* UI stays in
-     Phase 3 deliverable 6, and the selection/hover model in Phase 4.
+     Phase 3 deliverable 6, and the selection/hover model in Phase 4. **Delivered** as `gui/base/app/GuiSettings` (audit
+     decision D30): the facade owns the color-scheme policy, the window state of both kinds of frontend, the file-dialog
+     behavior and the first-start flags, the QML shell reads its palette from it through the `guiSettings` context
+     property, and `--qml-settings-check` verifies both the reachability from QML and the round trip of every value. One
+     visible consequence is worth knowing while reading the screenshots of this document: the shell now renders *light*
+     where the platform reports no color scheme (Xvfb), which is what the classic frontend does there.
   3. **The small parity gaps of review section 5** — each one user-visible and cheap. The rule for all of them: an item
      that does not yet have a handler is shipped as a **disabled placeholder whose tooltip names the owning phase**, never
      as an enabled entry that silently does nothing.
@@ -432,12 +437,13 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        mean four frame graphs, which is expected and may already be dominated by something else.
      * **`--gui` diagnostics** — an unknown frontend name currently prints the available names and exits 1; also list the
        names for a typo and make the message usable from a desktop launcher.
-- **Status**: **deliverable 1 is done; deliverables 2–7 are not started.** Phase 2 is complete (deliverables 1–7, exit gate
+- **Status**: **deliverables 1 and 2 are done; deliverables 3–7 are not started.** Phase 2 is complete (deliverables 1–7, exit gate
   verified on Linux/OpenGL, Linux/Vulkan, macOS/Metal and Windows/D3D12), so this phase starts from a verified base; the
   audit decisions it produces are recorded as D30 onward in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md). Deliverable 1 (the
   action/editor inventory in that document's section 6 plus [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md)) is delivered and
   verified: writing it also ran the installed-tree check of §2.3 of UI_TEST_ENV.md, fixed defect F17, and corrected a
-  testing recipe that had been recorded as working without ever having worked.
+  testing recipe that had been recorded as working without ever having worked. Deliverable 2 (the settings facade, D30) is
+  delivered as well, with its check running in all four CI jobs.
 - **Non-goals** (each assigned to a phase where its semantics are already being changed, so they are not silently lost):
   * **A3** (one asynchronous pick API) belongs to Phase 5: it changes the `pick()` contract that `SelectionMode`,
     `NavigationModes` and `XFormModes` call on every mouse move, and the classic frontend's blocking behaviour has to be
@@ -634,4 +640,5 @@ performance baseline are documented in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md),
 [UI_TEST_ENV.md](UI_TEST_ENV.md). The architecture status remains **proposed** until the owner freezes it — the technical
 preconditions (rendering bridge, picking, teardown, four platforms, assert-enabled run, performance baseline) are met. This
 roadmap describes planned work: Phases 1 and 2 are recorded as verified above, Phase 2.5 is under way with its
-first deliverable (the parity matrix) delivered, and its remaining deliverables as well as Phases 3–9 have not started.
+first two deliverables (the parity matrix and the settings facade) delivered, and its remaining deliverables as well as
+Phases 3–9 have not started.

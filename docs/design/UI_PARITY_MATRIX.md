@@ -45,7 +45,7 @@ them together with what would be needed.
 | Session and data files from the command line | `GuiApplication::initializeUserInterface` (positional arguments, `defaults.ovito`) | ✅ shared: the loading path only needs a `UserInterface` | 2 (done) | `ovito --gui=qml data.xyz` imports it; a `.ovito` argument loads the session |
 | `defaults.ovito` auto-load | `GuiApplication::initializeUserInterface` via `QStandardPaths` | ✅ same shared path | 2 (done) | start with a `defaults.ovito` in the app data directory |
 | Window title and dirty marker | `DataSetContainer::filePathChanged` plus `UndoStack::cleanChanged` | ✅ `QmlWorkbenchController::windowTitle` | 2 (done) | `--qml-session-check` asserts the title follows save/load |
-| Window state persistence (size, position, theme) | `QSettings` plus `QMainWindow::saveGeometry` | ▶ Phase 2.5 d3 through the settings facade of d2 | 2.5 | launch, resize, relaunch; the geometry and theme return |
+| Window state persistence (size, position) | `QSettings` plus `QMainWindow::saveGeometry` | ▶ Phase 2.5 d3 through the settings facade of d2 (`GuiSettings` owns the keys and defaults) | 2.5 | launch, resize, relaunch; the geometry returns |
 | Minimum window size | `MainWindow` minimum size | ✅ 640x400 minimum on the `QQuickView` | 2 (done) | resize below the minimum, the layout stays usable |
 | Unsaved-changes prompt when closing | `MainWindow::closeEvent` → `askForSaveChanges` | ▶ Phase 3 d6 (the shared `WorkbenchUI::askForSaveChanges` exists, the close event still needs wiring) | 3 | close with a modified session: Yes saves, No discards, Cancel keeps the window |
 | About and Quit reachable on macOS | help menu and the native Quit | ▶ Phase 2.5 d3 (About as a small QML dialog bound to the shared command; **Preferences stays a disabled placeholder** naming Phase 7) | 2.5 | spike menu walk: `HelpAbout` and `Quit` act, `Settings` is disabled and its tooltip names Phase 7 |
@@ -211,7 +211,7 @@ The scope of this area is defined by the audited editors, not by reflection over
 
 | Capability | Classic reference | Qt Quick | Phase | Acceptance case |
 |---|---|---|---|---|
-| Light and dark appearance following the OS | `OvitoStyle` plus the Qt palette | ✅ `Theme.qml` selects by `Application.styleHints.colorScheme` | 2 (done) | screenshots in both schemes; contrast of text and controls |
+| Light and dark appearance following the OS | `OvitoStyle` plus `GuiApplication::usingDarkTheme()` | ✅ the shell's `Theme.qml` resolves the scheme through the shared `GuiSettings`, so both frontends follow one rule | 2.5 (done) | with the platform reporting a dark scheme the shell is dark and with a light one it is light; a platform that reports none counts as light in both frontends |
 | Same icon set as the classic frontend | `gui/base/resources/icons` (shared assets) | ▶ Phase 2.5 d5 (the shell currently draws its own glyphs for maximize/restore) | 2.5 | the shell's buttons use the shared icon resources; a capture shows the same glyphs as the classic toolbar |
 | Theme and font selection | `GeneralSettingsPage`, `FontSelectionDialog` | ▶ Phase 7 (settings dialog) | 7 | switch the theme and the font size; the shell follows |
 | Viewport mode cursors | `gui/base/resources/cursor` (shared) | ✅ through the shared modes | 1 (done) | each mode shows its cursor |

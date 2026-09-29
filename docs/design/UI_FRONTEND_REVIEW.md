@@ -2,8 +2,8 @@
 
 > **Companion documents**: [UI_DESIGN.md](UI_DESIGN.md), [UI_PLAN.md](UI_PLAN.md), [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md), [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md), [UI_TEST_ENV.md](UI_TEST_ENV.md)
 >
-> **Status**: Partly implemented. A1 (command layer), the first half of A5 (recent files list, shared task progress
-> model, session workflow) and A2 in reduced form (viewport renderer registry) are in the tree; the remaining items are
+> **Status**: Partly implemented. A1 (command layer), A5 (recent files list, shared task progress model, session workflow
+> and the settings facade) and A2 in reduced form (viewport renderer registry) are in the tree; the remaining items are
 > collected as **Phase 2.5** of [UI_PLAN.md](UI_PLAN.md). Measurements were taken on the Linux/OpenGL host described in
 > UI_TEST_ENV.md unless noted.
 
@@ -284,8 +284,10 @@ thread. The QML render output planned for Phase 7 and the classic render output 
 it instead of walking the task list, and the classic `TaskDisplayWidget` reads the same model), and the session workflow
 (save, save-as, modified state, "save the changes?") lives in `WorkbenchUI` with the file dialog behind a hook
 (D28) - the classic main window keeps its `QFileDialog`, and the Qt Quick shell only has to bind its own dialog to the
-same operations. Still to do: that QML binding (a parity gap of its own), a selection model for the pipeline view
-(Phase 4), and a settings facade. A finding to keep in mind while building them: a `TaskProgress` record is registered with the `UserInterface` of
+same operations. Still to do: that QML binding (a parity gap of its own) and a selection model for the pipeline view
+(Phase 4) — the settings facade is done as `gui/base/app/GuiSettings` (D30), which owns the keys, the defaults and the
+value formats of everything the shell persists and gives the Qt Quick theme the same color-scheme rule the classic style
+uses. A finding to keep in mind while building them: a `TaskProgress` record is registered with the `UserInterface` of
 its *task*, so an operation started by the frontend (an import) reports progress, while a pipeline evaluation that a
 viewport triggered reports to no status bar at all - in either frontend.
 
