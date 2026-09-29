@@ -39,9 +39,14 @@ LAMMPS **data** importer if the second line looks like a LAMMPS header — for e
 
 ```bash
 # only the comment line differs; the atom lines are identical
-echo '512 atoms, simple cubic lattice a=3.6'  > /tmp/c.xyz   # -> "c_*.xyz [LAMMPS Data]", no particles
-sed -i '2s/.*/simple cubic lattice, a=3.6/'   /tmp/c.xyz     # -> "c_*.xyz [XYZ]", 512 particles
+cp /tmp/lattice.xyz /tmp/c.xyz
+sed -i '2s/.*/512 atoms, simple cubic lattice a=3.6/' /tmp/c.xyz   # -> "c_*.xyz [LAMMPS Data]", no particles
+sed -i '2s/.*/simple cubic lattice, a=3.6/'           /tmp/c.xyz   # -> "c_*.xyz [XYZ]", 512 particles
 ```
+
+An XYZ file needs the atom-count line *and* the atom lines for the misdetection to be visible: a file that holds only the
+comment line is not a data file at all and reports an import error instead (`ovito-qml-spike --qml-parity-check` writes
+its fixture as `8` / `8 atoms` / `Ar 0 0 0` and asserts that the notice names the format it was read as).
 
 The visible symptom is a picking check that finds nothing (there is nothing to pick), not an import error. The spike
 prints the imported pipelines and their detected format as `DATASET "… [XYZ]"` lines for exactly this reason — check
@@ -61,8 +66,11 @@ them first when a picking check fails. The recipe above therefore uses `Lattice 
 ```bash
 LD_LIBRARY_PATH="$PWD/.qt/6.10.2/gcc_64/lib" QT_QPA_PLATFORM=xcb timeout 300 \
   xvfb-run -a --server-args="-screen 0 1280x800x24" \
-  ./build-native/bin/ovito-qml-spike --qml-capture /tmp/shot.png --qml-capture-delay 4000 /tmp/lattice_512.xyz
+  ./build-native/bin/ovito-qml-spike --qml-startup-delay 4000 --qml-hold-ms 10000 /tmp/lattice_512.xyz
 ```
+
+A screenshot is taken from outside the process while it holds the window open (§2.2): the spike has no capture option of
+its own any more, because `QQuickWindow::grabWindow()` is unreliable with `QQuickRhiItem` viewports.
 
 ### 1.1 Picking checks: the probe must not alias with the scene
 
@@ -187,9 +195,11 @@ classic one, add the settings file of §3.2. Measured on this machine (Phase 2.5
   window appears, but the viewport stays black/empty and no `endFrame()` ever happens. Do not conclude from a surviving
   process that the classic viewport works.
 * Forcing the software ICD (`VK_ICD_FILENAMES=lvp_icd.json`) fails earlier with
-  `Failed to create Vulkan instance: -9` (`VK_ERROR_INCOMPATIBLE_DRIVER`), because OVITO still creates its
-  `QVulkanInstance` with `apiVersion = 0` (finding F3/O2). RADV tolerates this with a validation warning; lavapipe
-  rejects it. This makes O2 more than a cosmetic issue.
+  `Failed to create Vulkan instance: -9` (`VK_ERROR_INCOMPATIBLE_DRIVER`). This did **not** come from the missing
+  `apiVersion`, which finding O2 fixed (`GraphicsApi::configureVulkanApiVersion()` asks for
+  `QVulkanInstance::supportedApiVersion()` before `create()`): a probe that creates a `QVulkanInstance` with and without
+  an api version fails the same way, so the failure is caused by the platform integration of this environment (no
+  compositor/DRI3) rather than by OVITO's instance setup.
 * Therefore: **frame-rate or pixel comparisons between the classic frontend and the Qt Quick frontend must be done on a
   machine with a real display** (here: the macOS host), and the picking/rendering checks of the Qt Quick frontend should
   be done with the Qt Quick backend that works in the environment at hand.
@@ -366,9 +376,11 @@ ssh kings@buddy 'QT_QPA_PLATFORM=cocoa DYLD_FRAMEWORK_PATH=$HOME/Qt/6.10.2/macos
 
 * `QT_QPA_PLATFORM=cocoa` is the default; no `launchctl asuser` trick is needed when the user owns the console session.
 * Harmless noise in such runs: `qt.gui.icc: fromIccProfile: failed size sanity 1`, `PasteBoard: Error creating pasteboard`.
-* `QScreen::grabWindow()` returns a 0×0 image on macOS unless the process has screen-recording permission. Use
-  `QQuickWindow::grabWindow()` instead (it re-renders through QRhi and does not need that permission), which is what the
-  spike's `--qml-capture` does.
+* `QScreen::grabWindow()` returns a 0×0 image on macOS unless the process has screen-recording permission, and
+  `QQuickWindow::grabWindow()` is not an alternative for this frontend (it crashes or returns an empty image with
+  `QQuickRhiItem` viewports, §2.2). On this host a screenshot of a Qt Quick run is therefore **not possible from an SSH
+  session**; the proof that the frontend works is its exit code, its check output and the on-device captures taken from a
+  console session.
 * Use the framework-based Qt: `CMAKE_PREFIX_PATH=$HOME/Qt/6.10.2/macos` works, private headers live inside the frameworks
   (e.g. `QtQuick.framework/Headers/6.10.2/QtQuick/private/qquickrhiitem_p.h`).
 * **Qt itself must be on the loader path in the build tree**; the OVITO plugins no longer need to be (the `@rpath`
@@ -378,11 +390,11 @@ ssh kings@buddy 'QT_QPA_PLATFORM=cocoa DYLD_FRAMEWORK_PATH=$HOME/Qt/6.10.2/macos
 cd ~/ovito
 QT_QPA_PLATFORM=cocoa DYLD_LIBRARY_PATH=/Users/buddy/Qt/6.10.2/macos/lib \
   ./build-buddy/Ovito.app/Contents/MacOS/ovito-qml-spike \
-  --qml-capture /tmp/buddy.png --qml-capture-delay 4000 --qml-pick 300,300 /tmp/lattice_512.xyz
+  --qml-startup-delay 4000 --qml-pick 300,300 --qml-hold-ms 5000 /tmp/lattice_512.xyz
 ```
 
-* Retina displays report `devicePixelRatio = 2`, so `--qml-capture` writes images at twice the logical window size and all
-  four viewports render at 4× the pixel count of the same window on a non-Retina machine. Always state the pixel size and
+* Retina displays report `devicePixelRatio = 2`, so the same logical window covers four times the pixel count of a
+  non-Retina machine and all four viewports render at that size. Always state the pixel size and
   the device pixel ratio when comparing frame rates across machines (`buddy` reports `devicePixelRatio = 1`, the retired
   `mac` host reported 2).
 * `PasteBoard: Error creating pasteboard` messages from a SSH-launched GUI process are harmless.
@@ -517,23 +529,33 @@ that was reproducible is `ovito --gui=qml` with a data file.
 
 The GitHub workflow `.github/workflows/ci.yml` builds and smoke tests the Qt Quick frontend on the four target platforms,
 which is the only way to cover **Windows/D3D12** and a second macOS/Metal host without owning that hardware. Each job
-configures with `-DOVITO_BUILD_QML_FRONTEND=ON`, builds `OvitoQmlSpike` and runs it against a generated 512-atom lattice
-with `--qml-pick`, `--qml-lifecycle-cycles`, `--qml-hide-show` and `--qml-frame-stats`; the spike exits non-zero when a
-check fails, so the step is an assertion instead of a log to grep. The screenshots are uploaded as build artifacts.
+configures with `-DOVITO_BUILD_QML_FRONTEND=ON`, builds the whole tree including `OvitoQmlSpike`, and runs it against a
+generated 512-atom lattice with the full check list (`--qml-layout-check`, `--qml-command-check`, `--qml-settings-check`,
+`--qml-session-check`,
+`--qml-library-check`, `--qml-icon-check`, `--qml-offscreen-check`, `--qml-prewarm-check`, `--qml-parity-check`,
+`--qml-import-check`, `--qml-pick`, `--qml-frame-stats`, `--qml-lifecycle-cycles`, `--qml-hide-show`); the spike exits
+non-zero when a check fails, so the step is an assertion instead of a log to grep. The two Linux jobs also run a second
+step with `QT_QPA_PLATFORM=offscreen` and only `--qml-device-check`, which asserts the missing-graphics-device answer. No
+screenshots are uploaded: a `QQuickRhiItem` viewport cannot be captured from inside the process (§2.2), and the evidence
+images of this directory were taken from a private Xvfb display with ffmpeg.
 
 | Job | Qt Quick backend | OVITO picking backend | Display |
 |-----|------------------|------------------------|---------|
 | Linux x86_64 | OpenGL (llvmpipe) | Vulkan (lavapipe via `VK_DRIVER_FILES`) | `xvfb-run` + `QT_QPA_PLATFORM=xcb` |
 | Linux ARM64 | OpenGL (llvmpipe) | Vulkan (lavapipe) | same |
 | macOS ARM64 | Metal | Metal | the runner's own session |
-| Windows AMD64 | **D3D12 on WARP** (`QSG_RHI_BACKEND=d3d12`, `QSG_RHI_PREFER_SOFTWARE_RENDERER=1`) | D3D12 on WARP (D3D11 fallback) | the runner's own session |
+| Windows AMD64 | D3D12 (the frontend selects it itself) | D3D12 on WARP | the runner's own session |
 
 **Where the jobs currently stand** (as of the Phase 1 close-out): Linux x86_64, Linux ARM64 and macOS ARM64 run the full
 smoke test and pass. The Windows job **builds the whole tree** (1149/1149 targets, `ovito.exe` and `ovito-qml-spike.exe`
 included) but has not yet reached its D3D12 smoke test: the run stopped at the preceding CTest step, where five tests
 aborted with `0xc0000135`, which turned out to be the `PATH` trap described below rather than a test failure. That trap is
-fixed, but the job has not been re-run since - a D3D12 runtime result is still outstanding, and CI usage is deliberately
-kept low, so a Windows verification should be a single deliberate run rather than a debug loop.
+fixed, but the job has not been re-run since - a D3D12 runtime result from CI is still outstanding, and CI usage is
+deliberately kept low, so a Windows verification should be a single deliberate run rather than a debug loop.
+
+This is a gap of **CI automation**, not of the D3D12 gate: the cross-API verification itself was done on a physical
+Windows x86_64 host (SSH host `kitty`, GeForce GTX 1080, Windows 11) in §5.5, where the spike passed on D3D12, on WARP and
+on Vulkan. The Windows job exists to keep that working without needing the machine at hand.
 
 Prerequisites that the runner images do **not** provide and that the workflow installs, each of which fails the job loudly
 if missing:
@@ -901,7 +923,7 @@ Traps that cost time, in the order they were met:
    makes the branch unreachable).
 4. **Asserting on a status message**: the shared `BaseViewportWindow::leaveEvent()` calls
    `UserInterface::clearStatusBarMessage()`, so anything reported only through `statusMessage` disappears as soon as the
-   mouse leaves a viewport. The report about the last import therefore lives in a separate, persistent `importNotice`,
+   mouse leaves a viewport. The report about the last import therefore lives in a separate, persistent `notice`,
    and the check asserts on that.
 5. **Menu items**: `QQuickMenuItem` toggles its own `checked` state when clicked and thereby destroys a binding, so every
    checkable entry re-syncs from its model. The walk reads QML-declared properties (`command`, `ownerPhase`) through
@@ -1012,16 +1034,30 @@ Traps of this round:
    `DataSetContainer::selectionChangeComplete`, which is emitted only for a real change, so a check that wants the model
    to adopt a node has to clear the selection first.
 
-### 9.2.7 Testing the picking pre-warm and the frontend selection
+### 9.2.7 Testing the picking freshness and the frontend selection
 
-`--qml-prewarm-check` verifies that the picking buffer of a viewport catches up **on its own** after the view changed:
-it waits for the buffer of the imported scene (which has to arrive without any pick being made), moves the camera of the
-viewport and requests a repaint, waits for the buffer to notice the change and to become current again - still without a
-pick - and then asserts that the first pick after the camera move names the object the second one names. It finishes by
-counting the frames of the settled window for one second: a pre-warm that refreshed the buffer over and over would look
-like a continuous renderer here. Disabling the pre-warm (`pickingPrewarmTimeout()` as a no-op) makes the check fail with
-*"the picking buffer did not catch up with the imported scene within 20 s"*, which is how the check was shown to have
-teeth.
+`--qml-prewarm-check` verifies that the picking buffer of a viewport is refreshed **on demand** and by nothing else: it
+hovers over the center of the first viewport item repeatedly until the buffer describes the imported scene (a pick asks
+for the pass; `pick()` itself never blocks), moves the camera of the viewport and requests a repaint, waits for the buffer
+to notice the change, and then counts the frames of the settled window for one second while the buffer is behind the view
+- a viewport that refreshed itself here would fail as *"the picking buffer refreshed itself without a pick asking for
+it"*, which is the defect the automatic pre-warm was removed for (F20 of the Phase 1 report). It finishes by hovering
+again until the buffer is current and asserting that the first pick of the refreshed view names the object the second one
+names.
+
+Reaching a pick from a polling loop needs a task context of its own (`hoverPick()` opens a `GuiTaskScope` per call),
+because the callbacks of `pollUntil()` run in a Qt timer where no OVITO task is active - the same trap section 9.2.6
+describes. Note also that the first pick of a fresh viewport, and the first pick after a change of the view, are answered
+from the buffer of the previous view (or from no buffer at all), which is why the check hovers in a loop instead of
+asserting the result of a single pick.
+
+**A release-only heap corruption hides from every sanitizer.** Defect F20 of the Phase 1 report is the case that
+matters: an offscreen picking pass that overlapped a data set replacement corrupted the allocator, and it was found by
+running the scene-replacing `--qml-session-check` in a **loop in a release build** (4 of 5 runs died, 0 of 5 with the
+pre-warm removed) - not by the AddressSanitizer build (`build-asan`), valgrind, or the assert-enabled build, all of which
+completed the same run because the corrupting access is a race between threads rather than a bounds violation. When a
+crash in this frontend lands inside an unrelated allocation (`malloc()`, `QThreadPool::start()`), check the thread
+interaction around the same operation before believing the stack.
 
 Traps of this round:
 

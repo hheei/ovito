@@ -215,6 +215,11 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      behavior for an unsupported or misdetected format, and the command-line import path using the *same* code. A
      cancelled import must leave no half-imported data set behind, and the UI must stay responsive while a large file
      imports (this is the Phase 2 slice of the "launch, basic import, and task states" row of the parity matrix).
+     **Known limitation, identical in the classic frontend**: a `ResetScene` import deletes the scene's existing objects
+     as its first step (`FileSourceImporter::importFileSet()`), so cancelling an import that already began cannot restore
+     the previous scene content; what cancellation guarantees is that the objects the cancelled import created are removed
+     again (D20) and that the workbench reports the cancellation. A rollback of the deleted content would need a different
+     import transaction in the core and is not part of this plan.
   6. **Resource and packaging flow.** Move from the prototype's hand-written `qml.qrc` to the project's normal resource
      registration, keeping the deliberate decision *not* to use `qt_add_qml_module` (it conflicts with the
      `OVITO_STANDARD_PLUGIN` target and library naming recorded in the Phase 1 report), and verify that QML resources load
@@ -279,7 +284,9 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   `OVITO_BUILD_QML_FRONTEND=OFF` still builds classic and headless. Verify: window and viewport layout derived from the
   session's layout cell (including maximize and a dragged splitter that undoes), import of a real multi-frame trajectory
   including failure and cancellation, both themes, resizing and minimum size, keyboard focus order, and QML resource
-  loading from the layout the frontend is actually deployed in. That last one is verified **partly** and is recorded that
+  loading from the layout the frontend is actually deployed in. Of those, focus order is verified only in part: the shell
+  gives the Import Data button the first focus stop and `--qml-parity-check` walks it, while the full Tab order and the
+  accessibility names are not automated (the parity matrix carries the row with that status). Resource loading is verified
   way instead of as done: the macOS bundle layout passes (the spike resolves `GuiQml` through
   `@executable_path/../PlugIns/` after the O9 rpath fix) and so does the Windows one-directory build-tree layout
   (`ovito.exe`, `ovito-qml-spike.exe` and every `*.ovito.dll` next to each other, found through `QT_PLUGIN_PATH` and
@@ -351,7 +358,8 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      **Delivered** (audit decision D31): the workbench has an in-window menu bar bound to the shared commands and a
      viewport context menu driven by the new `QmlViewportMenu`; the status line lists one row per running task; the window
      size, position and maximized state are remembered through `GuiSettings`; and the last import is reported by a
-     persistent `importNotice` naming the detected format and the number of source frames. `--qml-parity-check` verifies all
+     persistent `notice` naming the detected format and the number of source frames (the property was named `importNotice`
+     while only imports reported through it; it is the workbench's one place for a report that outlives the status line). `--qml-parity-check` verifies all
      five and runs in the four CI jobs. Two deviations from the classic frontend are deliberate and documented in D31: the
      menu bar is drawn in the window (the native macOS menu bar would require QtWidgets, which this frontend does not
      link) and the context menu offers Show Grid unconditionally (the classic entry exists only in an `OVITO_DEBUG` build).
@@ -394,8 +402,13 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      * **A8.1 (done)** — `StandardRenderer` still includes `RenderThread.h` for three static calls (`pickGraphicsApi()`,
        `enumerateAdapters()`, `selectedAdapterName()`); move them behind `RendererService` or a small graphics-API
        utility, which completes the extraction started in Phase 1.
-     * **A8.2 (done)** — replace the two `dynamic_object_cast<MainWindowUI>` sites in application services with a GUI-neutral
-       "notify/confirm with details" interface next to `UserInterface::showMessageBox()`.
+     * **A8.2 (done)** — the three `dynamic_object_cast<MainWindowUI>` sites in application services were resolved with a
+       desktop-side lookup instead of a new interface: `MainWindow::activeMainWindow()` (built on the existing
+       `MainWindow::visitMainWindows()`) returns the classic workbench when the current `UserInterface` is one, and null
+       under the QML or console frontend, so `NewGraphicsSystemService` and `UpdateNotificationService` return early
+       rather than opening a widget dialog. A GUI-neutral notification interface was considered and rejected: every
+       service instantiates in every build that loads the Gui plugin, and `UpdateNotificationService` reaches deep into
+       the desktop window (command panel, update dialog), which no generic message box could replace. Decision D32.
      * **A8.3 (done)** — `--noviewports` is registered by the desktop frontend and read by core
        (`core/dataset/DataSet.cpp`); make it a core-level parameter or let the frontend decide the default viewport
        configuration.
@@ -444,10 +457,12 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      render thread may touch `QRhi`, `createOffscreenTarget` returns a handle whose target is created lazily on the render
      thread, and the AO path awaits its frame from a thread pool. A service that hides those differences without naming
      them would be worse than the duplication it removes, so the interface and the phase's documentation carry the
-     protocol instead of leaving it implicit. Acceptance is a concurrency and teardown check **per entry point**: the AO
-     sampling, the picking pass, the viewport grab and the render output must each run to completion while the others are
-     in flight, a superseded request must neither deadlock nor read a freed target, and releasing the resources with a
-     request in flight must fail loudly rather than silently. Render *settings* and the output dialog remain Phase 7.
+     protocol instead of leaving it implicit. Acceptance is a concurrency and teardown check **per entry point that the
+     spike can reach**: the AO sampling, the picking pass and the render output must each run to completion while the others
+     are in flight, a superseded request must neither deadlock nor read a freed target, and releasing the resources with a
+     request in flight must fail loudly rather than silently. The classic viewport grab is deliberately **not** exercised by
+     the spike (it links no desktop code): it shares `renderImage()` with the render-output path, so what stays unverified
+     is that one call site's own timing, not the service. Render *settings* and the output dialog remain Phase 7.
      *Outcome:* the service is `core/rendering/OffscreenRenderTarget` (audit decision D34) — move-only, constructed as
      `OffscreenRenderTarget(UserInterface&, Kind)` with `Kind::Visual` or `Kind::PickingOnly`, exposing `renderImage()`,
      `renderPicking()` and `renderAmbientOcclusion()` and reusing its GPU target until the requested resolution changes.
@@ -494,10 +509,22 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      * **Picking pre-warm** — refresh the picking buffer on camera or scene change instead of on the next hover pick,
        which removes the documented one-frame staleness (review section 3.1). Frame time cannot decide this one: its
        acceptance is a **correctness and latency** check — after a camera move or a scene change, the first hover pick at
-       a known position must return the object the second pick returns, the added offscreen pass must not push the hover
-       response beyond the measured warm-path latency, and every camera change must not turn a static scene into a
-       continuous renderer. If that cannot be shown, the on-demand pick path stays and the staleness remains documented.
-       *Outcome: implemented and accepted.* `QuickViewportWindow` no longer tracks staleness with a boolean that any pass
+       a known position must return the object the second pick returns **once the view has settled** (the quiet period of
+       the implementation below; a hover within that window is the staleness that stays until Phase 5's asynchronous pick
+       API), the added offscreen pass must not push the hover response beyond the measured warm-path latency, and every
+       camera change must not turn a static scene into a continuous renderer. If that cannot be shown, the on-demand pick
+       path stays and the staleness remains documented.
+       **This item was implemented and then removed again.** The counter pair below survived; the automatic refresh did
+       not, because a picking pass that no pick asked for overlaps a replacement of the data set by the user and corrupts
+       the heap of a release build (defect F20 of the Phase 1 report: 4 crashes in 5 runs of the scene-replacing session
+       check with the pre-warm, 0 in 5 without it, and invisible to valgrind and to the sanitizer and assert-enabled
+       builds). `pick()` starts a pass and nothing else does, so the documented one-frame staleness is back and
+       `--qml-prewarm-check` (now *picking freshness*) verifies the on-demand path instead - including that a settled
+       viewport with a buffer behind the view renders nothing on its own. The classic frontend has no such race because
+       `RenderTarget::requestPick()` blocks the GUI thread; the pre-warm can only come back together with the
+       asynchronous pick API of Phase 5 (review item A3), which can cancel a pass against a scene change.
+       *Outcome of the first attempt (partly reverted).* `QuickViewportWindow` no longer tracks staleness with a boolean
+       that any pass
        cleared, but with a counter pair: `renderFrameGraph()` counts every change of the rendered contents, a completed
        pass records the counter it was rendered for, and `isPickingBufferCurrent()` answers whether the cached buffer
        belongs to the current view (a booleans-based flag could mark a buffer current that a pass rendered for a
@@ -505,10 +532,8 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        changes, a single-shot 150 ms timer is restarted; when it fires, the buffer is refreshed **if it is behind the
        view**. The delay is the whole trick: during a camera drag frame graphs arrive faster than 150 ms apart, so the
        refreshes happen once after the interaction instead of once per frame (one offscreen pass per interaction, not per
-       frame), and a hover that follows an interaction is answered from the current view. The residual window - a hover
-       *within* 150 ms after the last redraw, and a hover while a pass is in flight - is still answered from the previous
-       buffer; the honest fix for it is the asynchronous pick API of Phase 5 (review item A3), which can wait for the pass
-       instead of answering immediately, and the pre-warm is what makes the staleness the exception instead of the rule.
+       frame), and a hover that follows an interaction is answered from the current view. It turned out to be a race
+       against the scene (see the defect above), so this paragraph describes what was built, not what the tree does now.
      * **Frame-graph generation** — profile the per-frame, per-pane generation cost before optimizing it; four cameras
        mean four frame graphs, which is expected and may already be dominated by something else.
        *Outcome: measured, nothing to optimize.* With temporary instrumentation (reverted again) around
@@ -527,10 +552,10 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        free-standing modal window, and every unattended run (the CI smoke tests, the verify scripts that check `--gui`
        handling, a batch job) would wait for someone to dismiss it - for a message whose only content is a list and a
        suggestion. The message is written for both audiences instead.
-     * *Verification of deliverable 7*: the numbers, the two decided-against items and the pre-warm's acceptance are
-       documented in [UI_TEST_ENV.md](UI_TEST_ENV.md) section 9.4 (frame times) and tested by the new
-       `--qml-prewarm-check`, which runs in the four CI jobs and fails when the pre-warm is disabled.
-- **Status**: **deliverables 1–7 are done** — Phase 2.5 is complete except for the exit gate's final pass; every review item A1–A9 is in one of the three states the gate asks for (see the table in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md) section 7), and each optimization of deliverable 7 is recorded with its measured medians, including the two that were decided against. Phase 2 is complete (deliverables 1–7, exit gate
+     * *Verification of deliverable 7*: the numbers, the two decided-against items and the picking freshness are
+       documented in [UI_TEST_ENV.md](UI_TEST_ENV.md) sections 9.4 (frame times) and 9.2.7 (the check, including the
+       release-only corruption it was written for); `--qml-prewarm-check` runs in the four CI jobs.
+- **Status**: **deliverables 1–7 are done** — Phase 2.5 is complete except for the exit gate's final pass; every review item A1–A9 is in one of the three states the gate asks for (see the table in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md) section 7), and each optimization of deliverable 7 is recorded with its measured medians, including the two that were decided against and the picking pre-warm that was implemented, found to corrupt release builds (D36, defect F20) and removed again. Phase 2 is complete (deliverables 1–7, exit gate
   verified on Linux/OpenGL, Linux/Vulkan, macOS/Metal and Windows/D3D12), so this phase starts from a verified base; the
   audit decisions it produces are recorded as D30 onward in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md). Deliverable 1 (the
   action/editor inventory in that document's section 6 plus [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md)) is delivered and
@@ -723,18 +748,16 @@ These lists identify starting controls, not complete editor specifications. Incl
 
 ## 5. Immediate Next Step
 
-**Phase 2.5**, scoped above: the shared-layer cleanup and the small parity gaps, in the order of its deliverables — the
-parity matrix first (it is what says what is left), then the **settings facade**, because the window state of the visible
-gaps persists through it, then the gaps themselves, the couplings, the assets, the offscreen service, and finally the
-measurement-driven optimization pass. The action/editor inventory and the expanded parity matrix are the one genuinely
-unowned item today and are deliverable 1 of this phase; the D3D12 runtime evidence is no longer open (Phase 2 recorded it
-on hardware and through WARP) and only the RADV/DRI3 and mixed-DPI cases remain unverified by environment.
+**Phase 3**, scoped above: the workbench shell and command-layer consumption. Phase 2.5 is complete — all seven
+deliverables and the A1–A9 review items are implemented or explicitly assigned to a later phase, and its exit checks
+(automated spike checks in the four CI jobs, the classic regression runs) have been run and are recorded in this document,
+[UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md) and [UI_TEST_ENV.md](UI_TEST_ENV.md). What is *not* closed by it: the
+asynchronous pick API (A3, Phase 5), the import-options UI (A6, Phase 7), the property model (A7, Phase 4) and the
+architect/owner's freeze of the design.
 
 Phase 1 and Phase 2 are closed to the extent this environment allows: the rendering bridge, the picking path and the
 performance baseline are documented in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md), the shell, import path and packaging in
 [UI_PLAN.md](UI_PLAN.md) and the audits in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md); the testing recipes and traps are in
 [UI_TEST_ENV.md](UI_TEST_ENV.md). The architecture status remains **proposed** until the owner freezes it — the technical
 preconditions (rendering bridge, picking, teardown, four platforms, assert-enabled run, performance baseline) are met. This
-roadmap describes planned work: Phases 1 and 2 are recorded as verified above, Phase 2.5 is under way with its
-first three deliverables (the parity matrix, the settings facade and the shell's parity gaps) delivered, and its remaining
-deliverables as well as Phases 3–9 have not started.
+roadmap describes planned work: Phases 1, 2 and 2.5 are recorded as verified above, and Phases 3–9 have not started.

@@ -6,10 +6,11 @@
 > `QQuickRhiItem` renderer that uses the scene graph's own QRhi, with four simultaneous viewports and no
 > `RenderThread` in the interactive frame path. Object picking is implemented as an asynchronous offscreen pass served by
 > OVITO's `RenderThread` machinery, verified end to end (selection through `SelectionMode`). The frontend has been
-> exercised on **three** Qt Quick backends — OpenGL and Vulkan on Linux x86_64, Metal on macOS ARM64 — including hide/show,
-> resize, lifecycle and assertion-enabled runs, and a frame-rate baseline was measured against the classic frontend on
-> macOS. On the fourth target, Windows x86_64, the frontend **compiles** (the CI job builds the whole tree with MSVC) but
-> the D3D12 runtime path could not be exercised, so the architecture is **not yet frozen**.
+> exercised on **all four** target platforms — OpenGL (llvmpipe) and Vulkan (lavapipe) on Linux x86_64, Metal on macOS
+> ARM64, and Direct3D12 on Windows x86_64 (hardware and WARP) — including hide/show, resize, lifecycle and
+> assertion-enabled runs, and frame-rate baselines on macOS and Windows. Phase 1's exit gate is met; the only
+> outstanding *CI automation* is the Windows job's runtime smoke test, which has not been re-run since its `PATH` fix
+> (the D3D12 verification itself was done on the physical host, section 3.5).
 >
 > Environment recipes, traps and measurement instructions live in [UI_TEST_ENV.md](UI_TEST_ENV.md) — read that before
 > re-running any of the checks below.
@@ -175,7 +176,7 @@ from this tree (O1 in the audit).
 
 ### 3.2 Viewport rendering
 
-| Scenario | Command (abridged) | Result |
+| Scenario | Command (abridged; the in-process capture option these runs used was removed later, see UI_TEST_ENV.md section 2.2 for the current screenshot recipe) | Result |
 |----------|--------------------|--------|
 | Empty dataset, one viewport | `ovito-qml-spike --qml-capture /tmp/spike.png --qml-capture-delay 3000` | Viewport background plus the "Top" viewport label and the red/green/blue orientation tripod are present ⇒ OVITO's frame graph, including the `OverLayer` (gizmo overlay), reaches the Qt Quick scene |
 | Real scene, one viewport | `… --qml-capture /tmp/spike2.png --qml-capture-delay 4000 /tmp/lattice.xyz` | 512 shaded icosahedral particles, correct camera fit (`zoomToSceneExtentsWhenReady()` after import) and correct vertical orientation |
@@ -417,7 +418,8 @@ Published results of the four jobs: see section 3.5.
 | F15 | `GuiQml.ovito.dll` failed to link with `LNK2019: unresolved external symbol __declspec(dllimport) Ovito::GuiTaskScope::~GuiTaskScope` for any translation unit that uses the scope. `GuiTaskScope` is a header-only class marked `OVITO_GUIBASE_EXPORT`, so MSVC expects the symbol of a member function it would normally generate inline in every translation unit — and the export side never emitted it. An earlier attempt to silence this by deleting the class's copy operations only hid it and broke the destructor emission in a different way. | Constructor and destructor are declared in the header and defined in the new `src/ovito/gui/base/app/GuiTaskScope.cpp`, so the exporting module emits (and exports) both symbols. |
 | F16 | Configuring with `-DOVITO_REDISTRIBUTABLE_PACKAGE=ON` on Windows cannot proceed without a **zlib-enabled HDF5**: the bundled netcdf-c external project stops with `CMake Error at cmake/dependencies.cmake:161: HDF5 was built without zlib. Rebuild HDF5 with zlib.` (and a missing `PERL_EXECUTABLE` is a second hard prerequisite). This is a build-environment consequence of OVITO's option set rather than a frontend defect. | Build and install zlib first and configure with it (`ZLIB_ROOT`), and make sure Perl is on `PATH`. Recorded in [UI_TEST_ENV.md](UI_TEST_ENV.md) section 5.5 with the trap that the HDF5 external-project stamp does not track the configuration, so `_ep`/`_ep_build` have to be deleted when zlib is added afterwards. |
 | F19 | `PipelineListModel` looked up the two modifier-snippet commands of the desktop frontend with the asserting `ActionManager::getCommand()` in its constructor and used the returned pointers unconditionally, so a frontend that does not create those commands (the Qt Quick one) either tripped the assertion in an assert-enabled build or dereferenced null in a release build. The model now resolves them with `findCommand()` and guards their use, which is the same tolerant lookup defect F17 needed. | `gui/base/mainwin/PipelineListModel` | fixed |
-| F18 | The Qt Quick shell reported an import twice and lost the report: `QmlWorkbenchController::importFiles()` overwrote the notice of `QmlMainWindowUI::runFileImport()` with a less precise "Imported *file*.", and the message it left behind was cleared by the shared `BaseViewportWindow::leaveEvent()`, which clears the status line whenever the mouse leaves a viewport. Two consequences: the format the file was read as (the only hint in the F6 misdetection case) disappeared as soon as the user moved the mouse, and the number of source frames was never reported because the continuation of `FileSource::requestFrameList()` was cast from the wrong object (`Pipeline` instead of `Pipeline::source()`, so the branch was never entered) and, once entered, its future was dropped - and a future nobody awaits cancels the continuation it carries. | The shell keeps a **persistent** `importNotice` separate from the transient status message and shows it while no other message is present; `runFileImport()` sets and completes it (the continuation future is held in a member of the interface), and the controller no longer overwrites it. `--qml-parity-check` asserts the final notice text against the format the `FileSource` actually used. |
+| F20 | **The automatic picking pre-warm corrupted the heap.** `QuickViewportWindow` refreshed the picking buffer from a 150 ms single-shot timer after every rendered frame graph, so a hover that followed a camera move was answered from the current view instead of the previous one. An offscreen picking pass that no pick asked for runs while the user replaces the data set (a session load, or an import that resets the scene), and in a release build the QML spike then died with glibc heap corruption (`malloc(): unsorted double linked list corrupted` / `corrupted size vs. prev_size`, exit 134/139, the fault surfacing later inside unrelated allocations such as `QThreadPool::start()` and the spike reporting *no* failed check). Measured: the scene-replacing `--qml-session-check` run **crashed in 4 of 5 runs with the pre-warm enabled and in 0 of 5 with it disabled**. The corruption is a race rather than a bounds violation, which is why valgrind reported nothing, the AddressSanitizer build and the assert-enabled build completed the same run, and only a release run with the pre-warm shows it. The pre-warm was therefore removed: `pick()` starts a pass (`refreshPickingBuffer()`) and nothing else does, which restores the one-frame staleness documented in section 1.5 but leaves the frontend deterministic. `--qml-prewarm-check` (now *picking freshness*) verifies that on-demand behaviour and that a settled viewport with a buffer behind the view renders nothing on its own. The classic frontend cannot have this problem because `RenderTarget::requestPick()` blocks the GUI thread, so no scene mutation overlaps a picking pass; being able to pre-warm again needs the asynchronous pick API of Phase 5 (review item A3) plus a picking pass that can be cancelled against a scene change. Candidates for that hunt (a ThreadSanitizer build died in Qt's own signal machinery before reaching the frontend): the interaction of the picking coroutine with `ScenePreparation` while the data set is replaced, and the `ViewportWindow` state (`_projParams`, `_contextMenuArea`, the frame-graph watcher) that the interactive and the picking pass produce through the same `generateFrameGraph()`. |
+| F18 | The Qt Quick shell reported an import twice and lost the report: `QmlWorkbenchController::importFiles()` overwrote the notice of `QmlMainWindowUI::runFileImport()` with a less precise "Imported *file*.", and the message it left behind was cleared by the shared `BaseViewportWindow::leaveEvent()`, which clears the status line whenever the mouse leaves a viewport. Two consequences: the format the file was read as (the only hint in the F6 misdetection case) disappeared as soon as the user moved the mouse, and the number of source frames was never reported because the continuation of `FileSource::requestFrameList()` was cast from the wrong object (`Pipeline` instead of `Pipeline::source()`, so the branch was never entered) and, once entered, its future was dropped - and a future nobody awaits cancels the continuation it carries. | The shell keeps a **persistent** `notice` separate from the transient status message and shows it while no other message is present; `runFileImport()` sets and completes it (the continuation future is held in a member of the interface), and the controller no longer overwrites it. `--qml-parity-check` asserts the final notice text against the format the `FileSource` actually used. |
 | F17 | The three "Get more …" buttons of the classic frontend (`AvailableModifiersSelectorWidget::onGetMoreModifiersFromPopup`, `AvailableOverlaysSelectorWidget::onGetMoreLayersFromPopup`, `UtilityCommandPage::onOpenUtility`) resolved their command with the **asserting** `ActionManager::getAction()`, but their ids (`ScriptingShowExtensionsGallery.*`) are never registered anywhere in this tree: with `NDEBUG` the lookup returns null and the button opens the ovito.org extensions page, while an assert-enabled build trips `OVITO_ASSERT_MSG(action != nullptr, "ActionManager::getAction()", ...)`. Found by the Phase 2.5 action inventory ([UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) section 6.1). | Fixed (Phase 2.5): the three sites use `findAction()`, which is what `MainWindow.cpp` already did for the two scripting menu entries. |
 
 ### 4.1 Design corrections (not defects, but recorded so they are not repeated)
@@ -470,10 +472,12 @@ lines += [f"Ar {i*a:.3f} {j*a:.3f} {k*a:.3f}" for i in range(n) for j in range(n
 open('/tmp/lattice.xyz','w').write("\n".join(lines)+"\n")
 EOF
 
-# Render four viewports and save a screenshot (use --qml-lifecycle-cycles N to stress the resource lifecycle)
+# Render four viewports (use --qml-lifecycle-cycles N to stress the resource lifecycle). The spike has no capture option
+# of its own any more - QQuickWindow::grabWindow() is unreliable with QQuickRhiItem viewports - so a screenshot is taken
+# from outside the process while --qml-hold-ms keeps the window up (see UI_TEST_ENV.md section 2.2)
 LD_LIBRARY_PATH="$PWD/.qt/6.10.2/gcc_64/lib" QT_QPA_PLATFORM=xcb timeout 300 \
   xvfb-run -a --server-args="-screen 0 1280x800x24" \
-  ./build-native/bin/ovito-qml-spike --qml-capture /tmp/spike_4vp.png --qml-capture-delay 8000 /tmp/lattice.xyz
+  ./build-native/bin/ovito-qml-spike --qml-startup-delay 8000 --qml-hold-ms 10000 /tmp/lattice.xyz
 ```
 
 The prototype reports `Saved workbench window contents to <file>` on success and exits with code 0.
@@ -483,7 +487,7 @@ Picking and selection can be verified in the same run (`X,Y` is a position insid
 ```bash
 LD_LIBRARY_PATH="$PWD/.qt/6.10.2/gcc_64/lib" QT_QPA_PLATFORM=xcb timeout 300 \
   xvfb-run -a --server-args="-screen 0 1280x800x24" \
-  ./build-native/bin/ovito-qml-spike --qml-capture /tmp/pick.png --qml-capture-delay 4000 \
+  ./build-native/bin/ovito-qml-spike --qml-startup-delay 4000 \
     --qml-lifecycle-cycles 4 --qml-pick 300,300 /tmp/lattice.xyz
 
 # The same run with assertions enabled (this tree ships no Qt debug libraries, hence the flags):
@@ -496,9 +500,10 @@ successful pick, a negative control on the empty background, and the object sele
 
 ## 7. Recommended Next Steps
 
-1. **Close the last Phase 1 gaps where the environment allows it**: let the Windows CI job reach its D3D12/WARP smoke test
-   (the tree already builds there; the job stopped at the preceding CTest step, whose `PATH` handling is fixed but not yet
-   re-run) and run Qt Quick Vulkan on a hardware driver, which needs a machine with a real display server or DRI3.
+1. **Close the last Phase 1 gaps where the environment allows it**: let the Windows CI job reach its D3D12 smoke test
+   (the tree builds there and the `PATH` trap that stopped the run is fixed, though the job has not been re-run since;
+   the D3D12 gate itself is already verified on the physical host, section 3.5) and run Qt Quick Vulkan on a hardware
+   driver, which needs a machine with a real display server or DRI3.
 2. **Decide and document the cross-backend validation plan**, including whether the `ovitoheadless` QPA plugin (O1) is
    implemented for Linux headless verification or the Linux gate is moved to a Vulkan-capable desktop session.
 3. **Move to Phase 2 only after those gates are recorded**, starting with the frontend-neutral application class and

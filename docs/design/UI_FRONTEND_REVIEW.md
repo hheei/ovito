@@ -255,13 +255,13 @@ whose completion is delivered through the GUI event loop (the Qt Quick implement
 result. This design therefore has to name the completion thread and the dispatch rule, and Phase 5 of UI_PLAN.md carries
 the hover-pick deadlock test that both frontends must pass.
 
-*Partly addressed in Phase 2.5 (deliverable 7, audit decision D35).* The Qt Quick viewport now refreshes its picking
-buffer by itself once the view has settled (`QuickViewportWindow::pickingPrewarmTimeout()`), so the one-frame staleness
-after a camera move or a scene change is the exception rather than the rule and the first hover of a settled view is
-correct. The staleness that remains - a hover within 150 ms of the last redraw, or while a pass is in flight - is what
-this item still owns, together with the contract change itself: the blocking classic wrapper and the asynchronous QML
-implementation can only be unified once `pick()` can wait for the pass. The pre-warm is the part of A3 that does not
-change the interface.
+*Partly addressed in Phase 2.5 (deliverable 7, audit decision D35), with the pre-warm part reverted again (D36).* The Qt
+Quick viewport refreshes its picking buffer **when a pick asks for it** (`QuickViewportWindow::refreshPickingBuffer()`),
+so the one-frame staleness after a camera move or a scene change is the rule again - the automatic refresh that removed it
+was taken out because a pass that no pick asked for raced with a replacement of the data set and corrupted a release
+build's heap (defect F20 of the Phase 1 report). What this item still owns is the contract change itself: the blocking
+classic wrapper and the asynchronous QML implementation can only be unified once `pick()` can wait for a pass and cancel
+it against a scene change, and that same capability is what allows the pre-warm to come back.
 
 **Payoff.** Removes the classic frontend's per-hover-move stall and ends the second picking implementation.
 
@@ -296,7 +296,7 @@ shared render thread and its graphics device) while **a pass may be submitted fr
 `prepare()` exists for exactly that reason and is called by the ambient-occlusion modifier before it moves to its worker
 thread. The QML-side acceptance of the service is the spike's `--qml-offscreen-check`.
 
-### A5 — Workbench state models (P2, ~2–3 days) — **partly implemented**
+### A5 — Workbench state models (P2, ~2–3 days) — **implemented except the selection/hover model**
 
 **Status.** The recent files list (`RecentFilesList`) moved from `gui/desktop/mainwin/` to `gui/base/mainwin/`, the new
 `TaskProgressModel` (audit decision D27) presents the running tasks to both frontends (the Qt Quick status line binds to
@@ -431,7 +431,9 @@ Open candidates, each with the measurement that must decide it:
    further win is plausible but the remaining fixed cost is now smaller.
 2. **Picking pre-warm** — refresh the picking buffer when the camera or scene changes instead of after the next hover
    pick, removing the documented one-frame staleness. Cost: one picking pass per camera change (the classic frontend
-   already pays this per hover).
+   already pays this per hover). *Implemented in Phase 2.5 deliverable 7 and removed again*: the pass overlapped a
+   replacement of the data set and corrupted a release build's heap (defect F20 of the Phase 1 report), so the staleness
+   is back until Phase 5's asynchronous pick API can cancel a pass against a scene change.
 3. **Frame-graph generation cost** — each window frame generates one frame graph per pane (unavoidable: four
    cameras), sharing the vis cache (already shared). Profile with the spike's `--qml-frame-stats` before optimizing.
 4. **Launcher/`--gui` UX** — an unknown frontend name currently prints the available names and exits 1; a typo in a
@@ -459,7 +461,7 @@ row.
 | A3 one asynchronous pick API | assigned | Phase 5 (deliverable 5) |
 | A4 offscreen rendering service | implemented | Phase 2.5 (deliverable 6) |
 | A5 recent files, task-progress model, session workflow | implemented | before Phase 2 |
-| A5 settings facade | assigned | Phase 2.5 (deliverable 2) |
+| A5 settings facade | implemented | Phase 2.5 (deliverable 2, decision D30) |
 | A5 selection/hover model | assigned | Phase 4 |
 | A6 import plan/options model | assigned | Phase 7; the user-visible *notice* is Phase 2.5 |
 | A7 property model foundation | assigned | Phase 4 (deliverable 0, mandatory before its other deliverables) |
