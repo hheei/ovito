@@ -546,21 +546,37 @@ images of this directory were taken from a private Xvfb display with ffmpeg.
 | macOS ARM64 | Metal | Metal | the runner's own session |
 | Windows AMD64 | D3D12 (the frontend selects it itself) | D3D12 on WARP | the runner's own session |
 
-**Where the jobs currently stand** (as of the Phase 1 close-out): Linux x86_64, Linux ARM64 and macOS ARM64 run the full
-smoke test and pass. The Windows job **builds the whole tree** (1149/1149 targets, `ovito.exe` and `ovito-qml-spike.exe`
-included) but has not yet reached its D3D12 smoke test: the run stopped at the preceding CTest step, where five tests
-aborted with `0xc0000135`, which turned out to be the `PATH` trap described below rather than a test failure. That trap is
-fixed - **twice**: the first fix composed `PATH` inside the step, but pointed it at `build\lib\ovito\plugins`, which is
-where Linux keeps the libraries. On Windows every OVITO library (Core, Gui, GuiBase and all plugin DLLs) is placed
-**directly in the build directory**, and so are the executables (`build\ovito.exe`, `build\ovito-qml-spike.exe`), because
-Windows would not find Core in a plugins subdirectory (`OVITO_RELATIVE_BINARY_DIRECTORY`, `OVITO_RELATIVE_PLUGINS_DIRECTORY`
-and `cmake/Plugins.cmake`). Both Windows steps therefore put `<checkout>\build` and the vcpkg `bin` directory on `PATH`
-and use `build\ovito-qml-spike.exe`. A D3D12 runtime result from CI is still outstanding - CI usage is deliberately kept
-low, so a Windows verification should be a single deliberate run rather than a debug loop.
+**Where the jobs currently stand** (all four green as of run `36623313897`, commit `19a02ea0a`): Linux x86_64, Linux ARM64,
+macOS ARM64 and Windows AMD64 run the whole smoke test - layout, commands, settings, session, library, icons, offscreen
+rendering, picking, parity and the import path - and pass, so the Windows job finally reached **and passed** its
+Direct3D 12 smoke test (through WARP, since the runners have no GPU). Getting there took four defects, all of them in the
+CI wiring or in the checks rather than in the frontend; each is described in place below:
 
-This is a gap of **CI automation**, not of the D3D12 gate: the cross-API verification itself was done on a physical
-Windows x86_64 host (SSH host `kitty`, GeForce GTX 1080, Windows 11) in §5.5, where the spike passed on D3D12, on WARP and
-on Vulkan. The Windows job exists to keep that working without needing the machine at hand.
+1. The Windows CTest step pointed `PATH` at `build\lib\ovito\plugins` - that is where *Linux* keeps the libraries. On
+   Windows every OVITO library (Core, Gui, GuiBase and all plugin DLLs) is placed **directly in the build directory**, and
+   so are the executables (`build\ovito.exe`, `build\ovito-qml-spike.exe`), because Windows would not find Core in a
+   plugins subdirectory (`OVITO_RELATIVE_BINARY_DIRECTORY`, `OVITO_RELATIVE_PLUGINS_DIRECTORY`, `cmake/Plugins.cmake`).
+   Five of six tests aborted with `0xc0000135` while the header-only `tst_containers` passed.
+2. `install-qt-action` exports `QT_ROOT_DIR`, but `Qt6_DIR` - the variable it sets for CMake - is empty when a step reads
+   it as an environment variable, which made the smoke-test step abort in `Split-Path ... $env:Qt6_DIR` before the spike
+   was even started (see the trap paragraph below).
+3. On Windows Qt sends its messages to the debugger rather than to a redirected stderr, so the job ran the spike for 37
+   seconds and printed **nothing** while the spike exited with 1 - the failing check was invisible. The step sets
+   `QT_FORCE_STDERR_LOGGING=1` and captures both streams into files, which is what finally revealed the last defect.
+4. The offscreen check *grew* the workbench window by 40x30 to force the picking service to replace its offscreen target;
+   the CI runners' small displays make that resize fail, so the pane size never changed and the check reported a picking
+   failure although its own log showed 1908 of 4662 probed positions hitting the lattice. The check shrinks the window
+   now, and if a platform refuses even that it says in the log that the superseded target was not exercised instead of
+   reporting a failure.
+
+Two failures were in the checks themselves as well: the import check required the task progress model to have reported an
+import that lasted 205 ms (the model refreshes at most every 100 ms, which failed on the macOS and Linux ARM64 runners),
+and the parity check required a window-imposed keyboard focus chain and an exactly honoured window size (see the two
+window-manager notes in §9.2.3).
+
+**No Windows verification is outstanding any more**, and the same run confirms the on-demand picking refresh (the picking
+pre-warm of §9.2.7) on all four platforms. CI usage is still deliberately kept low: a verification should be a deliberate
+push, not a debug loop.
 
 **A trap that cost a CI cycle:** `install-qt-action` exports `QT_ROOT_DIR` (the Qt prefix) and the plugin/QML paths, but
 `Qt6_DIR` - which it sets for CMake - is **not** visible as an environment variable inside the steps. The Windows
