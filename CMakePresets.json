@@ -87,10 +87,46 @@
             }
         },
         {
+            "name": "ci",
+            "hidden": true,
+            "displayName": "CI base",
+            "description": "Common settings of every CI job: Ninja, Release (CI does not debug symbols, and debug info costs about a quarter of the compile time), C++ tests and the Qt Quick frontend. Set OVITO_COMPILER_LAUNCHER=ccache (or sccache on Windows) to route the compiler through a cache; the workflows set the CCACHE_* variables that make the precompiled headers cacheable (docs/design/UI_TEST_ENV.md).",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_C_COMPILER_LAUNCHER": "$env{OVITO_COMPILER_LAUNCHER}",
+                "CMAKE_CXX_COMPILER_LAUNCHER": "$env{OVITO_COMPILER_LAUNCHER}",
+                "OVITO_BUILD_CPP_TESTS": "ON",
+                "OVITO_BUILD_APP": "ON",
+                "OVITO_BUILD_QML_FRONTEND": "ON"
+            }
+        },
+        {
+            "name": "ci-full",
+            "displayName": "CI: full product",
+            "description": "The complete product - every plugin plus the QtWidgets and Qt Quick frontends - as the Linux x86_64, macOS ARM64 and Windows AMD64 jobs build it.",
+            "inherits": "ci"
+        },
+        {
+            "name": "ci-frontend",
+            "displayName": "CI: Qt Quick frontend only",
+            "description": "The Qt Quick frontend and the plugins its smoke test exercises, without the QtWidgets application: 512 instead of 951 translation units. Mesh, Grid and Delaunay stay enabled because the Particles plugin depends on them, and StdMod depends on Mesh.",
+            "inherits": "ci",
+            "cacheVariables": {
+                "OVITO_BUILD_APP": "OFF",
+                "OVITO_BUILD_PLUGIN_CRYSTALANALYSIS": "OFF",
+                "OVITO_BUILD_PLUGIN_CORRELATION": "OFF",
+                "OVITO_BUILD_PLUGIN_VOROTOP": "OFF",
+                "OVITO_BUILD_PLUGIN_GALAMOST": "OFF",
+                "OVITO_BUILD_PLUGIN_OXDNA": "OFF"
+            }
+        },
+        {
             "name": "ci-linux",
             "displayName": "CI Linux",
             "description": "Preset tailored for Linux CI runners",
-            "inherits": "default",
+            "inherits": "ci-full",
             "cacheVariables": {
                 "CMAKE_INSTALL_PREFIX": "${sourceDir}/install"
             }
@@ -120,6 +156,14 @@
         {
             "name": "ci-linux",
             "configurePreset": "ci-linux"
+        },
+        {
+            "name": "ci-full",
+            "configurePreset": "ci-full"
+        },
+        {
+            "name": "ci-frontend",
+            "configurePreset": "ci-frontend"
         }
     ],
     "testPresets": [
