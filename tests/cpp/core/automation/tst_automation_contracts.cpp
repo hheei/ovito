@@ -519,6 +519,59 @@ private Q_SLOTS:
         QCOMPARE(session.revision(), revision);
     }
 
+    void session_reports_the_view_types_as_stable_contract_names()
+    {
+        AutomationSession session;
+        AutomationGateway gateway(session);
+        session.setDataSet(OORef<DataSet>::create());
+
+        // The view type is the one vocabulary of the session snapshot a client switches on, so every value the UI can
+        // set has exactly one name. A second spelling ("orthographic") or a translated label would make an external
+        // client depend on the build it happens to talk to, and a value that has no name would leave it guessing.
+        // VIEW_NONE is deliberately absent: it is the placeholder of an unset property and Viewport::updateViewportTitle()
+        // asserts on it, so no viewport a client can see ever has it - the mapping still answers "none" for it.
+        const QVector<QPair<Viewport::ViewType, QString>> names = {
+            { Viewport::VIEW_TOP, QStringLiteral("top") },
+            { Viewport::VIEW_BOTTOM, QStringLiteral("bottom") },
+            { Viewport::VIEW_FRONT, QStringLiteral("front") },
+            { Viewport::VIEW_BACK, QStringLiteral("back") },
+            { Viewport::VIEW_LEFT, QStringLiteral("left") },
+            { Viewport::VIEW_RIGHT, QStringLiteral("right") },
+            { Viewport::VIEW_ORTHO, QStringLiteral("ortho") },
+            { Viewport::VIEW_PERSPECTIVE, QStringLiteral("perspective") },
+            { Viewport::VIEW_SCENENODE, QStringLiteral("scene-node") },
+        };
+
+        // Every settable value of the enum has to be in this table - a new one must get a name here and in the contract
+        // document instead of falling through to a default that a client cannot distinguish from a real answer.
+        QCOMPARE(names.size(), 9);
+
+        DataSet* dataSet = session.dataSet();
+        QVERIFY(dataSet);
+        Viewport* viewport = dataSet->viewportConfig()->activeViewport();
+        QVERIFY(viewport);
+
+        for(const auto& [type, name] : names) {
+            viewport->setViewType(type);
+            QCOMPARE(viewport->viewType(), type);
+
+            const AutomationResult result = gateway.dispatch(AutomationRequest(QStringLiteral("session.describe")));
+            QVERIFY(result.isSuccess());
+            // The snapshot lists every viewport of the configuration; the one this test changes is the active one.
+            bool found = false;
+            for(const QVariant& entry : result.data().value(QStringLiteral("viewports")).toList()) {
+                const QVariantMap info = entry.toMap();
+                if(!info.value(QStringLiteral("active")).toBool())
+                    continue;
+                QCOMPARE(info.value(QStringLiteral("id")).toString(),
+                         session.objects().idFor(viewport, AutomationObjectId::Kind::Viewport));
+                QCOMPARE(info.value(QStringLiteral("viewType")).toString(), name);
+                found = true;
+            }
+            QVERIFY(found);
+        }
+    }
+
     // -----------------------------------------------------------------------
     // The gateway
     // -----------------------------------------------------------------------
@@ -604,6 +657,44 @@ private Q_SLOTS:
         QVERIFY(result.isError());
         QCOMPARE(result.errorCode(), AutomationContract::ErrorCode::NotSupported);
         QVERIFY(gateway.findOperation(QStringLiteral("pipeline.insert_modifier")).has_value());
+
+        // That answer comes before the argument and the capability checks, because the build decided it and not the
+        // client: neither a better argument nor a granted capability could make an unimplemented operation work, so a
+        // client is told "not supported" instead of being sent after a permission that could not help.
+        result = gateway.dispatch(AutomationRequest(QStringLiteral("pipeline.insert_modifier")));
+        QVERIFY(result.isError());
+        QCOMPARE(result.errorCode(), AutomationContract::ErrorCode::NotSupported);
+        AutomationSession unauthorizedSession;
+        AutomationGateway unauthorized(unauthorizedSession);
+        unauthorized.registerOperation(
+            AutomationOperationDescriptor(QStringLiteral("pipeline.insert_modifier"),
+                                          AutomationContract::OperationKind::Command,
+                                          QStringLiteral("Insert a modifier. Phase 4."))
+                .addParameter(AutomationParameter(QStringLiteral("modifierId"), AutomationParameter::String))
+                .addRequiredCapability(AutomationContract::Capability::PipelineWrite));
+        result = unauthorized.dispatch(AutomationRequest(QStringLiteral("pipeline.insert_modifier")));
+        QVERIFY(result.isError());
+        QCOMPARE(result.errorCode(), AutomationContract::ErrorCode::NotSupported);
+
+        // The contrast that makes the two checks above statements about the order rather than about the operation: the
+        // same argument-less request against a gateway that does implement the operation is an argument error, and
+        // against one whose client lacks the capability it is a capability error.
+        AutomationSession implementedSession;
+        AutomationGateway implemented(implementedSession);
+        implemented.registerOperation(
+            AutomationOperationDescriptor(QStringLiteral("pipeline.insert_modifier"),
+                                          AutomationContract::OperationKind::Command,
+                                          QStringLiteral("Insert a modifier."))
+                .addParameter(AutomationParameter(QStringLiteral("modifierId"), AutomationParameter::String))
+                .addRequiredCapability(AutomationContract::Capability::PipelineWrite),
+            [](const AutomationRequest&, AutomationResult&) -> void {});
+        result = implemented.dispatch(AutomationRequest(QStringLiteral("pipeline.insert_modifier")));
+        QVERIFY(result.isError());
+        QCOMPARE(result.errorCode(), AutomationContract::ErrorCode::InvalidArgument);
+        result = implemented.dispatch(
+            AutomationRequest(QStringLiteral("pipeline.insert_modifier")).setArguments({{QStringLiteral("modifierId"), QStringLiteral("cna")}}));
+        QVERIFY(result.isError());
+        QCOMPARE(result.errorCode(), AutomationContract::ErrorCode::MissingCapability);
     }
 
     void gateway_checks_capabilities_and_revisions()
@@ -1247,6 +1338,103 @@ private Q_SLOTS:
         }
     }
 
+    void ids_survive_undo_and_redo()
+    {
+        // The exit gate of this phase asks that an ID a client holds still resolves after the user undoes and redoes a
+        // change. The registry holds its objects weakly and the undo stack keeps an undone object alive as a tombstone,
+        // so the identity is expected to survive; what must not survive is the object's presence in the scene.
+        AutomationSession session;
+        AutomationGateway gateway(session);
+        session.setDataSet(OORef<DataSet>::create());
+        session.setUserInterface(_application);
+        gateway.grantCapability(AutomationContract::Capability::PipelineWrite);
+        registerNodeTestCommand(gateway, session);
+
+        AutomationResult result = gateway.dispatch(AutomationRequest(QStringLiteral("test.add_node")));
+        QVERIFY(result.isSuccess());
+        QCOMPARE(_application->undoStack()->count(), 1);
+        QCOMPARE(_application->undoStack()->undoText(), QStringLiteral("Add a test node"));
+
+        result = gateway.dispatch(AutomationRequest(QStringLiteral("scene.list_nodes")));
+        QVERIFY(result.isSuccess());
+        QCOMPARE(result.data().value(QStringLiteral("nodes")).toList().size(), 1);
+        const QString nodeId = result.data().value(QStringLiteral("nodes")).toList().front().toMap().value(QStringLiteral("id")).toString();
+        QVERIFY(nodeId.startsWith(QStringLiteral("scenenode:s")));
+        QVERIFY(session.objects().resolve(nodeId).get());
+
+        // Undone: the node has left the scene, but it is still the object the ID names.
+        _application->undoStack()->undo();
+        result = gateway.dispatch(AutomationRequest(QStringLiteral("scene.list_nodes")));
+        QVERIFY(result.isSuccess());
+        QCOMPARE(result.data().value(QStringLiteral("nodes")).toList().size(), 0);
+        QVERIFY(session.objects().resolve(nodeId).get());
+
+        // Redone: the same node comes back under the same ID, so a client that kept it sees no difference.
+        _application->undoStack()->redo();
+        result = gateway.dispatch(AutomationRequest(QStringLiteral("scene.list_nodes")));
+        QVERIFY(result.isSuccess());
+        const QVariantList nodes = result.data().value(QStringLiteral("nodes")).toList();
+        QCOMPARE(nodes.size(), 1);
+        QCOMPARE(nodes.front().toMap().value(QStringLiteral("id")).toString(), nodeId);
+        QVERIFY(session.objects().resolve(nodeId).get());
+    }
+
+    void events_and_task_records_keep_no_argument_values()
+    {
+        // The activity record is semantic: a client can see *that* an operation ran, with which origin, revision and
+        // client, but the arguments a caller passed - a script path, a file name, a value derived from the data - never
+        // enter the log or a task record. An activity stream that a user hands to someone else therefore cannot leak
+        // what they were working on, which is only true if it is a rule and not a habit.
+        AutomationSession session;
+        AutomationGateway gateway(session);
+        gateway.grantCapability(AutomationContract::Capability::FileWrite);
+        gateway.registerOperation(
+            AutomationOperationDescriptor(QStringLiteral("test.inspect_script"), AutomationContract::OperationKind::Command,
+                                          QStringLiteral("Reads a script file and reports how many lines it has."))
+                .addRequiredCapability(AutomationContract::Capability::FileWrite)
+                .addParameter(AutomationParameter(QStringLiteral("scriptPath"), AutomationParameter::String)
+                                  .setDescription(QStringLiteral("The script file to read."))),
+            [](const AutomationRequest&, AutomationResult& result) -> void {
+                result.data().insert(QStringLiteral("lines"), 42);
+            });
+
+        const QString secret = QStringLiteral("/home/user/private/diffusion-2310.py");
+        const AutomationResult result = gateway.dispatch(
+            AutomationRequest(QStringLiteral("test.inspect_script")).setArguments({{QStringLiteral("scriptPath"), secret}}));
+        QVERIFY(result.isSuccess());
+        QCOMPARE(result.data().value(QStringLiteral("lines")).toInt(), 42);
+
+        // The log recorded the operation without what it was given.
+        const QVector<AutomationEvent> events = session.events().events();
+        QVERIFY(!events.isEmpty());
+        bool sawActivity = false;
+        for(const AutomationEvent& event : events) {
+            QVERIFY(!containsText(event.toJson(), secret));
+            if(event.kind() == AutomationContract::EventKind::Activity && event.operationId() == QStringLiteral("test.inspect_script"))
+                sawActivity = true;
+        }
+        QVERIFY(sawActivity);
+
+        // As did the task record - which does keep the answer, so this is a rule about the input and not about
+        // forgetting everything the operation touched.
+        const QVector<AutomationTaskRecord*> tasks = session.tasks().tasks();
+        QCOMPARE(tasks.size(), 1);
+        QCOMPARE(tasks.front()->operationId(), QStringLiteral("test.inspect_script"));
+        QVERIFY(!containsText(tasks.front()->toJson(true), secret));
+        QCOMPARE(tasks.front()->toJson(true).value(QStringLiteral("result")).toMap().value(QStringLiteral("data"))
+                     .toMap().value(QStringLiteral("lines")).toInt(),
+                 42);
+
+        // The same holds for the operation a client reads a task through and for a query, which has no task at all.
+        const AutomationResult described = gateway.dispatch(
+            AutomationRequest(QStringLiteral("task.describe")).setArguments({{QStringLiteral("taskId"), tasks.front()->id()}}));
+        QVERIFY(described.isSuccess());
+        QVERIFY(!containsText(described.toJson(), secret));
+        const AutomationResult listed = gateway.dispatch(AutomationRequest(QStringLiteral("event.list")));
+        QVERIFY(listed.isSuccess());
+        QVERIFY(!containsText(listed.toJson(), secret));
+    }
+
 private:
 
     /// The animation settings of the session's active scene.
@@ -1260,6 +1448,69 @@ private:
         const ViewportConfiguration* config = dataSet ? dataSet->viewportConfig() : nullptr;
         Scene* scene = config && !config->viewports().empty() ? config->viewports().front()->scene() : nullptr;
         return scene ? scene->animationSettings() : nullptr;
+    }
+
+    /// The scene a client means by "the scene": the one the active viewport shows, and otherwise the first viewport's.
+    ///
+    /// This is the gateway's own rule, restated because a test that adds a node through a command has to put it where
+    /// the operation a client reads it back through looks for it.
+    static Scene* activeSceneOf(AutomationSession& session)
+    {
+        DataSet* dataSet = session.dataSet();
+        ViewportConfiguration* configuration = dataSet ? dataSet->viewportConfig() : nullptr;
+        if(!configuration)
+            return nullptr;
+        if(Viewport* active = configuration->activeViewport())
+            if(Scene* scene = active->scene())
+                return scene;
+        for(Viewport* viewport : configuration->viewports())
+            if(Scene* scene = viewport->scene())
+                return scene;
+        return nullptr;
+    }
+
+    /// Registers a command that adds an empty scene node, so that a test can undo and redo a change of the object graph.
+    static void registerNodeTestCommand(AutomationGateway& gateway, AutomationSession& session)
+    {
+        gateway.registerOperation(
+            AutomationOperationDescriptor(QStringLiteral("test.add_node"), AutomationContract::OperationKind::Command,
+                                          QStringLiteral("Adds an empty scene node to the session's scene."))
+                .setUndoLabel(QStringLiteral("Add a test node"))
+                .addRequiredCapability(AutomationContract::Capability::PipelineWrite),
+            [&session](const AutomationRequest&, AutomationResult& result) -> void {
+                Scene* scene = activeSceneOf(session);
+                if(!scene) {
+                    result.setError(AutomationContract::ErrorCode::InvalidRequest, QStringLiteral("The session has no scene."));
+                    return;
+                }
+                OORef<SceneNode> node = OORef<SceneNode>::create();
+                scene->addChildNode(node);
+            });
+    }
+
+    /// True if any string inside a nested client-facing payload contains \a needle.
+    ///
+    /// The tests state what a payload must *not* contain, and a payload is a nested map of maps and lists, so the check
+    /// walks it instead of looking at the two or three keys a particular implementation happens to produce today.
+    static bool containsText(const QVariant& value, const QString& needle, int depth = 0)
+    {
+        if(depth > 8)
+            return false;
+        if(value.metaType().id() == QMetaType::QString)
+            return value.toString().contains(needle);
+        if(value.metaType().id() == QMetaType::QVariantMap) {
+            const QVariantMap map = value.toMap();
+            for(auto it = map.cbegin(); it != map.cend(); ++it)
+                if(it.key().contains(needle) || containsText(it.value(), needle, depth + 1))
+                    return true;
+            return false;
+        }
+        if(value.metaType().id() == QMetaType::QVariantList || value.metaType().id() == QMetaType::QStringList) {
+            for(const QVariant& entry : value.toList())
+                if(containsText(entry, needle, depth + 1))
+                    return true;
+        }
+        return false;
     }
 
     /// Registers the command the transaction tests dispatch: it sets the last animation frame of the session's scene,

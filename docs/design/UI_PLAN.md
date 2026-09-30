@@ -766,7 +766,12 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      Network listening is disabled by default. The spike must report deterministic protocol errors.
   9. **Activity and observability hooks**: add the minimum origin/revision hooks (`user`, `qml`, `cli`, `ai`, `python`) and
      bounded recent semantic activity needed by later clients, without recording raw mouse/keyboard input or leaking paths
-     and data-derived values by default.
+     and data-derived values by default. **Delivered** (D44, D47): every gateway has an origin and an allocated client
+     identity, the bounded event log carries kind, IDs, revision and origin, and the rule that no argument value enters
+     the log or a task record is a test (`events_and_task_records_keep_no_argument_values`), which dispatches an operation
+     with a path-like argument and walks every event, the task record and the payload of `task.describe` and `event.list`
+     for traces of it. The hook a frontend or CLI reports its origin through is the gateway constructor; wiring the actual
+     frontends to it is Phase 3 and later phase work.
   10. **Documentation and compatibility gate**: record the selected IDs, schemas, capability names, handshake, transfer
       benchmark, and unresolved risks in [AUTOMATION_AND_PYTHON_PIPELINE_DESIGN.md](AUTOMATION_AND_PYTHON_PIPELINE_DESIGN.md).
       Add a small contract test suite that can be run without a Python installation and a separate environment probe for

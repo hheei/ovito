@@ -267,7 +267,7 @@ All of these are subject to the regression checks in [UI_PHASE1_SPIKE.md](UI_PHA
 | O6 | ~~The frontend-neutral application class and `--gui=qml` (D3) are unimplemented.~~ **Resolved in Phase 2** — `ovito --gui=qml` starts the Qt Quick workbench and `ovito --gui=qt-widgets` (or plain `ovito`) the classic one, selected through the registry of D15. | Resolved |
 | O12 | ~~The QML workbench has no file selection UI and no progress display.~~ **Resolved in Phase 2** (deliverable 5): the shell has a file dialog (`Ctrl+O`) and accepts drops onto the window, the status bar shows the progress of the running operations with a Cancel command, failures are reported in a message dialog, and a canceled import removes its half-loaded pipeline (D19-D22). | Resolved |
 | O13 | The prose contract that the executable contract test names does not exist: `tests/cpp/core/automation/tst_automation_contracts.cpp` calls itself "the executable half of the contract that docs/design/AUTOMATION_CONTRACTS.md describes", and that document is still unwritten. Until it is written the test *is* the normative description of the vocabulary, the wire types, the ID grammar and the dispatch rules, which is why Phase 2.6 deliverable 10 stays open in [UI_PLAN.md](UI_PLAN.md). | Phase 2.6 |
-| O14 | The Phase 2.6 exit gate asks that external IDs survive an undo/redo and re-resolve afterwards. No test covers it yet: the contract suite ends at "a deleted object that a new object replaces at the same address" (D40). The property is expected to hold because the registry holds its objects weakly and OVITO's undo system keeps an undone object alive as a tombstone, but "expected" is not the exit gate's wording. | Phase 2.6 |
+| O14 | **Resolved in Phase 2.6.** The exit gate asks that external IDs survive an undo/redo and re-resolve afterwards; the contract suite now has `ids_survive_undo_and_redo`, which adds a node through a command, asserts one undo step under the command's label, resolves the node's ID, undoes (the node leaves the scene listing while the ID still resolves to the node the undo stack keeps alive as a tombstone) and redoes (the node is back in the listing under the same ID). The expectation held, so the rule is now a test rather than an assumption. | Done |
 | O15 | The decision record numbers two pairs twice: **D10** and **D11** appear once in §2 (the offscreen render-target flag, the asynchronous picking pass) and again in §3 (the reuse of `GuiBase`, the split into `QmlViewportController`), and the D17/D18 rows of §3 carry a decision without a rationale. Renumbering the §3 pair means touching every cross-reference *and* knowing which of the two is meant (the `D11` of the O3 row above is the picking pass), so it is recorded rather than fixed in passing. The Phase 2.6 decisions D39-D49 of §7 are unique. | Follow-up |
 | O16 | **The package-location seam of the Python track is a build-time path.** `PythonEnvironmentProbe::defaultScriptFile()` and the spike's worker lookup are baked in as `OVITO_AUTOMATION_PYTHON_DIR` (the source directory), because Phase 2.6 has no installable `ovito` package to look up. Phase 4 has to replace that with the installed-package lookup (and the package's own entry point), which is also what makes the probe meaningful on a user's machine rather than only in the build tree. | Phase 4 |
 | O17 | **The topology spike's shared-memory number is an upper bound, and the embedded-runtime half of the comparison is a bound rather than a measurement.** The spike creates one shared-memory segment per evaluation and copies out of the mapping, so a pooled segment with a zero-copy view (the production shape, and the one Phase 4 should implement) is unmeasured; and an embedded runtime was not built at all, so what the spike establishes is that the seam it *would* save is small (≈2 ms of a 13 ms evaluation of 13.7 MB), not how an embedded runtime would perform in general. The spike also ran on one machine (Linux x86_64) with a synthetic payload; the macOS and Windows runs and the structured-property payloads are Phase 4 work. | Phase 4 |
@@ -451,8 +451,9 @@ counterpart must enumerate the same registry instead of naming utilities. The ob
 
 > **Status**: Phase 2.6 is half delivered — deliverables 1-6 plus the environment probe of deliverable 10. This section is
 > the record of the architecture decisions behind them (D39-D49); §5 carries the open items they leave behind (O13: the
-> prose contract is unwritten, O14: ID survival across undo/redo is untested, O16-O18: the package-location seam, the
-> unmeasured pooled shared-memory/embedded halves and the missing caller of the layer), and the delivered/remaining parts
+> prose contract is unwritten, O16-O18: the package-location seam, the unmeasured pooled shared-memory/embedded halves
+> and the missing caller of the layer; O14 is closed - ID survival across undo/redo is a test now), and the
+> delivered/remaining parts
 > are listed in [UI_PLAN.md](UI_PLAN.md) under Phase 2.6. The execution topology of the Python track is decided and its
 > evidence recorded in [AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md).
 
@@ -514,15 +515,17 @@ counterpart must enumerate the same registry instead of naming utilities. The ob
 
 ### Verification
 
-* **Executable contract**: `tests/cpp/core/automation/tst_automation_contracts.cpp` (24 test functions, 26 QtTest cases
+* **Executable contract**: `tests/cpp/core/automation/tst_automation_contracts.cpp` (27 test functions, 29 QtTest cases
   with `initTestCase`/`cleanupTestCase`), registered as a CTest case by `tests/cpp/core/automation/CMakeLists.txt`
   (`ovito_add_cpp_test`), covering the vocabulary round trips and the read/mutation classification, parameter type and
   constraint validation, descriptor argument validation, request/result JSON round trips, the ID grammar, the registry's
   stability and non-reuse rules, the session revision, five gateway cases (the catalog is read-only, malformed and unknown
   requests, capability and revision checks, the read-only operations, and a real data set), the task lifecycle with
   progress, activity and cancellation, task cancellation with its ownership rule, the event log's ordering and bounded
-  history, the per-command undo step and its rollback, the transaction group, and the recorded capability grants. It runs
-  without a Python installation, without a GUI and without a window system.
+  history, the per-command undo step and its rollback, the transaction group, the recorded capability grants, the
+  view-type vocabulary of the session snapshot (one name per settable value, read back through `session.describe`), ID
+  survival across an undo/redo, and the rule that neither the event log nor a task record carries an argument value. It
+  runs without a Python installation, without a GUI and without a window system.
 * **Runtime probe**: `tests/cpp/core/automation/tst_python_environment_probe.cpp` (20 test functions, 22 QtTest cases),
   which needs a `python3` on the path and skips the cases that need one without it. It covers the envelope and the feature
   vocabulary, the handshake round trip and the retention of features of a newer protocol, five malformed-handshake cases,
