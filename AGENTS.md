@@ -60,15 +60,16 @@ export CCACHE_SLOPPINESS=pch_defines,time_macros
 export CCACHE_DEPEND=1
 ```
 
-With them a cached translation unit recompiles in 0.15s instead of about 6s. The CI jobs use the presets `ci-full` (whole
-product) and `ci-frontend` (Qt Quick frontend only, 512 instead of 951 translation units) in `Release`, with
-`OVITO_COMPILER_LAUNCHER` selecting `ccache` or `sccache` - that variable is what decides, because the top-level
-CMakeLists only enables ccache by itself when neither `CMAKE_C_COMPILER_LAUNCHER` nor `CMAKE_CXX_COMPILER_LAUNCHER` is
-already defined (an empty value therefore means "no compiler cache", which is what a build-time measurement needs).
-The Linux x86_64 jobs use the clang presets `ci-linux` and `ci-linux-frontend`, which need about 1.75 times less compile
-work than gcc here; for iterating on the Qt Quick frontend and the spike there is also a local `native-frontend` preset
-(clang, ccache, mold, `.qt`, 512 instead of 951 units, no product executable). Measurements and rationale:
-docs/design/UI_TEST_ENV.md section 6.1.
+With them a cached translation unit recompiles in 0.15s instead of about 6s. The CI jobs use these presets: `ci-linux` (the single Linux x86_64 job: whole product, clang, `-O2`), `ci-macos`
+(frontend scope, `-O2`) and `ci-windows` (whole product, MSVC, no optimization override because an MSVC Release build is
+already `/O2`), all in `Release` and without debug info; `ci` and `ci-frontend` are their hidden bases. Only the *test*
+workflow uses them - `release.yml` builds with the `-O3` and the full plugin set that ship, so use its `release` flags
+when a change is performance-sensitive. `OVITO_COMPILER_LAUNCHER` selects the compiler cache (`ccache`); that variable is
+what decides, because the top-level CMakeLists only enables ccache by itself when neither `CMAKE_C_COMPILER_LAUNCHER` nor
+`CMAKE_CXX_COMPILER_LAUNCHER` is already defined (an empty value therefore means "no compiler cache", which is what a
+build-time measurement needs). For iterating on the Qt Quick frontend and the spike there is also a local
+`native-frontend` preset (clang, ccache, mold, `.qt`, 512 instead of 951 translation units, no product executable).
+Measurements and rationale: docs/design/UI_TEST_ENV.md section 6.1.
 
 ---
 

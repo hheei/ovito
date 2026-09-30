@@ -558,13 +558,16 @@ images of this directory were taken from a private Xvfb display with ffmpeg.
 | Job | Qt Quick backend | OVITO picking backend | Display |
 |-----|------------------|------------------------|---------|
 | Linux x86_64 | OpenGL (llvmpipe) | Vulkan (lavapipe via `VK_DRIVER_FILES`) | `xvfb-run` + `QT_QPA_PLATFORM=xcb` |
-| Linux ARM64 | OpenGL (llvmpipe) | Vulkan (lavapipe) | same |
 | macOS ARM64 | Metal | Metal | the runner's own session |
 | Windows AMD64 | D3D12 (the frontend selects it itself) | D3D12 on WARP | the runner's own session |
 
-**Where the jobs currently stand** (all four green as of run `36623313897`, commit `19a02ea0a`): the Linux x86_64 job
-additionally photographs the workbench while the spike holds its window open and uploads it as the artifact
-`qt-quick-shell-linux-x86_64`; Linux x86_64, Linux ARM64,
+The Linux ARM64 job that this table used to list was dropped from the matrix (its two backends - llvmpipe OpenGL and
+lavapipe Vulkan - are the same as the x86_64 job's, and it was the most expensive job per risk covered); the ARM64
+binaries themselves were verified on that architecture during Phase 1 and are built by the release workflow.
+
+**Where the jobs currently stand** (all green as of run `36623313897`, commit `19a02ea0a`, when the matrix still had four
+jobs): the Linux x86_64 job additionally photographs the workbench while the spike holds its window open and uploads it as
+the artifact `qt-quick-shell-linux-x86_64`; Linux x86_64,
 macOS ARM64 and Windows AMD64 run the whole smoke test - layout, commands, settings, session, library, icons, offscreen
 rendering, picking, parity and the import path - and pass, so the Windows job finally reached **and passed** its
 Direct3D 12 smoke test (through WARP, since the runners have no GPU). Getting there took four defects, all of them in the
@@ -588,7 +591,7 @@ CI wiring or in the checks rather than in the frontend; each is described in pla
    reporting a failure.
 
 Two failures were in the checks themselves as well: the import check required the task progress model to have reported an
-import that lasted 205 ms (the model refreshes at most every 100 ms, which failed on the macOS and Linux ARM64 runners),
+import that lasted 205 ms (the model refreshes at most every 100 ms, which flaked on the slower runners),
 and the parity check required a window-imposed keyboard focus chain and an exactly honoured window size (see the two
 window-manager notes in §9.2.3).
 
@@ -675,8 +678,10 @@ about the test. Compose the variable in the shell instead
 The Build step is 92-95% of every job's wall time: in run `36665850459` (all four jobs green) Linux x86_64 took 24m52s of
 which 22m56s was building, Linux ARM64 27m52s/25m22s, macOS ARM64 30m57s/28m42s and Windows AMD64 19m57s/16m47s, while
 CTest takes about a second, the Qt Quick smoke tests 3-25 seconds and the dependency installs (apt, brew, vcpkg with its
-binary cache, Qt with the action's own cache) about a minute each. Five measures address that, and each was measured
-before it was wired into the workflow:
+binary cache, Qt with the action's own cache) about a minute each. The matrix has since been reduced from four jobs to
+three - the Linux ARM64 job was the most expensive per risk it covered and its scope is compile-tested on the x86_64 job
+of the same architecture family - so the numbers to watch now are Linux x86_64, macOS ARM64 and Windows AMD64. Five
+measures address that, and each was measured before it was wired into the workflow:
 
 * **A compiler cache - with the precompiled-header trap fixed.** OVITO compiles nearly every translation unit with
   `-include-pch .../cmake_pch.hxx.pch`, and ccache refuses to cache such a call: `ccache --show-stats --verbose` counted
@@ -695,34 +700,40 @@ before it was wired into the workflow:
   object - a scope suffix in the key just blocked those hits. Windows uses ccache as well (installed with chocolatey): it
   is the only one of the two caches that can cache a translation unit which *consumes* an MSVC precompiled header
   (`sccache` reports "MSVC Precompiled header flags not supported"), and a command it cannot handle is simply not cached.
-* **clang on the Linux x86_64 jobs.** Measured on the full tree (905 translation units, Release, compiler cache off):
+* **clang on the Linux x86_64 job.** Measured on the full tree (905 translation units, Release, compiler cache off):
   clang 18 needed 1459s of compile work and 143s of wall time at `-j16`, gcc 13 needed 2570s and 233s, and the twelve
-  precompiled headers dropped from 170s to 90s - clang is much faster on the Qt and Boost template code. The presets
-  `ci-linux` and `ci-linux-frontend` are what the x86_64 jobs use, while the ARM64 job stays on gcc: the release workflow
-  builds the shipped Linux binaries with gcc, so that compiler keeps its verifier. The scoped frontend tree costs 715s of
-  compile work over 504 units with clang (170s of wall time at `-j16` with gcc before).
-* **Release instead of RelWithDebInfo.** Nothing debugs a CI binary and `NDEBUG` compiles the assertions out either way,
-  while debug info costs real time: a 22-unit sample of the largest translation units compiled in 52.6s with `-g` against
-  39.7s with `-g0` (about 25% per unit, 20-32% for the biggest ones), and a first-party target set of 211 units 109.3s
-  against 100.3s at `-j32`. The CI presets build `Release`; the assert-enabled tree of section 4 stays a local
-  verification, not a job.
-* **A smaller scope for the frontend-only jobs.** The Qt Quick smoke test never touches the QtWidgets application, Qwt,
-  the terminal widget or the analysis plugins, yet every job compiled them. The preset `ci-frontend` disables
-  `OVITO_BUILD_APP` and the CrystalAnalysis, Correlation, VoroTop, Galamost and oxDNA plugins, which is **512 instead of
-  951 translation units**; `Mesh`, `Grid` and `Delaunay` have to stay enabled because `Particles` depends on them and
-  `StdMod` on `Mesh`. Measured with gcc, Release, `-j16`: **170s** for the whole scoped tree cold, and the complete smoke
-  check list passes in that configuration (exit 0, no failed check). The Linux x86_64 job keeps the full product scope,
-  so the desktop frontend and every plugin stay covered there, and the macOS job uses the frontend scope: its smoke test
-  needs the spike executable, and both the spike (`Ovito.app/Contents/MacOS/ovito-qml-spike`) and the plugin libraries
-  (`Ovito.app/Contents/PlugIns/*.so`) land in the same bundle directories in either scope - verified by configuring such a
-  tree on the macOS host - while building the QtWidgets application on a three-core runner costs another ten minutes.
-* **A path filter, and a cheaper trigger for feature branches.** A change to Markdown cannot break a build, so
-  `paths-ignore` skips `docs/**`, `**/*.md` and `graphify-out/**`. The full matrix runs for `master`/`main` pushes, pull
-  requests and `workflow_dispatch`, while a push to `feature/**` runs only the frontend-scoped Linux x86_64 job - minutes
-  instead of half an hour. The trade-off is stated in the workflow itself: a Windows-only break surfaces on the full
-  matrix, which a feature branch starts on purpose with `gh workflow run CI --ref <branch>`. Trap for a repository that
-  requires these checks before merging: a path-filtered workflow reports **no status at all**, so a docs-only pull request
-  would wait forever; lift the filter then.
+  precompiled headers dropped from 170s to 90s - clang is much faster on the Qt and Boost template code. The single Linux
+  job uses the preset `ci-linux` and builds the whole product. That means the compiler the release workflow ships (gcc
+  with -O3) is no longer exercised by every CI run, only by `release.yml` - which is why that workflow can be started by
+  hand (`workflow_dispatch`) before a release that touches compiler-sensitive code. The scoped frontend tree the macOS
+  job builds costs 715s of compile work over 504 units with clang (170s of wall time at `-j16` with gcc before).
+* **`Release`, but with `-O2` in the test jobs.** Nothing debugs a CI binary and `NDEBUG` compiles the assertions out
+  either way, while debug info costs real time: a 22-unit sample of the largest translation units compiled in 52.6s with
+  `-g` against 39.7s with `-g0` (about 25% per unit, 20-32% for the biggest ones), and a first-party target set of 211
+  units 109.3s against 100.3s at `-j32`. The test presets `ci-linux` and `ci-macos` therefore set
+  `CMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG`: nothing in a test job measures performance, so the `-O3` of a release build
+  buys nothing there (`ci-windows` keeps the MSVC defaults, because an MSVC Release build is already `/O2` and replacing
+  `CMAKE_CXX_FLAGS_RELEASE` would drop the `/MD` runtime flag that Qt requires). Measured on this box the compile cost of
+  a full tree was 1691s at `-O2` against 1459s at `-O3` for clang, i.e. within the run-to-run spread of these numbers, so
+  `-O2` is chosen for what it does not pretend to be, not for a measured compile-time win. The assert-enabled tree of
+  section 4 stays a local verification, not a job.
+* **A smaller scope for the frontend job.** The Qt Quick smoke test never touches the QtWidgets application, Qwt, the
+  terminal widget or the analysis plugins, yet every job compiled them. The hidden preset `ci-frontend` (the base of
+  `ci-macos` and of the local `native-frontend`) disables `OVITO_BUILD_APP` and the CrystalAnalysis, Correlation, VoroTop,
+  Galamost and oxDNA plugins, which is **512 instead of 951 translation units**; `Mesh`, `Grid` and `Delaunay` have to stay
+  enabled because `Particles` depends on them and `StdMod` on `Mesh`. Measured with gcc, Release, `-j16`: **170s** for the
+  whole scoped tree cold, and the complete smoke check list passes in that configuration (exit 0, no failed check). The
+  Linux x86_64 job keeps the full product scope, so the desktop frontend and every plugin stay covered there, and the
+  macOS job uses the frontend scope: its smoke test needs the spike executable, and both the spike
+  (`Ovito.app/Contents/MacOS/ovito-qml-spike`) and the plugin libraries (`Ovito.app/Contents/PlugIns/*.so`) land in the
+  same bundle directories in either scope - verified by configuring such a tree on the macOS host - while building the
+  QtWidgets application on a three-core runner costs another ten minutes.
+* **A path filter.** A change to Markdown cannot break a build, so `paths-ignore` skips `docs/**`, `**/*.md` and
+  `graphify-out/**`. All three jobs run for every push to a monitored branch, for pull requests and for a manual
+  dispatch; the feature-branch gating of the previous round went away with the fast frontend job it was built around,
+  because a feature branch would otherwise have run no job at all. Trap for a repository that requires these checks
+  before merging: a path-filtered workflow reports **no status at all**, so a docs-only pull request would wait forever;
+  lift the filter then.
 
 The four Qt Quick smoke steps share one check list, which the workflow keeps in the variable `QML_SMOKE_CHECKS` (the
 Windows step splits it into an argument array), so a new check is added in one place instead of four.
@@ -741,15 +752,17 @@ Two things were measured and deliberately **not** taken:
   targets surface next, and it masks missing includes (see the precompiled-header note above), so this project does not
   take that lever; the compiler and the scope above are what reduce the work.
 
-The configure presets `ci-full`, `ci-frontend`, `ci-linux` and `ci-linux-frontend` plus the variable
-`OVITO_COMPILER_LAUNCHER` (empty, `ccache` or `sccache`) exist so that a developer can reproduce a CI build exactly:
+The configure presets `ci-linux` (clang, whole product), `ci-macos` (frontend scope), `ci-windows` (MSVC) and
+`native-frontend` (the local Qt Quick iteration tree) plus the variable `OVITO_COMPILER_LAUNCHER` (empty or `ccache`) exist
+so that a developer can reproduce a CI build exactly; `ci` and `ci-frontend` are the hidden bases they share, and the
+`release` preset is what the release workflow's flags amount to:
 
 ```bash
-# The Qt Quick frontend job, as CI runs it (the compiler cache is optional but strongly recommended here):
+# The Linux test job, as CI runs it (the compiler cache is optional but strongly recommended here):
 export OVITO_COMPILER_LAUNCHER=ccache
 export CCACHE_SLOPPINESS=pch_defines,time_macros CCACHE_DEPEND=1
-cmake --preset ci-linux-frontend -DCMAKE_PREFIX_PATH=<Qt prefix>
-cmake --build --preset ci-linux-frontend --parallel "$(nproc)"
+cmake --preset ci-linux -DCMAKE_PREFIX_PATH=<Qt prefix>
+cmake --build --preset ci-linux --parallel "$(nproc)"
 ```
 
 **The precompiled headers are not optional.** `OVITO_USE_PRECOMPILED_HEADERS=OFF` does not build this tree: without the
