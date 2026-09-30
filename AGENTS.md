@@ -48,6 +48,23 @@ LD_LIBRARY_PATH="$(pwd)/.qt/6.10.2/gcc_64/lib" ./build-native/bin/ovito --versio
 LD_LIBRARY_PATH="$(pwd)/.qt/6.10.2/gcc_64/lib" QT_QPA_PLATFORM=offscreen ./build-native/bin/ovito --nogui
 ```
 
+### Build speed: tell the compiler cache about the precompiled headers
+
+OVITO compiles nearly every translation unit with a precompiled header (`-include-pch .../cmake_pch.hxx.pch`), and ccache
+refuses to cache such a call - 81% of the compile calls in this tree were uncacheable, which silently made the `ccache`
+launcher of the presets nearly useless. Export the documented sloppiness settings **before** configuring (the `native` and
+`native-gcc` presets pass no environment, and a preset cannot set one):
+
+```bash
+export CCACHE_SLOPPINESS=pch_defines,time_macros
+export CCACHE_DEPEND=1
+```
+
+With them a cached translation unit recompiles in 0.15s instead of about 6s. The CI jobs use the presets `ci-full` (whole
+product) and `ci-frontend` (Qt Quick frontend only, 512 instead of 951 translation units) in `Release`, with
+`OVITO_COMPILER_LAUNCHER` selecting `ccache` or `sccache`; measurements and rationale are in
+docs/design/UI_TEST_ENV.md section 6.1.
+
 ---
 
 ## 3. Architecture & Code Boundaries
