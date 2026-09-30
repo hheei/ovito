@@ -40,6 +40,17 @@ Dialog {
     // dismissing the dialog (Escape or the close button) means 'load nothing'.
     onClosed: controller.answerPipelineChoice(accepted ? pickedIndex : -1)
 
+    // The frontend can answer the question itself (a verification check does), and then the dialog never goes through
+    // its own close path. Following the controller's state here is what closes it in that case; binding `visible` to
+    // the controller instead would not work, because a popup writes `visible` itself and destroys such a binding.
+    Connections {
+        target: controller
+        function onPipelineChoiceChanged() {
+            if(!controller.pipelineChoiceVisible && pipelineChooser.visible)
+                pipelineChooser.close()
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: theme.spacing * 2

@@ -110,7 +110,6 @@ jobs:
           Xvfb :77 -screen 0 1400x900x24 &
           XvfbPid=$!
           export DISPLAY=:77
-          status=0
           build/bin/ovito-qml-spike \
               --qml-window-size 1280x800 \
               --qml-startup-delay 3000 \
@@ -128,18 +127,29 @@ jobs:
               --qml-pick 300,300 \
               --qml-parity-check \
               --qml-import-check \
+              "$RUNNER_TEMP/lattice_512.xyz" > spike.log 2>&1 || status=$?
+          cat spike.log
+          # Photograph a run that leaves a scene loaded. The checks above end with a cancelled import, which leaves the
+          # scene empty on purpose - a capture taken there shows the shell's empty state instead of a rendered viewport,
+          # which is not what this image is for.
+          build/bin/ovito-qml-spike \
+              --qml-window-size 1280x800 \
+              --qml-startup-delay 3000 \
+              --qml-layout-check \
+              --qml-command-check \
+              --qml-pick 300,300 \
               --qml-hold-ms 8000 \
-              "$RUNNER_TEMP/lattice_512.xyz" > spike.log 2>&1 &
-          SpikePid=$!
+              "$RUNNER_TEMP/lattice_512.xyz" > capture.log 2>&1 &
+          CapturePid=$!
           for _ in $(seq 1 300); do
-            grep -q VERIFICATION_DONE spike.log && break
-            kill -0 $SpikePid 2>/dev/null || break
+            grep -q VERIFICATION_DONE capture.log && break
+            kill -0 $CapturePid 2>/dev/null || break
             sleep 1
           done
           sleep 1
           ffmpeg -loglevel error -f x11grab -video_size 1400x900 -i :77 -frames:v 1 -y shell.png || true
-          wait $SpikePid || status=$?
-          cat spike.log
+          wait $CapturePid || true
+          cat capture.log
           kill $XvfbPid 2>/dev/null || true
           exit $status
 

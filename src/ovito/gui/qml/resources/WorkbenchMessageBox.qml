@@ -22,7 +22,14 @@ Dialog {
     anchors.centerIn: Overlay.overlay
     width: Math.min(560, Overlay.overlay ? Overlay.overlay.width - 4 * theme.spacing : 560)
     height: Math.min(implicitHeight, Overlay.overlay ? Overlay.overlay.height - 4 * theme.spacing : implicitHeight)
-    visible: controller.messageBoxVisible
+    // A popup writes `visible` itself, which destroys a binding on it - so the state comes from the controller through
+    // this signal instead, and both the frontend and an answer given programmatically close the dialog through it.
+    Connections {
+        target: controller
+        function onMessageBoxChanged() {
+            controller.messageBoxVisible ? messageBox.open() : messageBox.close()
+        }
+    }
 
     palette.window: theme.surfacePanel
     palette.windowText: theme.textPrimary
