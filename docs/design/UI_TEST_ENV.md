@@ -729,13 +729,14 @@ measures address that, and each was measured before it was wired into the workfl
   Galamost and oxDNA plugins, which is **512 instead of 951 translation units**; `Mesh`, `Grid` and `Delaunay` have to stay
   enabled because `Particles` depends on them and `StdMod` on `Mesh`. Measured with gcc, Release, `-j16`: **170s** for the
   whole scoped tree cold, and the complete smoke check list passes in that configuration (exit 0, no failed check). The
-  Linux x86_64 job keeps the full product scope, so the desktop frontend and every plugin stay covered there. The macOS
-  job builds the whole product as well, at the release optimization level, because in the frontend scope its smoke test
-  **hangs on the runner**: the spike prints its `BOOTSTRAP` line and never reaches its first check, and the job then runs
-  until its step timeout kills it (before `timeout-minutes` was added, until GitHub's six-hour limit). That configuration
-  was never green on a runner - it was only configure-verified on a real macOS host - while the full scope passed there
-  twice, so this is the version to keep until the hang is understood; the compiler cache makes a repeat run of the larger
-  scope cost minutes, and the frontend scope stays available locally as `ci-frontend`/`native-frontend`.
+  Linux x86_64 job keeps the full product scope, so the desktop frontend and every plugin stay covered there; the macOS
+  job builds the whole product as well, at the release optimization level. Two observations of that platform's runs are
+  worth knowing before narrowing it: the frontend scope *did* build and pass CTest on the runners, but the job then hung
+  and was cancelled - and the cause was the check list, not the scope. **The macOS runners cannot run the frame-rate and
+  hide/show probes**: with them the spike prints its `BOOTSTRAP` line and never reaches its first check (a real macOS host
+  with a display runs them fine and produced the numbers in section 9.5). The shared `QML_SMOKE_CHECKS` variable therefore
+  leaves those two probes out and the Linux and Windows jobs add them back, and because narrowing the scope as well would
+  be two changes at once, the macOS job keeps building the whole product.
 * **A path filter.** A change to Markdown cannot break a build, so `paths-ignore` skips `docs/**`, `**/*.md` and
   `graphify-out/**`. All three jobs run for every push to a monitored branch, for pull requests and for a manual
   dispatch; the feature-branch gating of the previous round went away with the fast frontend job it was built around,
@@ -744,7 +745,7 @@ measures address that, and each was measured before it was wired into the workfl
   lift the filter then.
 * **Every Qt Quick smoke step has a `timeout-minutes`.** The spike is a GUI program whose checks wait on frames and on a
   picking buffer, so a hung run is a failure mode the job has to bound itself: without the step timeout the first macOS
-  hang occupied the runner for the whole workflow limit.
+  hang occupied the runner until the workflow's own limit.
 
 The four Qt Quick smoke steps share one check list, which the workflow keeps in the variable `QML_SMOKE_CHECKS` (the
 Windows step splits it into an argument array), so a new check is added in one place instead of four.
