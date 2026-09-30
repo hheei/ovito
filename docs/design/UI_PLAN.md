@@ -598,6 +598,11 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      `--qml-hold-ms` instead of grabbing it itself) and upload the image as a job artifact. Deliberately **not** a
      byte-exact pixel comparison in the build: font rasterization alone would make that fail, so the artifact is for a
      reviewer and for comparing rounds by hand.
+     * **Delivered**: the Linux x86_64 job starts its own `Xvfb` on display `:77`, runs the spike in the background with
+       `--qml-hold-ms 8000`, waits for `VERIFICATION_DONE`, photographs the display with `ffmpeg -f x11grab` and uploads
+       `shell.png` as the artifact `qt-quick-shell-linux-x86_64`; the step still fails on the spike's exit code, and the
+       capture is taken with `|| true` so a missing image cannot mask a failing check. Only the x86_64 job captures, since
+       the other Linux job renders the same shell through the same llvmpipe/xcb path.
   10. **Harness maintainability** — the spike's `Main.cpp` is over 3000 lines and holds every check, and a new
      verification option has to be registered in two places (the parser and the predicate that decides whether a run is a
      verification run), a trap that has already produced a run which timed out without doing anything. The steps move into

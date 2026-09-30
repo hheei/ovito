@@ -28,7 +28,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends \
             ninja-build build-essential \
             libboost-dev libnetcdf-dev libhdf5-dev \
-            libgl1-mesa-dev libgl1-mesa-dri libvulkan-dev mesa-vulkan-drivers xvfb \
+            libgl1-mesa-dev libgl1-mesa-dri libvulkan-dev mesa-vulkan-drivers xvfb ffmpeg \
             libxkbcommon-dev libxkbcommon-x11-0 \
             libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
             libxcb-render-util0 libxcb-shape0 libxcb-sync1 libxcb-xfixes0 \
@@ -79,6 +79,11 @@ jobs:
             --qml-startup-delay 3000 \
             --qml-device-check
 
+      # The shell is captured while the checks run. The spike cannot capture itself, because
+      # QQuickWindow::grabWindow() is not usable with QQuickRhiItem viewports (UI_TEST_ENV.md section 3.3), so the
+      # display is started here and photographed from outside with ffmpeg's x11grab. The image is uploaded as an
+      # artifact rather than compared in the build: the shell checks assert model state, not pixels, and a shell
+      # that rendered a single empty pane once passed every layout assertion.
       - name: Smoke test the Qt Quick frontend
         env:
           QT_QPA_PLATFORM: xcb
@@ -102,8 +107,11 @@ jobs:
           lines += [f"Ar {i*a} {j*a} {k*a}" for i in range(n) for j in range(n) for k in range(n)]
           pathlib.Path(os.environ["RUNNER_TEMP"], "lattice_512.xyz").write_text("\n".join(lines) + "\n")
           PY
-          xvfb-run -a --server-args='-screen 0 1280x800x24' \
-            build/bin/ovito-qml-spike \
+          Xvfb :77 -screen 0 1400x900x24 &
+          XvfbPid=$!
+          export DISPLAY=:77
+          status=0
+          build/bin/ovito-qml-spike \
               --qml-window-size 1280x800 \
               --qml-startup-delay 3000 \
               --qml-frame-stats 2000 \
@@ -120,7 +128,28 @@ jobs:
               --qml-pick 300,300 \
               --qml-parity-check \
               --qml-import-check \
-              "$RUNNER_TEMP/lattice_512.xyz"
+              --qml-hold-ms 8000 \
+              "$RUNNER_TEMP/lattice_512.xyz" > spike.log 2>&1 &
+          SpikePid=$!
+          for _ in $(seq 1 300); do
+            grep -q VERIFICATION_DONE spike.log && break
+            kill -0 $SpikePid 2>/dev/null || break
+            sleep 1
+          done
+          sleep 1
+          ffmpeg -loglevel error -f x11grab -video_size 1400x900 -i :77 -frames:v 1 -y shell.png || true
+          wait $SpikePid || status=$?
+          cat spike.log
+          kill $XvfbPid 2>/dev/null || true
+          exit $status
+
+      - name: Upload the workbench screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qt-quick-shell-linux-x86_64
+          path: shell.png
+          if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
   # Linux ARM64

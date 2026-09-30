@@ -121,7 +121,12 @@ APP=$!
 sleep 10 && kill -0 $APP && echo "still running"
 ```
 
-To *see* what such a run rendered, grab the X11 display with ffmpeg instead of adding a screenshot API:
+To *see* what such a run rendered, grab the X11 display with ffmpeg instead of adding a screenshot API. This is also
+what the Linux x86_64 CI job does: it starts `Xvfb :77 -screen 0 1400x900x24` itself (a fixed display is what makes the
+capture possible, `xvfb-run -a` hides the number it picks), runs the spike in the background with `--qml-hold-ms 8000`,
+waits for `VERIFICATION_DONE` in its log, captures **after** the checks (a capture taken while the checks run shows the
+window of an earlier moment - or a black screen, when it is taken before the window is mapped), and fails the step on the
+spike's exit code while the capture itself is allowed to fail:
 
 ```bash
 DISPLAY=:99 ffmpeg -y -f x11grab -video_size 1280x800 -i :99 -frames:v 1 /tmp/workbench.png
@@ -546,7 +551,9 @@ images of this directory were taken from a private Xvfb display with ffmpeg.
 | macOS ARM64 | Metal | Metal | the runner's own session |
 | Windows AMD64 | D3D12 (the frontend selects it itself) | D3D12 on WARP | the runner's own session |
 
-**Where the jobs currently stand** (all four green as of run `36623313897`, commit `19a02ea0a`): Linux x86_64, Linux ARM64,
+**Where the jobs currently stand** (all four green as of run `36623313897`, commit `19a02ea0a`): the Linux x86_64 job
+additionally photographs the workbench while the spike holds its window open and uploads it as the artifact
+`qt-quick-shell-linux-x86_64`; Linux x86_64, Linux ARM64,
 macOS ARM64 and Windows AMD64 run the whole smoke test - layout, commands, settings, session, library, icons, offscreen
 rendering, picking, parity and the import path - and pass, so the Windows job finally reached **and passed** its
 Direct3D 12 smoke test (through WARP, since the runners have no GPU). Getting there took four defects, all of them in the
