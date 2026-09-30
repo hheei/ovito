@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: 2026 OVITO GmbH, Germany
 // SPDX-License-Identifier: GPL-3.0-only OR MIT
 
-// Contract tests of the machine-facing automation layer (Phase 2.6, deliverables 1-4).
+// Contract tests of the machine-facing automation layer (Phase 2.6, deliverables 1-4 and 9).
 //
 // These tests must run without a Python installation, without a GUI and without a window system: they cover the
 // vocabulary, the wire types, the stable object IDs, the revision preconditions, the gateway's dispatch rules, the task
 // lifecycle, the transaction boundaries and the permission model. They are the executable half of the contract that
-// docs/design/AUTOMATION_CONTRACTS.md describes (still to be written, see the audit's open item O13).
+// docs/design/AUTOMATION_CONTRACTS.md describes: the prose and these assertions are two halves of one contract, and a
+// disagreement between them is a defect in one of the two - resolved by fixing whichever is wrong, with a test either
+// way.
 
 #include <QTest>
 
@@ -1315,6 +1317,17 @@ private Q_SLOTS:
         QVERIFY(!gateway.permissions().contains(AutomationContract::Capability::PythonExecute));
         QCOMPARE(session.events().lastSequence(), before + 2);
 
+        // A capability that permits a change brings task.control with it: a client that may start work may stop its
+        // own work again, and task.control grants no authority of its own (another client's task cannot be cancelled
+        // with it either, see task_cancel_requires_control_and_ownership). Reading implies nothing.
+        gateway.clearCapabilities();
+        gateway.grantCapability(AutomationContract::Capability::PipelineWrite);
+        QVERIFY(gateway.permissions().contains(AutomationContract::Capability::TaskControl));
+        QVERIFY(!gateway.permissions().contains(AutomationContract::Capability::SceneRead));
+        gateway.clearCapabilities();
+        gateway.grantCapability(AutomationContract::Capability::SceneRead);
+        QVERIFY(!gateway.permissions().contains(AutomationContract::Capability::TaskControl));
+
         // A denied request is not a way to gain authority: dispatching the whole catalog without a single capability
         // leaves the client with none.
         gateway.clearCapabilities();
@@ -1377,6 +1390,47 @@ private Q_SLOTS:
         QCOMPARE(nodes.size(), 1);
         QCOMPARE(nodes.front().toMap().value(QStringLiteral("id")).toString(), nodeId);
         QVERIFY(session.objects().resolve(nodeId).get());
+    }
+
+    void ids_survive_a_presentation_refresh()
+    {
+        // The second half of the exit gate's identity rule. A presentation change - the viewport layout or the active
+        // viewport, the selection, the current frame - advances the revision, because it is something a client may have
+        // looked at; the contract's promise is that it does *not* end the validity of an identity, because those
+        // objects are still there and a client must not be forced to re-query the whole session after every redraw.
+        AutomationSession session;
+        AutomationGateway gateway(session);
+        session.setDataSet(OORef<DataSet>::create());
+
+        Viewport* viewport = session.dataSet()->viewportConfig()->activeViewport();
+        QVERIFY(viewport);
+        const QString viewportId = session.objects().idFor(viewport, AutomationObjectId::Kind::Viewport);
+        QVERIFY(viewportId.startsWith(QStringLiteral("viewport:v")));
+        OORef<Pipeline> pipeline = OORef<Pipeline>::create();
+        const QString pipelineId = session.objects().idFor(pipeline.get(), AutomationObjectId::Kind::Pipeline);
+
+        // This is exactly what attachToContainer() does when the container reports one of those changes.
+        const quint64 revision = session.bumpRevision(QStringLiteral("viewportLayoutChanged"));
+        QVERIFY(revision > 1);
+
+        // The next answer names the new revision ...
+        const AutomationResult result = gateway.dispatch(AutomationRequest(QStringLiteral("session.describe")));
+        QVERIFY(result.isSuccess());
+        QCOMPARE(result.revision(), revision);
+
+        // ... and every identity handed out before it is unchanged: the same number, the same object, still known.
+        QCOMPARE(session.objects().idFor(viewport, AutomationObjectId::Kind::Viewport), viewportId);
+        QCOMPARE(session.objects().idFor(pipeline.get(), AutomationObjectId::Kind::Pipeline), pipelineId);
+        QCOMPARE(session.objects().resolve(viewportId).get(), viewport);
+        QCOMPARE(session.objects().resolve(pipelineId).get(), pipeline.get());
+        QVERIFY(session.objects().wasAssigned(viewportId));
+        QVERIFY(session.objects().wasAssigned(pipelineId));
+
+        // A refresh is a change all the same: a request that was based on the revision before it is stale, and so is
+        // one that claims a revision the session has not reached.
+        QVERIFY(!session.acceptsRevision(revision - 1));
+        QVERIFY(session.acceptsRevision(revision));
+        QVERIFY(!session.acceptsRevision(revision + 1));
     }
 
     void events_and_task_records_keep_no_argument_values()

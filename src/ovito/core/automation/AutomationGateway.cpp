@@ -84,10 +84,21 @@ AutomationPermissionSet::AutomationPermissionSet(bool grantReadOnlyDefaults)
         this->grant(readOnlyDefaults());
 }
 
+void AutomationPermissionSet::insert(AutomationContract::Capability capability)
+{
+    _capabilities.insert(static_cast<int>(capability));
+
+    // Whoever may start work may stop it again: TaskControl grants no authority of its own - a task of another client
+    // cannot be cancelled with it either - so it follows from every capability that permits a change instead of having
+    // to be remembered at every grant site. A read capability implies nothing.
+    if(!AutomationContract::isReadCapability(capability))
+        _capabilities.insert(static_cast<int>(AutomationContract::Capability::TaskControl));
+}
+
 void AutomationPermissionSet::grant(const QVector<AutomationContract::Capability>& capabilities)
 {
     for(AutomationContract::Capability capability : capabilities)
-        _capabilities.insert(static_cast<int>(capability));
+        insert(capability);
 }
 
 QStringList AutomationPermissionSet::names() const

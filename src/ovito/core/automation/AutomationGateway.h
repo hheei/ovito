@@ -45,7 +45,10 @@ public:
     explicit AutomationPermissionSet(bool grantReadOnlyDefaults = true);
 
     bool contains(AutomationContract::Capability capability) const { return _capabilities.contains(static_cast<int>(capability)); }
-    void grant(AutomationContract::Capability capability) { _capabilities.insert(static_cast<int>(capability)); }
+
+    /// Grants one capability. A capability that permits a change brings TaskControl with it - whoever may start work
+    /// may stop it again; see the class comment - while a read capability implies nothing.
+    void grant(AutomationContract::Capability capability) { insert(capability); }
     void grant(const QVector<AutomationContract::Capability>& capabilities);
     /// Grants every read capability, which is what a client that has just been approved gets; see readOnlyDefaults().
     void grantReadOnlyDefaults() { grant(readOnlyDefaults()); }
@@ -56,6 +59,9 @@ public:
     QStringList names() const;
 
 private:
+
+    /// Adds one capability and, for the mutating ones, the TaskControl they imply.
+    void insert(AutomationContract::Capability capability);
 
     /// The granted capabilities as their enum values. The set is private and the enum has no qHash that QSet could
     /// use, so the conversion happens here at the boundary and the methods above stay typed.

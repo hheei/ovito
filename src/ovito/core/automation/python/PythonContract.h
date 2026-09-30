@@ -90,7 +90,8 @@ public:
      * The order of the enumerators is the order in which the probe's validation checks them: a problem of the process
      * itself (was it started, did it answer) is reported before a problem of the interpreter (which Python is it),
      * which is reported before a problem of the package (is it there, may it be used). A caller that gets a status
-     * therefore knows that everything before it in this list held.
+     * therefore knows that everything before it in this list held - with one exception: `Cancelled` is reported during
+     * whichever check was running when the probe was stopped, so it says only that, not that the earlier ones passed.
      */
     enum class ProbeStatus {
 
@@ -116,6 +117,10 @@ public:
         /// unparseable version, or another protocol name.
         ProtocolError,
 
+        /// The interpreter that answered is not the interpreter that was started (`sys.executable` differs from the
+        /// requested executable).
+        InterpreterMismatch,
+
         /// The interpreter is not a supported Python (another implementation, or a version outside the supported
         /// range).
         PythonUnsupported,
@@ -132,10 +137,6 @@ public:
 
         /// The package is usable but does not offer every feature this caller requires.
         FeatureMissing,
-
-        /// The interpreter that answered is not the interpreter that was started (`sys.executable` differs from the
-        /// requested executable).
-        InterpreterMismatch,
 
         /// The probe was cancelled before the environment answered. A cancelled probe is not a verdict about the
         /// environment, so it is the caller's own outcome rather than one of the checks above.
