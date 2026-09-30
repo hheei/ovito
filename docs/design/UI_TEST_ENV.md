@@ -426,6 +426,24 @@ Three things about it are worth knowing before running it:
 
 ---
 
+### 4.4 Running the Python seam tests (schema preview and data bridge)
+
+The two suites that exercise the schema preview and the data bridge follow the same environment recipe as the probe:
+
+```bash
+LD_LIBRARY_PATH="$(pwd)/.qt/6.10.2/gcc_64/lib:$(pwd)/build-native/lib/ovito/plugins" QT_QPA_PLATFORM=offscreen \
+    ./build-native/tests/cpp/core/automation/tst_python_schema_preview
+LD_LIBRARY_PATH="$(pwd)/.qt/6.10.2/gcc_64/lib:$(pwd)/build-native/lib/ovito/plugins" QT_QPA_PLATFORM=offscreen \
+    ./build-native/tests/cpp/core/automation/tst_python_data_bridge
+```
+
+Both find their interpreter through `PythonEnvironmentProbe::findInterpreter()` (i.e. `python3` on `PATH`) and skip their
+environment cases without one, so a run in an environment whose Python behaviour is under scrutiny should set `PATH`
+accordingly. `tst_python_data_bridge` starts real workers and every case stops its own (a graceful stop is asserted to
+leave exit code 0), so only an interrupted run leaves an interpreter behind — `pgrep -fl ovito_worker.py` finds it. Its
+8 MB case prints what that exchange took; [AUTOMATION_DATA_BRIDGE.md](AUTOMATION_DATA_BRIDGE.md) §5 records the reference
+numbers and what the suites cover.
+
 ## 5. macOS test host
 
 ### 5.1 Toolchain setup (already done once, recorded for reproducibility)

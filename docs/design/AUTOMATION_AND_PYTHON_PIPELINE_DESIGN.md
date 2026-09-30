@@ -1,11 +1,13 @@
 # Python Pipeline and AI/CLI Automation Design
 
-> **Status**: Accepted design basis for Phase 2.6, and partially executed: the machine-facing gateway (deliverables 1-4),
-> the Python package contract and its runtime probe (deliverable 5) and the execution-topology spike (deliverable 6) are
-> implemented and verified, with their decisions recorded as D39-D49 in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7 and the
-> topology evidence in [AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md). Sections 3.4.1, 6 and 7 below carry the
-> resulting resolutions. Formal feature placement is unchanged: the user-facing capabilities remain gated by the later
-> phase exits.
+> **Status**: Accepted design basis for Phase 2.6, and executed: the machine-facing gateway (deliverables 1-4), the Python
+> package contract and its runtime probe (deliverable 5), the execution-topology spike (deliverable 6), the Python seam of
+> the schema preview and the data bridge (deliverable 7) and the local protocol with its discovery descriptor (deliverable
+> 8) are implemented and verified, with their decisions recorded as D39-D51 in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7
+> and the evidence in [AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md),
+> [AUTOMATION_IPC_SPIKE.md](AUTOMATION_IPC_SPIKE.md) and [AUTOMATION_DATA_BRIDGE.md](AUTOMATION_DATA_BRIDGE.md). Sections
+> 3.4.1, 6 and 7 below carry the resulting resolutions. Formal feature placement is unchanged: the user-facing
+> capabilities remain gated by the later phase exits.
 >
 > **Scope**: Two related but distinct capabilities for the Qt Quick workbench: user-defined Python computation as part of
 > OVITO's data pipeline, and a semantic CLI/automation interface through which a person or AI agent can inspect and operate
@@ -431,8 +433,10 @@ service, not a privileged special case.
 
 ## 6. Design Decisions Still Open
 
-Resolve these through small prototypes before freezing user-facing APIs. The *gateway-side* half of items 6 and 9 is
-settled since Phase 2.6's first slice — the operation catalog, the ID grammar, the session revision, the dispatch order and
+Resolve these through small prototypes before freezing user-facing APIs. Items 1-3, 5, 6 and 7 are resolved or
+partly resolved by the Phase 2.6 decisions D39-D51 (`src/ovito/core/automation/`, with the evidence documents indexed in
+[UI_PLAN.md](UI_PLAN.md) under Phase 2.6), and items 4, 8 and 9 belong to the phases that first attach the layer. The
+*gateway-side* half of items 6 and 9 is settled since Phase 2.6's first slice — the operation catalog, the ID grammar, the session revision, the dispatch order and
 the capability names are decisions D39-D43 of [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7 — so what stays open in those two
 items is the transport and the consent/user-interface half.
 
@@ -453,11 +457,24 @@ items is the transport and the consent/user-interface half.
    `pyproject.toml` says, and whether an optional managed environment is offered at all (Phase 4 for the package, Phase 8
    for a managed environment).
 3. **Python data contract**: first modifier is writable in-place `DataCollection` plus `None` return; later source/analysis
-   contracts remain separate.
+   contracts remain separate. **The transfer and ownership half is settled in Phase 2.6** (D51, evidence in
+   [AUTOMATION_DATA_BRIDGE.md](AUTOMATION_DATA_BRIDGE.md)): arrays travel as one length-framed raw payload with JSON
+   descriptors and a checked SHA-256 in *both* directions, the bytes are owned copies rather than shared memory (a
+   strided source is copied, because the wire has no stride), the type vocabulary is fixed (`float64`, `float32`,
+   `int64`, `int32`, `uint32`, `int8`, `uint8`) and an unknown type is refused rather than converted, and a refusal names
+   the array it is about. What stays open for Phase 4 is the *shape* a modifier sees: the adapter from an OVITO property
+   buffer to an array (O21), what a modifier may write and what a partial or failed result means, and a transfer larger
+   than the 512 MB / 64 array bound of one request.
 4. **Python concurrency/cancellation**: GIL strategy, serial execution policy, cooperative cancellation, and application
    shutdown behavior.
 5. **Decorator schema**: supported annotations and metadata, module reload, code-file change detection, and parameter
-   persistence.
+   persistence. **The reading half is settled in Phase 2.6** (D51): a schema is read with `ast` alone by default, so
+   selecting a file does not execute it - proven by a fixture that writes a marker from its top level - and the report
+   carries the function, its decorators, its parameters (kind, annotation as source text, default, requiredness) and
+   diagnostics for a syntax error (line/column), a decorator or decorator argument computed at run time, and an
+   unreadable file; an explicit import mode executes the file and maps the traceback of the user's own frames. What
+   stays open for Phase 4 is the authoritative schema of the *package's* decorator (what it accepts and defaults to),
+   module reload and code-file change detection, and how a schema change invalidates persisted parameter values.
 6. **Automation transport**: stdio broker vs local socket, Windows/macOS/Linux endpoint lifecycle, and client discovery (the
    operation catalog and its framing-independent error rules are already fixed by D39/D42). **Partly settled in Phase 2.6**
    (D50, evidence in [AUTOMATION_IPC_SPIKE.md](AUTOMATION_IPC_SPIKE.md)): the transport is a per-user **local socket**

@@ -760,6 +760,14 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   7. **Data-bridge and discovery spike**: define the first writable data bridge, ownership/copy rules, and supported array
      transfer. Validate AST-only function preview versus explicit runtime import, including malformed syntax, dynamic
      decorators, imports with side effects, and traceback mapping. This does not insert a Python function into a pipeline.
+     **Delivered** (D51, evidence in [AUTOMATION_DATA_BRIDGE.md](AUTOMATION_DATA_BRIDGE.md)): `PythonIntrospector`,
+     `PythonSchemaPreview` and `ovito_schema.py` read a decorated function's schema with `ast` only — the default, proven
+     by a fixture whose top level writes a marker file — and map the traceback of an explicitly requested import; the
+     bridge moves named numeric arrays over the framed transfer of D49 in both directions with a checked digest, copy
+     ownership, a refusal that names the offending array, and a runtime handshake validated against the package contract,
+     with `PythonWorkerProcess` as a Core client that reports a dead interpreter with its exit code instead of a timeout.
+     The Python Function Modifier that consumes this seam, and the adapter from an OVITO property buffer to a
+     `PythonArray` (O21), are Phase 4.
   8. **Local protocol spike**: prove a local-only JSON Lines or equivalent IPC endpoint can discover one live workbench,
      query a bounded session snapshot, observe task/scene events, and request a displayed-view PNG. Capture is an internal
      feasibility probe, not a released CLI feature; return a bounded image buffer without arbitrary filesystem writes.
@@ -797,19 +805,24 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   `baseRevision` requests are rejected; task/event/transaction/capability schemas have deterministic tests; the selected
   Python environment can be probed without silent fallback; the worker/embedded benchmark has evidence; and a local client
   can perform only the bounded read-only snapshot/PNG spike. No later feature is marked implemented by this gate.
-- **Status after the first slice**: deliverables 1-6 and 8 plus the environment probe of deliverable 10 are in the tree
-  and verified by `ctest --preset native` (9/9) and by the same suites in the assertion-enabled tree of
-  [UI_TEST_ENV.md](UI_TEST_ENV.md) §4; the decisions behind them are D39-D49 of
-  [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7, and the Python topology decision rests on the recorded measurements of
-  [AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md). Nothing is wired to a frontend yet — no session is
-  attached, no transport exists, and the layer has no callers outside its own tests (O18) — which is what "architecture
-  adaptation" means here. Open in this phase: deliverable 7 (the data bridge and the AST preview) and the prose contract
-  of deliverable 10 (O13); the local protocol of deliverable 8 is delivered and its two recorded limits are O19 (the render
-  half of a capture, Phase 5) and O20 (the prototype parts of the endpoint, Phase 3). Three
-  preconditions and traps of `core` integration tests were found while getting the suites to run and are recorded in
-  [UI_TEST_ENV.md](UI_TEST_ENV.md) §4.1: creating a `RefTarget` needs an ambient task, creating a `SceneNode` needs an
-  `Application`, and a probe test needs a real interpreter on the path and must not use `QSKIP` from a helper that
-  returns a value.
+- **Status after the first slice**: deliverables 1-9 plus the environment probe of deliverable 10 are in the tree and
+  verified by `ctest --preset native` (11/11) and by the same suites in the assertion-enabled tree of
+  [UI_TEST_ENV.md](UI_TEST_ENV.md) §4 — the gateway with its identity, revision, permission, task, transaction and
+  observability contracts, the Python package contract with its runtime probe, the topology spike, the local protocol with
+  its discovery descriptor, the AST schema preview and the data bridge. The decisions behind them are D39-D51 of
+  [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7; the Python topology decision rests on the measurements of
+  [AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md), the local protocol on
+  [AUTOMATION_IPC_SPIKE.md](AUTOMATION_IPC_SPIKE.md) and the Python seam on
+  [AUTOMATION_DATA_BRIDGE.md](AUTOMATION_DATA_BRIDGE.md). Nothing is wired to a frontend yet — no session is attached, no
+  transport exists, and the layer has no callers outside its own tests (O18) — which is what "architecture adaptation"
+  means here. Open in this phase: the prose contract `docs/design/AUTOMATION_CONTRACTS.md` of deliverable 10 (O13) and the
+  exit-gate verification itself. The recorded limits of what is delivered are O16 and O21 (the package-location seam and
+  the missing property-array adapter), O17 (the unmeasured pooled shared-memory and embedded halves), O19 (the render half
+  of a capture, Phase 5) and O20 (the prototype parts of the endpoint, Phase 3). Four preconditions and traps of `core`
+  integration tests were found while getting the suites to run and are recorded in [UI_TEST_ENV.md](UI_TEST_ENV.md) §4.1:
+  creating a `RefTarget` needs an ambient task, creating a `SceneNode` needs an `Application`, a probe test needs a real
+  interpreter on the path and must not use `QSKIP` from a helper that returns a value, and a test that starts an
+  interpreter must stop it or it outlives the run.
 
 #### Formal feature placement after Phase 2.6
 
