@@ -589,6 +589,11 @@ CI wiring or in the checks rather than in the frontend; each is described in pla
    failure although its own log showed 1908 of 4662 probed positions hitting the lattice. The check shrinks the window
    now, and if a platform refuses even that it says in the log that the superseded target was not exercised instead of
    reporting a failure.
+5. `ovito.exe` is linked as a Windows-subsystem application (`WIN32_EXECUTABLE` in `src/main/CMakeLists.txt`), so
+   `& ovito.exe --nogui` neither waits for it nor sets `$LASTEXITCODE`: the first version of the headless smoke step
+   threw `ovito --nogui failed with exit code` with an *empty* code while OVITO had started and finished fine. The step
+   runs it through `Start-Process -Wait -PassThru` and checks `$process.ExitCode` now, which on the Windows test host
+   returns 0 for exactly that command.
 
 Two failures were in the checks themselves as well: the import check required the task progress model to have reported an
 import that lasted 205 ms (the model refreshes at most every 100 ms, which flaked on the slower runners),
@@ -710,10 +715,11 @@ measures address that, and each was measured before it was wired into the workfl
 * **`Release`, but with `-O2` in the test jobs.** Nothing debugs a CI binary and `NDEBUG` compiles the assertions out
   either way, while debug info costs real time: a 22-unit sample of the largest translation units compiled in 52.6s with
   `-g` against 39.7s with `-g0` (about 25% per unit, 20-32% for the biggest ones), and a first-party target set of 211
-  units 109.3s against 100.3s at `-j32`. The test presets `ci-linux` and `ci-macos` therefore set
+  units 109.3s against 100.3s at `-j32`. The Linux test preset `ci-linux` therefore sets
   `CMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG`: nothing in a test job measures performance, so the `-O3` of a release build
   buys nothing there (`ci-windows` keeps the MSVC defaults, because an MSVC Release build is already `/O2` and replacing
-  `CMAKE_CXX_FLAGS_RELEASE` would drop the `/MD` runtime flag that Qt requires). Measured on this box the compile cost of
+  `CMAKE_CXX_FLAGS_RELEASE` would drop the `/MD` runtime flag that Qt requires, and `ci-macos` keeps the release flags
+  for the reason in the scope bullet below). Measured on this box the compile cost of
   a full tree was 1691s at `-O2` against 1459s at `-O3` for clang, i.e. within the run-to-run spread of these numbers, so
   `-O2` is chosen for what it does not pretend to be, not for a measured compile-time win. The assert-enabled tree of
   section 4 stays a local verification, not a job.
@@ -723,17 +729,22 @@ measures address that, and each was measured before it was wired into the workfl
   Galamost and oxDNA plugins, which is **512 instead of 951 translation units**; `Mesh`, `Grid` and `Delaunay` have to stay
   enabled because `Particles` depends on them and `StdMod` on `Mesh`. Measured with gcc, Release, `-j16`: **170s** for the
   whole scoped tree cold, and the complete smoke check list passes in that configuration (exit 0, no failed check). The
-  Linux x86_64 job keeps the full product scope, so the desktop frontend and every plugin stay covered there, and the
-  macOS job uses the frontend scope: its smoke test needs the spike executable, and both the spike
-  (`Ovito.app/Contents/MacOS/ovito-qml-spike`) and the plugin libraries (`Ovito.app/Contents/PlugIns/*.so`) land in the
-  same bundle directories in either scope - verified by configuring such a tree on the macOS host - while building the
-  QtWidgets application on a three-core runner costs another ten minutes.
+  Linux x86_64 job keeps the full product scope, so the desktop frontend and every plugin stay covered there. The macOS
+  job builds the whole product as well, at the release optimization level, because in the frontend scope its smoke test
+  **hangs on the runner**: the spike prints its `BOOTSTRAP` line and never reaches its first check, and the job then runs
+  until its step timeout kills it (before `timeout-minutes` was added, until GitHub's six-hour limit). That configuration
+  was never green on a runner - it was only configure-verified on a real macOS host - while the full scope passed there
+  twice, so this is the version to keep until the hang is understood; the compiler cache makes a repeat run of the larger
+  scope cost minutes, and the frontend scope stays available locally as `ci-frontend`/`native-frontend`.
 * **A path filter.** A change to Markdown cannot break a build, so `paths-ignore` skips `docs/**`, `**/*.md` and
   `graphify-out/**`. All three jobs run for every push to a monitored branch, for pull requests and for a manual
   dispatch; the feature-branch gating of the previous round went away with the fast frontend job it was built around,
   because a feature branch would otherwise have run no job at all. Trap for a repository that requires these checks
   before merging: a path-filtered workflow reports **no status at all**, so a docs-only pull request would wait forever;
   lift the filter then.
+* **Every Qt Quick smoke step has a `timeout-minutes`.** The spike is a GUI program whose checks wait on frames and on a
+  picking buffer, so a hung run is a failure mode the job has to bound itself: without the step timeout the first macOS
+  hang occupied the runner for the whole workflow limit.
 
 The four Qt Quick smoke steps share one check list, which the workflow keeps in the variable `QML_SMOKE_CHECKS` (the
 Windows step splits it into an argument array), so a new check is added in one place instead of four.

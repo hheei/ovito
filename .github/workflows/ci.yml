@@ -158,6 +158,9 @@ jobs:
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
           VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
           LD_LIBRARY_PATH: ${{ env.QT_ROOT_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
+        # A spike that hangs must fail the job instead of holding it until GitHub's six-hour limit - the macOS runner
+        # hung here once, right after the workbench bootstrap line.
+        timeout-minutes: 10
         run: |
           python3 - <<'PY'
           import os, pathlib
@@ -266,6 +269,7 @@ jobs:
           ctest --test-dir build --output-on-failure
 
       - name: Smoke test the Qt Quick frontend
+        timeout-minutes: 10
         env:
           DYLD_LIBRARY_PATH: ${{ env.QT_ROOT_DIR }}/lib
         run: |
@@ -432,8 +436,17 @@ jobs:
         run: |
           $vcpkg = if($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:\vcpkg" }
           $env:PATH = "${{ github.workspace }}\build;$vcpkg\installed\x64-windows\bin;$env:PATH"
-          & "${{ github.workspace }}\build\ovito.exe" --nogui
-          if($LASTEXITCODE -ne 0) { throw "ovito --nogui failed with exit code $LASTEXITCODE" }
+          # ovito.exe is linked as a Windows-subsystem application (src/main/CMakeLists.txt sets WIN32_EXECUTABLE), so
+          # PowerShell neither waits for it nor sets $LASTEXITCODE - the first version of this step threw an exception
+          # with an empty exit code while OVITO had actually started fine. Start-Process gives a real exit code, and
+          # QT_FORCE_STDERR_LOGGING makes any diagnostic reach the redirected files instead of the debugger.
+          $env:QT_FORCE_STDERR_LOGGING = '1'
+          $process = Start-Process -FilePath "${{ github.workspace }}\build\ovito.exe" -ArgumentList '--nogui' `
+                                   -Wait -PassThru `
+                                   -RedirectStandardOutput "$env:RUNNER_TEMP\ovito-nogui.out" `
+                                   -RedirectStandardError "$env:RUNNER_TEMP\ovito-nogui.err"
+          Get-Content "$env:RUNNER_TEMP\ovito-nogui.out", "$env:RUNNER_TEMP\ovito-nogui.err" -ErrorAction SilentlyContinue
+          if($process.ExitCode -ne 0) { throw "ovito --nogui failed with exit code $($process.ExitCode)" }
 
       # The runners have no GPU, but Direct3D 12 is available through the WARP software adapter, which the Qt
       # Quick scene graph uses when QSG_RHI_PREFER_SOFTWARE_RENDERER is set. OVITO's own offscreen picking
@@ -441,6 +454,7 @@ jobs:
       # D3D12 validation of the Qt Quick frontend that is possible without Windows hardware.
       - name: Smoke test the Qt Quick frontend (Direct3D 12 via WARP)
         shell: pwsh
+        timeout-minutes: 15
         env:
           QSG_RHI_PREFER_SOFTWARE_RENDERER: '1'
           # Qt writes its messages to the debugger instead of to a redirected stderr on Windows, which is why the step

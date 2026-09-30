@@ -154,12 +154,8 @@
         {
             "name": "ci-macos",
             "displayName": "CI: macOS ARM64",
-            "description": "The macOS test job: the frontend scope - its smoke test needs the spike executable, which lands in the same Ovito.app bundle directory either way - with the -O2 of the Linux job.",
-            "inherits": "ci-frontend",
-            "cacheVariables": {
-                "CMAKE_C_FLAGS_RELEASE": "-O2 -DNDEBUG",
-                "CMAKE_CXX_FLAGS_RELEASE": "-O2 -DNDEBUG"
-            }
+            "description": "The macOS test job: the whole product at the release optimization level. It builds the frontend scope with -O2 the same way the Linux job does, but that configuration hangs its smoke test on the runner (the spike stops right after its BOOTSTRAP line; see docs/design/UI_TEST_ENV.md section 6.1), so this job keeps the flags that are known to work there. The compiler cache makes the larger scope cheap on a repeat run.",
+            "inherits": "ci"
         },
         {
             "name": "ci-windows",
