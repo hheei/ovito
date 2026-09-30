@@ -7,6 +7,7 @@
 #include <ovito/gui/base/mainwin/RecentFilesList.h>
 #include <ovito/gui/base/viewport/ViewportInputManager.h>
 #include <ovito/core/app/undo/UndoStack.h>
+#include <ovito/core/automation/AutomationSession.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
 #include <ovito/core/dataset/scene/Scene.h>
@@ -37,6 +38,15 @@ void WorkbenchUI::initializeWorkbench(QObject* parent)
 
     // Create the model that presents the running tasks of this workbench (the progress indicator of the status bar).
     _taskProgressModel = new TaskProgressModel(*this, parent);
+
+    // Create the machine-facing view of this workbench. It is what hands out the stable object IDs the presentation
+    // identifies objects by (D55) and what a local client of the automation layer addresses a running workbench
+    // through (D59). It is always created, because a presentation that identifies an object by its row cannot survive a
+    // list refresh, an undo or a data set replacement; serving it to a client is the frontend's decision, not this
+    // class's.
+    _automationSession = new AutomationSession(parent);
+    _automationSession->setUserInterface(this);
+    _automationSession->attachToContainer(datasetContainer());
 
     // Keep track of the auto-key mode, which stores animation keys automatically while the user edits parameters.
     if(Command* autoKeyModeCommand = actionManager()->findCommand(ACTION_AUTO_KEY_MODE_TOGGLE)) {

@@ -8,8 +8,10 @@
 #include <ovito/gui/qml/mainwin/QmlViewportController.h>
 #include <ovito/gui/qml/mainwin/QmlViewportLayout.h>
 #include <ovito/gui/qml/mainwin/QmlWorkbenchController.h>
+#include <ovito/gui/qml/models/QmlPipelineController.h>
 #include <ovito/gui/qml/viewport/QmlViewportMenu.h>
 #include <ovito/gui/base/app/WorkbenchUI.h>
+#include <ovito/gui/base/actions/CommandListModel.h>
 
 namespace Ovito {
 
@@ -59,6 +61,14 @@ public:
 
     /// Returns the model that lays the viewport panes of the workbench out.
     QmlViewportLayout* viewportLayout() const { return _viewportLayout; }
+
+    /// Returns the model side of the pipeline panel: the rows of the pipeline, the modifier library and the stable
+    /// identity of the objects they present (Phase 3, deliverable 1 and 3; the panel itself is Phase 4).
+    QmlPipelineController* pipelineController() const { return _pipelineController; }
+
+    /// Returns the searchable list of the commands of this workbench, which a menu search or the Phase 8 command
+    /// palette presents (Phase 3, deliverable 4).
+    CommandListModel* commandList() const { return _commandList; }
 
     /// Returns the model of the viewport context menu.
     QmlViewportMenu* viewportMenu() const { return _contextMenu; }
@@ -148,6 +158,12 @@ private:
 
     /// The context menu of the viewports of this window.
     QPointer<QmlViewportMenu> _contextMenu;
+
+    /// The model side of the pipeline panel.
+    QPointer<QmlPipelineController> _pipelineController;
+
+    /// The searchable list of the commands of this workbench.
+    QPointer<CommandListModel> _commandList;
 
     /// Keeps the continuation alive that completes the import notice with the number of source frames of the imported
     /// file. A future nobody awaits cancels the continuation it carries, and the frame list of a file source is only

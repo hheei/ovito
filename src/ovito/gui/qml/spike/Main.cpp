@@ -216,6 +216,15 @@ const std::vector<SpikeStep>& spikeSteps()
           [](QmlMainWindowUI* ui, const QCommandLineParser& parser, std::function<void()> next) {
               runImportTest(ui, std::move(next));
           } },
+
+        // After everything else: it imports a data set of its own and replaces the data set at the end, so no later step
+        // may depend on the scene the other checks left behind.
+        { QCommandLineOption(QStringLiteral("qml-pipeline-check"),
+              QStringLiteral("Verify the model side of the pipeline panel (Phase 3): the roles a QML view reads, the stable ID of a row's object, the selection while the pipeline is edited, and the command list model.")),
+          [](const QCommandLineParser& p) { return p.isSet(QStringLiteral("qml-pipeline-check")); },
+          [](QmlMainWindowUI* ui, const QCommandLineParser& parser, std::function<void()> next) {
+              runPipelineTest(ui, std::move(next));
+          } },
     };
     return steps;
 }

@@ -96,6 +96,33 @@ void PipelineListModel::updateColorPalette(const QPalette& palette)
 }
 
 /******************************************************************************
+* Reports whether a removed object is back, i.e. whether the deletion has been undone.
+******************************************************************************/
+bool PipelineListModel::isObjectToReselect(RefTarget* object)
+{
+    if(!object)
+        return false;
+    return std::find_if(_removedObjects.begin(), _removedObjects.end(), [object](const OOWeakRef<RefTarget>& ref) { return ref.lock().get() == object; }) != _removedObjects.end();
+}
+
+/******************************************************************************
+* Remembers an object the user removed by an edit.
+******************************************************************************/
+void PipelineListModel::rememberRemovedObject(RefTarget* object)
+{
+    if(!object)
+        return;
+
+    // Forget the objects of earlier removals that cannot come back, and keep the list short: it only has to remember
+    // what the next undo could return.
+    constexpr std::size_t maxRememberedObjects = 8;
+    std::erase_if(_removedObjects, [](const OOWeakRef<RefTarget>& ref) { return ref.expired(); });
+    while(_removedObjects.size() >= maxRememberedObjects)
+        _removedObjects.erase(_removedObjects.begin());
+    _removedObjects.emplace_back(object);
+}
+
+/******************************************************************************
 * Returns the currently selected item in the modification list.
 ******************************************************************************/
 PipelineListItem* PipelineListModel::selectedItem() const
@@ -124,6 +151,10 @@ void PipelineListModel::onSceneSelectionChangeComplete(SelectionSet* selection)
 ******************************************************************************/
 void PipelineListModel::onSelectionModelChanged()
 {
+    // Selecting something else means the user moved on, so a pending reselect of an object that an undo will bring back
+    // is stale. The model's own selection update does not count as such a change.
+    if(!_applyingSelection)
+        _removedObjects.clear();
     _selectedItems.clear();
     for(int listIndex = 0; listIndex < items().size(); listIndex++) {
         if(_selectionModel->isSelected(index(listIndex)))
@@ -292,13 +323,22 @@ void PipelineListModel::refreshList()
     _previouslySelectedItems.clear();
     _previouslySelectedPipeline = selectedPipeline();
 
-    // Update the selection.
+    // Update the selection. An object an undone deletion brought back replaces the selection the list had, because the
+    // user works on the object that returned and the two rules must not add up to a multi-selection.
+    if(!_itemsToReselect.isEmpty()) {
+        _itemsToSelect = std::move(_itemsToReselect);
+        _removedObjects.clear();   // The pending reselects have been used up.
+    }
+    _itemsToReselect.clear();
     _selectedItems.clear();
     for(int listIndex = 0; listIndex < items().size(); listIndex++) {
         if(_itemsToSelect.contains(index(listIndex)))
             _selectedItems.push_back(items()[listIndex]);
     }
+    // The change made here is the model's own, so it must not be mistaken for the user picking another object.
+    _applyingSelection = true;
     _selectionModel->select(std::move(_itemsToSelect), QItemSelectionModel::SelectCurrent | QItemSelectionModel::Clear);
+    _applyingSelection = false;
     _itemsToSelect.clear();
     Q_EMIT selectedItemChanged();
 }
@@ -340,13 +380,19 @@ PipelineListItem* PipelineListModel::appendListItem(RefTarget* object, PipelineL
 
     // Determine whether this list item is going to be selected.
     bool selectItem = false;
+    bool reselectItem = false;
     if(_nextObjectToSelect) {
         // Select the pipeline object that has been explicitly requested.
         if(_nextObjectToSelect == object)
             selectItem = true;
     }
     else {
-        if(!_previouslySelectedItems.empty() && object != nullptr) {
+        // An object the user removed is selected again when a refresh brings it back, which is what an undone deletion
+        // does: the undo returns the object *and* the selection it carried (UI_DESIGN.md section 5.3).
+        if(isObjectToReselect(object)) {
+            selectItem = reselectItem = true;
+        }
+        else if(!_previouslySelectedItems.empty() && object != nullptr) {
             // Check if the same list entry was selected before the list refresh.
             for(const auto& oldItem : _previouslySelectedItems) {
                 if(oldItem->object() == object) {
@@ -362,8 +408,12 @@ PipelineListItem* PipelineListModel::appendListItem(RefTarget* object, PipelineL
         }
     }
 
-    if(selectItem)
-        _itemsToSelect.select(modelIndex, modelIndex);
+    if(selectItem) {
+        if(reselectItem)
+            _itemsToReselect.select(modelIndex, modelIndex);
+        else
+            _itemsToSelect.select(modelIndex, modelIndex);
+    }
 
     return item;
 }
@@ -516,6 +566,9 @@ void PipelineListModel::deleteModificationNode(ModificationNode* node)
         });
         node->requestObjectDeletion();
     });
+
+    // Remember the node the user removed, so that an undo that brings it back also brings the selection back.
+    rememberRemovedObject(node);
 
     // Invalidate the items list of the model.
     refreshListLater();
@@ -851,6 +904,7 @@ QHash<int, QByteArray> PipelineListModel::roleNames() const
         { TitleRole, "title" },
         { ItemTypeRole, "type" },
         { CheckedRole, "ischecked" },
+        { IsCollapsedRole, "iscollapsed" },
         { DecorationRole, "decoration" },
         { ToolTipRole, "tooltip" },
         { StatusInfoRole, "statusinfo" }

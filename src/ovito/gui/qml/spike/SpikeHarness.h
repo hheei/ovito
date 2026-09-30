@@ -95,7 +95,8 @@ struct PickProbe
 
 /// The models of the pipeline panel and of the modifier and layer libraries. Their constructors register commands with
 /// fixed ids, and the action manager refuses a second command with the same id - so a process can hold only one instance
-/// of each, which is why the checks share the ones created here.
+/// of each, which is why the checks share the ones the workbench created (the pipeline list and the modifier library
+/// belong to the frontend since Phase 3, the layer library is created here because no frontend presents it yet).
 struct WorkbenchModels
 {
     PipelineListModel* pipelineList = nullptr;
@@ -209,6 +210,15 @@ WorkbenchModels& workbenchModels(QmlMainWindowUI* ui);
 /// This is verified where a trajectory exists - either because the check was given one on the command line (the command
 /// check probes it then) or right after the import check has imported one.
 void probeAnimationPlaybackCommand(QmlMainWindowUI* ui, Command* playbackCommand);
+
+/******************************************************************************
+* Verifies the model side of the pipeline panel (Phase 3, slice S1): the roles a QML view reads, the stable identity of
+* a row's object, the selection and its coherence while the pipeline is edited, and the command list model.
+*
+* The check imports a data set of its own and replaces the data set at the end, so it has to run after the checks that
+* rely on the scene they leave behind.
+******************************************************************************/
+void runPipelineTest(QmlMainWindowUI* ui, std::function<void()> continuation);
 
 /// Verifies object picking at the given position of the first viewport item.
 ///

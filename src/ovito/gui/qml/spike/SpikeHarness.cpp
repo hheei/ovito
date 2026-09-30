@@ -390,17 +390,18 @@ QVariant qmlProperty(QObject* object, const QString& name)
     return property.isValid() ? property.read() : QVariant();
 }
 
-/// Creates the workbench models once per process and returns them again on later calls.
+/// Collects the models of the pipeline panel and of the libraries once and returns them again on later calls.
 ///
 /// Their constructors register commands with fixed ids (one per pipeline item, one per library entry), and the action
-/// manager refuses a second command with the same id - so a process may hold only one instance of each model. A
-/// frontend is in the same position, which is why the models are created once here and shared by the checks.
+/// manager refuses a second command with the same id - so a process may hold only one instance of each model. The
+/// pipeline list and the modifier library belong to the frontend since Phase 3 (QmlPipelineController owns them, see
+/// audit decision D54); the layer library is created here because the frontend presents no viewport layers yet.
 WorkbenchModels& workbenchModels(QmlMainWindowUI* ui)
 {
     static WorkbenchModels models;
     if(models.pipelineList == nullptr) {
-        models.pipelineList = new PipelineListModel(*ui, ui->view());
-        models.modifiers = new AvailableModifiersModel(ui->view(), *ui, models.pipelineList);
+        models.pipelineList = ui->pipelineController()->pipelineModel();
+        models.modifiers = ui->pipelineController()->modifierListModel();
         models.overlays = new AvailableOverlaysModel(ui->view(), *ui, new OverlayListModel(ui->view(), *ui));
     }
     return models;

@@ -10,6 +10,8 @@
 
 namespace Ovito {
 
+class AutomationSession;
+
 /**
  * \brief Base class for the workbench implementations of the graphical user interface frontends.
  *
@@ -104,6 +106,15 @@ public:
     /// \return The task progress model, or null before the workbench has been initialized (see initializeWorkbench()).
     TaskProgressModel* taskProgressModel() const { return _taskProgressModel; }
 
+    /// Returns the machine-facing view of this workbench: the session that owns the stable object IDs of the objects
+    /// the frontends present and that a local client talks to (see audit decisions D55 and D59).
+    ///
+    /// The session exists for every workbench because the identity of an object in a presentation is the session's
+    /// identity, not the row's or the pointer's; whether the workbench *serves* the session to a client of the machine-
+    /// facing layer is a separate decision of the frontend.
+    /// \return The session, or null before the workbench has been initialized (see initializeWorkbench()).
+    AutomationSession* automationSession() const { return _automationSession; }
+
     /// Displays an error message to the user.
     virtual void reportError(const Exception& ex, bool blocking = false) override;
 
@@ -172,6 +183,9 @@ private:
 
     /// Lists the running tasks of this workbench for the frontend. Owned by the object passed to initializeWorkbench().
     TaskProgressModel* _taskProgressModel = nullptr;
+
+    /// The machine-facing view of this workbench. Owned by the object passed to initializeWorkbench().
+    AutomationSession* _automationSession = nullptr;
 
     /// Head of doubly-linked list of all registered task progress records.
     TaskProgress* _progressTasksHead = nullptr;

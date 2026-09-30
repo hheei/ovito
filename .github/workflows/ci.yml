@@ -79,6 +79,7 @@ env:
     --qml-layout-check --qml-command-check --qml-settings-check --qml-session-check --qml-library-check
     --qml-icon-check --qml-offscreen-check --qml-prewarm-check --qml-pick 300,300 --qml-parity-check
     --qml-import-check
+    --qml-pipeline-check
 
 jobs:
   # ---------------------------------------------------------------------------

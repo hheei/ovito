@@ -84,6 +84,8 @@ static void registerQmlTypes()
             QStringLiteral("There is one workbench controller per workbench window."));
         qmlRegisterUncreatableType<QmlViewportMenu>("Ovito.Qml", 1, 0, "ViewportMenu",
             QStringLiteral("There is one viewport context menu per workbench window."));
+        qmlRegisterUncreatableType<QmlPipelineController>("Ovito.Qml", 1, 0, "PipelineController",
+            QStringLiteral("There is one pipeline controller per workbench window."));
         qmlRegisterUncreatableType<Command>("Ovito.Qml", 1, 0, "Command",
             QStringLiteral("Commands are created by the frontend through the command manager."));
         // The icons of the shared icon set, which every component of the shell can reach as 'Icons'. The icons live in
@@ -141,6 +143,12 @@ void QmlMainWindowUI::initializeWindow()
     // Create the objects that the QML scene talks to: the shell state and commands, the controller that owns the
     // viewport items, the model that lays the panes of the viewport layout out, and the context menu of the viewports.
     _workbenchController = new QmlWorkbenchController(*this, view);
+    // The model side of the pipeline panel and the modifier library. The two shared models register the commands of the
+    // panel with the action manager, so this is also where those commands come into existence.
+    _pipelineController = new QmlPipelineController(*this, view);
+    // The searchable list of commands the workbench offers; a menu search or the Phase 8 command palette presents it.
+    if(ActionManager* manager = actionManager())
+        _commandList = new CommandListModel(*manager, view);
     _contextMenu = new QmlViewportMenu(*this, view);
     _qmlController = new QmlViewportController(*this, _contextMenu, view);
     _viewportLayout = new QmlViewportLayout(*this, view);
@@ -161,6 +169,9 @@ void QmlMainWindowUI::initializeWindow()
     view->rootContext()->setContextProperty(QStringLiteral("viewportController"), _qmlController);
     view->rootContext()->setContextProperty(QStringLiteral("viewportLayout"), _viewportLayout);
     view->rootContext()->setContextProperty(QStringLiteral("viewportMenu"), _contextMenu);
+    view->rootContext()->setContextProperty(QStringLiteral("pipelineController"), _pipelineController);
+    if(_commandList)
+        view->rootContext()->setContextProperty(QStringLiteral("commandList"), _commandList);
 
     // The running tasks and their progress are presented by the workbench's shared task progress model, which the
     // status line of the shell binds to.

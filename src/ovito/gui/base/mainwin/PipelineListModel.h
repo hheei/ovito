@@ -223,6 +223,13 @@ private:
     /// Extracts the list of model indices from a drag and drop data record.
     QVector<int> indexListFromMimeData(const QMimeData* data) const;
 
+    /// Reports whether the list shows an object again that the user had removed by an edit (an undone deletion), and
+    /// therefore has to be selected by the list update in progress.
+    bool isObjectToReselect(RefTarget* object);
+
+    /// Remembers an object the user removed by an edit, and forgets the entries whose object cannot come back.
+    void rememberRemovedObject(RefTarget* object);
+
     /// Moves a sequence of modifiers to a new position in the pipeline.
     bool moveModifierRange(OORef<ModificationNode> head, OORef<ModificationNode> tail, PipelineNode* insertBefore, ModificationNode* insertAfter);
 
@@ -243,6 +250,20 @@ private:
 
     /// The item in the list that should be selected on the next list update.
     OORef<RefTarget> _nextObjectToSelect;
+
+    /// The objects the user removed by an edit (deleting a modifier or a modifier group). A later list update that
+    /// finds one of them again selects it, because an undone deletion returns the object together with the selection it
+    /// carried. The references are weak: the entry only has to outlive the user's undo, and an object that is gone for
+    /// good has to be forgotten (see rememberRemovedObject()). The list is used up by the list update that reselects an
+    /// object, and dropped as soon as the selection changes for another reason.
+    std::vector<OOWeakRef<RefTarget>> _removedObjects;
+
+    /// The list items that become selected because a removed object returned. They replace the previous selection
+    /// instead of being added to it, so the object an undo brought back is the one the user works on.
+    QItemSelection _itemsToReselect;
+
+    /// True while the model applies its own selection, so that the selection change is not mistaken for the user's.
+    bool _applyingSelection = false;
 
     /// The list items which will become the selected ones after a list refresh.
     QItemSelection _itemsToSelect;
