@@ -33,6 +33,18 @@ SET(SourceFiles
     app/UserInterface.cpp
     app/undo/UndoableOperation.cpp
     app/undo/UndoStack.cpp
+    automation/AutomationContract.cpp
+    automation/AutomationEvent.cpp
+    automation/AutomationGateway.cpp
+    automation/AutomationObjectId.cpp
+    automation/AutomationObjectRegistry.cpp
+    automation/AutomationProtocol.cpp
+    automation/AutomationSession.cpp
+    automation/AutomationTask.cpp
+    automation/AutomationTransaction.cpp
+    automation/python/PythonContract.cpp
+    automation/python/PythonEnvironmentProbe.cpp
+    automation/python/PythonHandshake.cpp
     oo/CloneHelper.cpp
     oo/OvitoClass.cpp
     oo/OvitoObject.cpp
@@ -168,6 +180,19 @@ OVITO_STANDARD_PLUGIN(Core
     LIB_DEPENDENCIES Boost::boost function2::function2
     PRECOMPILED_HEADERS Core.h
 )
+
+# Phase 2.6 (deliverable 5) has no installable Python package yet, so the probe script of the Python pipeline track is
+# found next to its own sources: PythonEnvironmentProbe::defaultScriptFile() bakes this path in and reads the script
+# there. The callers of the probe (the environment probe test, the topology spike, and later the environment selector of
+# Phase 4) may override it per request; the installed-package lookup that replaces this define is Phase 4 work.
+SET_PROPERTY(SOURCE automation/python/PythonEnvironmentProbe.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS
+    "OVITO_AUTOMATION_PYTHON_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/automation/python\"")
+
+# The interpreter and execution-topology spike of Phase 2.6 (deliverable 6) measures the seam between Core and a
+# user-selected interpreter. It is a prototype like the Qt Quick spike, it has no install rule, and it is what leaves the
+# evidence recorded in docs/design/AUTOMATION_TOPOLOGY_SPIKE.md.
+ADD_SUBDIRECTORY(automation/spike)
 
 # Compile GLSL shaders for the QRhi-based renderer.
 OVITO_FIND_PACKAGE(Qt6 ${OVITO_MINIMUM_REQUIRED_QT_VERSION} COMPONENTS ShaderTools REQUIRED)
