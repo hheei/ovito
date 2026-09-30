@@ -4,8 +4,8 @@
 >
 > **Guiding Principle**: Validate high risks first, interaction parity before redesign
 >
-> **Status**: Proposed Roadmap; Phase 0 audit (partially), Phase 1 rendering spike and Phase 2 deliverables 1–7
-> executed — the frontend selection (`--gui=qml`), the shared `gui/base` workbench base class, the layout-derived
+> **Status**: Phase 0 (audit), Phase 1 (rendering spike) and Phases 2 and 2.5 (shell, shared layer and fit-and-finish)
+> are executed; Phase 3 onward is the open roadmap. Details — the frontend selection (`--gui=qml`), the shared `gui/base` workbench base class, the layout-derived
 > workbench shell, the import path with its empty/busy/cancelling/cancelled/error states and the shared rendering/
 > picking core are in the tree and verified on Linux/OpenGL, Linux/Vulkan, macOS/Metal and Windows/D3D12, see
 > [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) and [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md).
@@ -620,7 +620,14 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        asynchronous pick API A3 with hover coalescing in Phase 5, the selection/hover model A5 in Phase 4, a manual
        dark/light choice and accessibility in Phase 8); and the *environment* gaps (mixed-DPI multi-monitor, macOS
        screenshots, a Vulkan driver under Xvfb) stay recorded as environment in the matrix's §6.
-- **Status**: **deliverables 1–7 are done, 8–11 are running** — every review item A1–A9 is in one of the three states the gate asks for (see the table in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md) section 7), and each optimization of deliverable 7 is recorded with its measured medians, including the two that were decided against; the picking pre-warm also names the release-only corruption it exposed (D36, defect F20) and its fix. Phase 2 is complete (deliverables 1–7, exit gate
+- **Status**: **deliverables 1–9 and 11 are done, 10 (splitting the harness source) is the last one**. Deliverable 8
+  (fit and finish, D37) is delivered and verified: closing and quitting ask about a modified session, the title marks it,
+  the File menu offers the shared recent files (including the `.ovito` redirect of the import path), the file dialog
+  reopens in the last import directory and a session with several pipelines asks which one to keep - all of it checked by
+  the existing `--qml-session-check` and `--qml-parity-check`, with the end-to-end multi-pipeline load left as a
+  documented manual check. Deliverable 9 (the shell screenshot as a CI artifact) and deliverable 11 (the freeze, recorded
+  in `AGENTS.md`, with `UI_DESIGN.md` leaving its *proposed* state after the documents were checked against the tree once
+  more) are done as well. Earlier status of this phase: **deliverables 1–7 are done, 8–11 are running** — every review item A1–A9 is in one of the three states the gate asks for (see the table in [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md) section 7), and each optimization of deliverable 7 is recorded with its measured medians, including the two that were decided against; the picking pre-warm also names the release-only corruption it exposed (D36, defect F20) and its fix. Phase 2 is complete (deliverables 1–7, exit gate
   verified on Linux/OpenGL, Linux/Vulkan, macOS/Metal and Windows/D3D12), so this phase starts from a verified base; the
   audit decisions it produces are recorded as D30 onward in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md). Deliverable 1 (the
   action/editor inventory in that document's section 6 plus [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md)) is delivered and

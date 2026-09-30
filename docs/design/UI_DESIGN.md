@@ -6,13 +6,16 @@
 >
 > **Visual Inspiration**: VS Code Modern Theme (Clean, focused, dark/light modern)
 >
-> **Status**: Proposed Design; the Qt Quick viewport rendering bridge and the asynchronous picking path are validated on
-> the Linux/OpenGL, Linux/Vulkan and macOS/Metal backends, with a measured performance baseline against the classic
-> frontend (see [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md) and [UI_TEST_ENV.md](UI_TEST_ENV.md)); the Windows/D3D12 target
-> and a hardware-driver Vulkan run remain unverified. The frontend selection (`--gui=qml`) and the shared `gui/base`
-> workbench base class are implemented, and the workbench shell derives its panes from the viewport layout tree, with
-> draggable splitters, undoable pane resizing and maximizing (Phase 2 deliverables 1–4, verified on Linux/OpenGL). The
-> import UI and the remaining Phase 2 deliverables are scoped in [UI_PLAN.md](UI_PLAN.md)
+> **Status**: **Frozen** (end of Phase 2.5). This design was validated in three steps and is the agreed basis for the
+> remaining phases: the **[Phase 0 audit](UI_PHASE0_AUDIT.md)** answered the build-entry, viewport/QRhi-ownership and
+> shared-model questions (decisions D1–D37); the **[Phase 1 spike](UI_PHASE1_SPIKE.md)** rendered real scene data, picked
+> asynchronously and rendered four viewports on Linux/OpenGL, Linux/lavapipe-Vulkan, macOS/Metal and
+> Windows/Direct3D 12, with a measured performance baseline; and **Phase 2.5** closed the shared-layer items A1–A9 and the
+> small parity gaps of the shell (see [UI_PLAN.md](UI_PLAN.md) and [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md)). These
+> properties stay unverified and are recorded as environment gaps rather than as work: a Vulkan run on a hardware driver
+> under Xvfb, mixed-DPI multi-monitor setups, and Windows screenshots (the Direct3D 12 *verification* itself passed).
+> Changing the layering or the rendering bridge described here therefore means writing a new decision in the audit and
+> updating this document, not editing an implementation in passing.
 >
 > **Execution Plan**: [UI_PLAN.md](UI_PLAN.md)
 

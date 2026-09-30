@@ -63,6 +63,24 @@ src/
 └── 3rdparty/           <-- Submodules (zstd, hdf5, netcdf-c) and bundled headers
 ```
 
+### The Qt Quick / QML frontend (architecture frozen at the end of Phase 2.5)
+
+The new frontend lives in `src/ovito/gui/qml/` and is built only with `-DOVITO_BUILD_QML_FRONTEND=ON`; run it with
+`ovito --gui=qml <data file>`. Its design is frozen: read `docs/design/UI_DESIGN.md` (status: frozen) and the decisions
+D1–D37 in `docs/design/UI_PHASE0_AUDIT.md` before changing its layering, and treat a change to the rendering bridge or
+to the shared `gui/base` layer as a new decision in that audit rather than as an edit in passing.
+
+* **Layering**: `gui/qml` depends on `gui/base` and `core` only - never on `gui/desktop` and never on QtWidgets. Shared
+  behaviour (commands, session workflow, libraries, settings, icons, offscreen rendering) belongs in `gui/base` or
+  `core/rendering`; the QML layer presents it.
+* **Every check** of the frontend is an `OvitoQmlSpike` option (`src/ovito/gui/qml/spike/Main.cpp`), and the CI runs them
+  on all four platforms. A new option must be registered *and* added to the option table of the harness, otherwise the run
+  is treated as interactive and times out.
+* **`docs/design/UI_PARITY_MATRIX.md`** is the inventory of what the classic frontend and the QML frontend do; keep it and
+  `docs/design/UI_PLAN.md` current when a capability moves.
+* **The frontend is verified, not assumed**: a shell change needs the spike suite, and a rendering change needs a look at
+  the screenshot artifact of the Linux CI job (the checks assert model state, which a shell rendering an empty pane passes).
+
 ### Critical Rules for AI Agents:
 1. **DO NOT reinvent particle analysis or geometry algorithms**:
    - Simulation cell math: Use `SimulationCell` / `SimulationCellDataT`.
