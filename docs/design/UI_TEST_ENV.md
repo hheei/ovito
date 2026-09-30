@@ -1402,10 +1402,49 @@ The spike used to be one 3300-line `Main.cpp`. It is now five files, and the rul
 | `spike/checks/ShellChecks.cpp` | layout, commands, settings, session, library, icons, parity (incl. the menu walk and the About dialog) |
 | `spike/checks/RenderingChecks.cpp` | graphics device, picking, hide/show, resize, offscreen service, picking pre-warm, frame rate, lifecycle |
 | `spike/checks/ImportChecks.cpp` | the import path: trajectory, unsupported file, cancelled import, playback |
+| `spike/checks/PipelineChecks.cpp` | the pipeline model of Phase 3: roles, stable IDs, selection while editing, the shared operations with their undo, the command list model |
 
 A new check is one entry in `main.cpp`'s `spikeSteps()` table - the option, the predicate that decides whether the value asks for the step at all, and the check to run. That table is the single source for the parser options, the help text, the run order and the *is this a verification run* decision, and it exists because those used to be three separate lists: a check that was registered in the parser but forgotten in the predicate hung until the caller's timeout killed it, which costs a CI round and looks like a product defect. A helper moves into `SpikeHarness.h` once two check files need it; a helper of one check stays `static` in its file.
 
 Order matters and the table's comments say why: the checks run in the order of the table, the importing checks come last because they load data sets of their own, and the shell checks that only read state come before the ones that change the scene. A new check that leaves the scene in a different state belongs at the end of the list, or it has to restore the scene itself.
+
+### 9.2.9 Testing the pipeline model (Phase 3, S1)
+
+`--qml-pipeline-check` verifies what a QML view reads from the shared pipeline model and what it may write back through it
+(audit D53-D62). It is a *model* check: no pipeline panel exists yet (Phase 4 d1), so the check drives the same
+`QmlPipelineController`, the same `PipelineListModel` and the same `AvailableModifiersModel` a panel will bind to, and
+every phase of it is separated by a `scheduleDelayed()` wait because the shared model rebuilds its rows on a 200 ms timer
+and the pipeline evaluates in the background.
+
+It verifies, in this order:
+
+1. the role vocabulary a QML delegate can read (`title`, `type`, `ischecked`, `iscollapsed`, `decoration`, `tooltip`,
+   `statusinfo`), that the icon role hands out a name or a path and never a `QIcon`, and that a row's ID of the
+   automation contract resolves back to that row (no ID for a visual-element or data-source row, audit D62);
+2. insertion through the shared modifier library - the first modifier the library offers that applies to the imported
+   data - after which the new row, its `modifier:mN` ID and its selection are read from the model, and the insertion's
+   undo has to remove the row *and* the validity of the ID;
+3. that a write through the ID of the undone insertion is refused instead of reaching the row's next occupant, that the
+   redo returns the same ID, and that two modifiers can be exchanged with `moveObjectUp()` (undo restores the order);
+4. deletion of the selected modifier, the coherence of the selection afterwards, and that the undo brings back both the
+   object and the selection (audit D61, the shared model's repair of the classic behaviour);
+5. disablement and its undo;
+6. that replacing the data set advances the session revision, ends the validity of every ID, refuses stale writes and
+   leaves the panel without a selection;
+7. the shared command list model of D57: order, the filter over text and status tip, that an invisible command is not
+   listed, that `triggerAt()` refuses a disabled command, and the number of commands the workbench offers (`97` in the
+   QML workbench at the time of writing, against the same table `--qml-library-check` walks).
+
+Two traps it records:
+
+* **The models are the UI's, not the check's.** `PipelineListModel` and `AvailableModifiersModel` can exist only once per
+  process, because their constructors register commands with fixed ids. `SpikeHarness.cpp` therefore hands out the
+  instances the workbench already owns (`ui->pipelineController()->model()`), and a check that constructed its own would
+  abort in `ActionManager::addCommand`.
+* **The step replaces the data set.** Its last phase loads a fresh, empty `DataSet` on purpose (that is how the ID
+  invalidation is verified), so it must stay the last step of `spikeSteps()`. The check imports a lattice file of its own
+  first, because the scene the earlier steps leave behind may contain no data at all.
+
 
 ## 10. Quick checklist
 
@@ -1415,6 +1454,8 @@ Order matters and the table's comments say why: the checks run in the order of t
 4. Picking/selection: `--qml-pick X,Y` (grid probe, negative control, synthetic click through `SelectionMode`).
 5. Lifecycle: `--qml-lifecycle-cycles N`, `--qml-hide-show`, `--qml-resize WxH`.
    Import path: `--qml-import-check` (trajectory, unsupported file, cancelled import; see §9.1).
+   Pipeline model: `--qml-pipeline-check` (roles, stable IDs, selection and undo, command list; see §9.2.9). It belongs at
+   the end of a run: it imports a data set of its own and replaces the current one.
    Command layer: `--qml-command-check` (the commands the QML workbench sees, their state rules and their handlers;
    see §9.3). Workbench state: the shared task progress model is covered by `--qml-import-check` (§9.2), the session
    workflow by `--qml-session-check` (§9.2.1) and the settings facade by `--qml-settings-check` (§9.2.2). Pass a data

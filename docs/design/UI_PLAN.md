@@ -862,6 +862,16 @@ the last column owns the first user-facing implementation and acceptance gate.
 
 ### Phase 3: Presentation Models & Command Layer
 - **Objective**: Expose shared state and editing operations with explicit lifecycle and undo semantics.
+- **Status**: *In progress.* The decision record of the phase is §8 of [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md)
+  (D53-D60): the phase delivers the model and command *APIs* rather than the panels (D53), through controllers in
+  `src/ovito/gui/qml/models/` that own the shared models (D54) and identify objects by the Phase 2.6 IDs (D55); the
+  animation model owns its keyframe selection as presentation state (D56); the command list model is a shared proxy
+  over `ActionManager` (D57); a continuous edit is one `UndoableTransaction` per gesture (D58); a workbench serves a
+  local session only when it is asked to (D59); and the CLI JSON mode is a mode of the `ovito` binary (D60). The phase
+  runs in four slices - **S1** = deliverables 1, 3, 4 and 5, **S2** = deliverable 2, **S3** = deliverable 6,
+  **S4** = deliverable 7 - and §8 Verification names the check each slice adds. **S1 (deliverables 1, 3, 4 and 5) is
+  delivered and verified** by the new `--qml-pipeline-check` step and `ctest --preset native` (11/11); the next slice is
+  S2.
 - **Deliverables**:
   1. Pipeline presentation using the Phase 0 reuse decision: roles, selection, source/visual-element rows, groups, shared objects, and evaluation status. New adapters, if needed, live under `src/ovito/gui/qml/models/`.
   2. Animation presentation for the scene interval, current time/frame, playback settings, controllers, and keyframe selection. Add scene selection adaptation only where the shared API needs it.

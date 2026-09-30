@@ -88,10 +88,10 @@ them together with what would be needed.
 
 | Capability | Classic reference | Qt Quick | Phase | Acceptance case |
 |---|---|---|---|---|
-| Pipeline list (rows, visibility toggles, status text) | `ModifyCommandPage` plus the shared `PipelineListModel` | ▶ Phase 4 d1 | 4 | model-level: roles, object ids, selection, status text for a reporting modifier |
-| Modifier insertion through the chooser | `AvailableModifiersModel` plus the selector widget (both shared) | ▶ Phase 4 d3 | 4 | insert a representative modifier per plugin, undo and redo |
+| Pipeline list (rows, visibility toggles, status text) | `ModifyCommandPage` plus the shared `PipelineListModel` | ◐ Phase 4 d1: the model half is in the tree - QML-visible roles, object IDs, selection, inserts, moves, deletes and enablement through the shared operations | 4 | model-level: `--qml-pipeline-check` (roles, object IDs, row↔ID resolution, selection, undo/redo); the status text of a reporting modifier arrives with the view |
+| Modifier insertion through the chooser | `AvailableModifiersModel` plus the selector widget (both shared) | ◐ Phase 4 d3: the insertion is in the tree (the controller triggers the library command and undo takes it back) | 4 | model half: `--qml-pipeline-check` inserts through the library and undoes it; the panel plus a representative modifier per plugin follow with d3 |
 | Reordering by drag & drop with validation | `PipelineListModel::performDragAndDropOperation` (group and range handling, dry-run validation) | ▶ Phase 4 d1 | 4 | reorder across groups, invalid drop rejected, `performTransaction("Move modifier")` |
-| Delete, rename, copy to, clone, make unique | commands of group 4 plus `WidgetActionManager` | ▶ Phase 4 d1 | 4 | each command, then undo: the object and the selection return |
+| Delete, rename, copy to, clone, make unique | commands of group 4 plus `WidgetActionManager` | ◐ Phase 4 d1 for delete: the model restores the object *and* its selection on undo (audit D61); the other commands arrive with the view | 4 | delete of a selected modifier, then undo: the object and the selection return (`--qml-pipeline-check`); each further command with d1 |
 | Modifier groups | `ModifierGroupEditor` | ▶ Phase 4 d1 | 4 | group three modifiers, ungroup, undo |
 | Per-pipeline visual element grouping | `PipelineGroupVisElements` | ▶ Phase 4 d1 | 4 | two pipelines sharing a vis element, toggle it |
 | Multiple-pipelines decision on load | `MainWindowUI::checkLoadedDataset` | ▶ Phase 4 (scene-node operations) | 4 | import two pipelines in a non-professional build: keep one, the other is deleted in one undo step |
