@@ -3,7 +3,12 @@
 
 # Phase 1 prototype application: renders an OVITO scene inside a Qt Quick window.
 # This executable is a technical spike for the migration described in docs/design/UI_PLAN.md.
-ADD_EXECUTABLE(OvitoQmlSpike Main.cpp)
+ADD_EXECUTABLE(OvitoQmlSpike
+    Main.cpp
+    SpikeHarness.cpp
+    checks/ImportChecks.cpp
+    checks/RenderingChecks.cpp
+    checks/ShellChecks.cpp)
 
 TARGET_LINK_LIBRARIES(OvitoQmlSpike PRIVATE
     GuiQml
