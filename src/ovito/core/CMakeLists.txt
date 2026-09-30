@@ -44,8 +44,12 @@ SET(SourceFiles
     automation/AutomationTask.cpp
     automation/AutomationTransaction.cpp
     automation/python/PythonContract.cpp
+    automation/python/PythonDataBridge.cpp
     automation/python/PythonEnvironmentProbe.cpp
     automation/python/PythonHandshake.cpp
+    automation/python/PythonIntrospector.cpp
+    automation/python/PythonSchemaPreview.cpp
+    automation/python/PythonWorkerProcess.cpp
     oo/CloneHelper.cpp
     oo/OvitoClass.cpp
     oo/OvitoObject.cpp
@@ -187,6 +191,16 @@ OVITO_STANDARD_PLUGIN(Core
 # there. The callers of the probe (the environment probe test, the topology spike, and later the environment selector of
 # Phase 4) may override it per request; the installed-package lookup that replaces this define is Phase 4 work.
 SET_PROPERTY(SOURCE automation/python/PythonEnvironmentProbe.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS
+    "OVITO_AUTOMATION_PYTHON_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/automation/python\"")
+
+# The schema preview of deliverable 7 reads a user script with the same directory's ovito_schema.py, so it needs the same
+# path. Both defines disappear together when Phase 4 replaces the seam with an installed-package lookup (open item O16).
+SET_PROPERTY(SOURCE automation/python/PythonWorkerProcess.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS
+    "OVITO_AUTOMATION_PYTHON_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/automation/python\"")
+
+SET_PROPERTY(SOURCE automation/python/PythonIntrospector.cpp
     APPEND PROPERTY COMPILE_DEFINITIONS
     "OVITO_AUTOMATION_PYTHON_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/automation/python\"")
 

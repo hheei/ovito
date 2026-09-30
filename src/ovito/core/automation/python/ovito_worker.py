@@ -23,6 +23,12 @@ Protocol: one JSON object per line on stdin, one JSON object per line on stdout,
 `id`. A request may declare `"bytes": N`, in which case exactly N raw bytes follow its header line and before the next
 line - that is the `framed` transfer. Errors are reported as `{"ok": false, "error": {"code": ..., "message": ...}}`,
 never as a crash, except for the deliberately crashing `crash` operation.
+
+Operations: `handshake`, `ping`, `process` (the synthetic benchmark of the topology spike), `arrays` (the data
+bridge: named numeric arrays in, derived and echoed arrays out, with checksums in both directions), `sleep`, `cancel`,
+`crash` and `quit`. The file stays in the tree as the reference implementation of the protocol after the spike that
+produced it: the data bridge of deliverable 7 speaks to it, and the installed package's own entry point (Phase 4)
+replaces it on the same wire.
 """
 
 import hashlib
@@ -65,12 +71,12 @@ _shm_counter = 0         # monotonic: a name is never reused, because the caller
 
 def _features():
     """What this environment can do, in the vocabulary of the package contract (PythonContract::Feature)."""
-    features = ["schema.introspection", "function.inplace", "parameter.scalar", "traceback.mapping"]
-    if np is not None:
-        features.append("array.buffer")
-        if shared_memory is not None and os.name == "posix":
-            # Filling the segment is what needs numpy, so the feature is only advertised when both halves exist.
-            features.append("array.shared-memory")
+    # The array.buffer feature is advertised unconditionally: the "arrays" op of the data bridge moves numeric arrays
+    # over the framed transfer using the standard library's "array" module, so a numpy-free interpreter can do it too.
+    # Only the shared-memory transport needs numpy, because filling a segment is what needs it.
+    features = ["schema.introspection", "function.inplace", "parameter.scalar", "array.buffer", "traceback.mapping"]
+    if np is not None and shared_memory is not None and os.name == "posix":
+        features.append("array.shared-memory")
     features.append("task.cancellation")
     return sorted(features)
 
@@ -269,6 +275,122 @@ def _op_sleep(request):
     return {"ok": True, "sleptMs": seconds * 1000.0}, b""
 
 
+#: The numeric types the bridge can move, with the `array` module's type code and the element size in bytes. The
+#: vocabulary is fixed by `PythonDataBridge` on the C++ side; an unknown name is refused rather than guessed at.
+BRIDGE_DTYPES = {
+    "float64": ("d", 8),
+    "float32": ("f", 4),
+    "int64": ("q", 8),
+    "int32": ("i", 4),
+    "uint32": ("I", 4),
+    "int8": ("b", 1),
+    "uint8": ("B", 1),
+}
+
+
+def _describe_array(name, dtype, shape, data):
+    """One output descriptor: what the caller needs to rebuild the array it is being handed."""
+    return {"name": name, "dtype": dtype, "shape": list(shape), "bytes": len(data), "sha256": _sha256(data)}
+
+
+def _op_arrays(request):
+    """The data bridge: arrays in, arrays out, over the framed transfer.
+
+    This is the first *writable* bridge between OVITO and the interpreter, and it is deliberately narrow. It shows the
+    three rules the design fixes for the seam, and it shows them with data the caller can verify:
+
+      * **Byte-exact in both directions.** Every input descriptor carries the sender's SHA-256, which is checked here,
+        and the response reports the hash of what actually arrived - so a caller can prove its bytes were not
+        reinterpreted on the way in, not only that the answer is well formed.
+      * **Copies, never shared memory.** The bytes arrive in this process's own buffer; nothing the caller owns is
+        reachable from here, so neither side can change the other's data or outlive it. (The shared-memory transport
+        measured by the topology spike is an optimisation *of the same API*, not a different one - and it is not part of
+        this op, because a segment per evaluation is exactly what the spike showed is not worth it.)
+      * **A deterministic result.** `scale` multiplies a float64 array by a factor and echoes the remaining input
+        arrays byte for byte, so the caller can predict the output exactly. A real pipeline evaluation returns what a
+        modifier produced; this one exists to be checkable.
+    """
+    descriptors = request.get("arrays")
+    payload = request.get("payload") or b""
+    if not isinstance(descriptors, list) or not descriptors:
+        raise ValueError("the request must describe at least one array")
+    operation = request.get("operation", "scale")
+    if operation not in ("scale", "identity"):
+        raise ValueError("unknown operation: {}".format(operation))
+    factor = float(request.get("factor", 1.0))
+
+    arrays = []
+    received = {}
+    offset = 0
+    for descriptor in descriptors:
+        name = descriptor.get("name")
+        dtype = descriptor.get("dtype")
+        shape = descriptor.get("shape") or []
+        if not name:
+            raise ValueError("an array was sent without a name")
+        if dtype not in BRIDGE_DTYPES:
+            raise ValueError("the array \"{}\" has the unsupported type {}".format(name, dtype))
+        code, element_size = BRIDGE_DTYPES[dtype]
+        elements = 1
+        for dimension in shape:
+            elements *= int(dimension)
+        needed = elements * element_size
+        if int(descriptor.get("bytes", needed)) != needed:
+            raise ValueError('the array "{}" declares {} bytes but its shape needs {}'.format(name, descriptor.get("bytes"), needed))
+        data = payload[offset:offset + needed]
+        if len(data) != needed:
+            raise ValueError('the payload is too short for the array "{}"'.format(name))
+        offset += needed
+        announced = descriptor.get("sha256")
+        digest = _sha256(data)
+        if announced and announced != digest:
+            raise ValueError('the array "{}" arrived changed ({} instead of {})'.format(name, digest, announced))
+        received[name] = {"dtype": dtype, "shape": list(shape), "bytes": needed, "sha256": digest}
+        arrays.append((name, dtype, code, element_size, list(shape), data))
+
+    if offset != len(payload):
+        raise ValueError("the payload has {} bytes more than the described arrays".format(len(payload) - offset))
+
+    outputs = []
+    blocks = []
+    if operation == "scale":
+        first = arrays[0]
+        name, dtype, code, element_size, shape, data = first
+        if dtype != "float64":
+            raise ValueError('the array "{}" to scale must be float64, not {}'.format(name, dtype))
+        import array as _array
+
+        values = _array.array("d")
+        values.frombytes(data)
+        for index in range(len(values)):
+            values[index] = values[index] * factor
+        scaled_bytes = values.tobytes()
+        outputs.append(_describe_array(name + "_scaled", dtype, shape, scaled_bytes))
+        blocks.append(scaled_bytes)
+        # The remaining arrays come back exactly as they arrived, which is what makes the transfer verifiable: the
+        # caller compares bytes it sent with bytes it received.
+        for entry in arrays[1:]:
+            echoed = _describe_array(entry[0] + "_echo", entry[1], entry[4], entry[5])
+            outputs.append(echoed)
+            blocks.append(entry[5])
+    else:
+        for entry in arrays:
+            echoed = _describe_array(entry[0] + "_echo", entry[1], entry[4], entry[5])
+            outputs.append(echoed)
+            blocks.append(entry[5])
+
+    payload_out = b"".join(blocks)
+    return {
+        "ok": True,
+        "arrays": outputs,
+        "bytes": len(payload_out),
+        "operation": operation,
+        "factor": factor,
+        "inputSha256": received,
+        "elements": sum(int(descriptor["bytes"]) // BRIDGE_DTYPES[descriptor["dtype"]][1] for descriptor in outputs),
+    }, payload_out
+
+
 def _execute(request):
     """Runs one request and returns (response, raw payload) - the payload is written after the header line."""
     op = request.get("op")
@@ -276,6 +398,8 @@ def _execute(request):
         return _op_handshake(request), b""
     if op == "ping":
         return {"ok": True, "pid": os.getpid()}, b""
+    if op == "arrays":
+        return _op_arrays(request)
     if op == "process":
         return _op_process(request)
     if op == "sleep":
@@ -298,18 +422,31 @@ def _reader(queue, lock):
     never runs concurrently with another one, exactly as the interpreter on the other side of the pipe requires. The
     cancellation flag is registered here, before the request is queued, so a cancel that arrives while the request is
     still waiting cannot be lost.
+
+    Reading happens on the *binary* stream, because a request may announce a raw payload that follows its header line:
+    the array bridge sends its bytes that way, and a text-oriented reader would eventually mistake array bytes for a
+    message. The payload is read here, before the request is queued, so the execution thread never touches the stream.
     """
-    for line in sys.stdin:
-        line = line.strip()
+    stream = sys.stdin.buffer
+    while True:
+        raw = stream.readline()
+        if not raw:
+            return                      # the caller closed the pipe: the worker ends with the loop below
+        line = raw.strip()
         if not line:
             continue
         try:
             request = json.loads(line)
         except BaseException as exc:  # noqa: BLE001
+            # A header that cannot be parsed leaves the stream unusable if a payload was announced, which is why the
+            # caller (OVITO) never builds one: this is a defect report, not a supported way to talk to the worker.
             with lock:
                 sys.stdout.write(json.dumps(_error_response("invalid_argument", str(exc))) + "\n")
                 sys.stdout.flush()
             continue
+        payload_size = int(request.get("bytes") or 0)
+        if payload_size:
+            request["payload"] = stream.read(payload_size)
         if request.get("op") == "cancel":
             event = _cancelled.get(request.get("target"))
             if event is not None:
@@ -340,7 +477,12 @@ def main():
             with lock:
                 sys.stdout.write(json.dumps({"id": request_id, "ok": True, "quitting": True}) + "\n")
                 sys.stdout.flush()
-            return 0
+            # os._exit, not a return: the reader thread is blocked in a read on standard input, and letting the
+            # interpreter finalize while that thread holds the buffered-reader lock aborts the process
+            # ("Fatal Python error: _enter_buffered_busy ... possibly due to daemon threads") - which a caller sees as a
+            # worker that had to be killed after it answered. The answer is flushed and the segments are unlinked, so
+            # there is nothing left to finalize.
+            os._exit(0)
         started = time.perf_counter()
         try:
             response, payload = _execute(request)
