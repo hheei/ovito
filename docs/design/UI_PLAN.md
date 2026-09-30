@@ -608,6 +608,16 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      verification run), a trap that has already produced a run which timed out without doing anything. The steps move into
      one file per check under `src/ovito/gui/qml/spike/checks/` behind a small registry that derives the option list, the
      help text and the "is this a verification run" decision from one table.
+     * **Delivered**: `Main.cpp` keeps the application class, the step/option table and `main()` (462 lines instead of
+       3282), the machinery every check shares lives in `SpikeHarness.h`/`.cpp`, and the checks are grouped by what they
+       verify in `checks/ShellChecks.cpp`, `checks/RenderingChecks.cpp` and `checks/ImportChecks.cpp` (a deliberate
+       deviation from "one file per check": the checks share helper clusters per theme, and one file per check would have
+       produced eleven files of 100-300 lines instead of three of ~200-1400). The table is now the only place that
+       registers an option, which removes the two-list trap that had already produced a run which did nothing until its
+       timeout; the run order is unchanged and still spelled out in the table's comments. Verified by the full
+       CI-equivalent spike sequence (0 failed checks, 239 frames in 2000 ms with four viewports, 19 of 25 pick positions
+       hit including the example node and the empty background control), `ctest --preset native` at 6/6 and
+       `ovito --nogui`; [UI_TEST_ENV.md](UI_TEST_ENV.md) §9.2.8 describes the layout and how to add a check.
   11. **Close the phase** — with the items above landed, the architecture status of [UI_DESIGN.md](UI_DESIGN.md) ends its
      "proposed" state, which was waiting for exactly three things: the Phase 0 audit, the Phase 1 rendering validation
      and the exit gate of this phase, and all three are done. The documents that describe the shell are checked against
@@ -620,7 +630,9 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        asynchronous pick API A3 with hover coalescing in Phase 5, the selection/hover model A5 in Phase 4, a manual
        dark/light choice and accessibility in Phase 8); and the *environment* gaps (mixed-DPI multi-monitor, macOS
        screenshots, a Vulkan driver under Xvfb) stay recorded as environment in the matrix's §6.
-- **Status**: **deliverables 1–9 and 11 are done, 10 (splitting the harness source) is the last one**. Deliverable 8
+- **Status**: **all deliverables 1-11 are done**. Deliverable 10 (splitting the harness source, D38) is delivered and
+  verified: the option/step table of `Main.cpp` is the single registration point, so the trap of a check that is parsed but
+  not run is gone, and the checks are grouped by theme under `spike/checks/`. Deliverable 8
   (fit and finish, D37) is delivered and verified: closing and quitting ask about a modified session, the title marks it,
   the File menu offers the shared recent files (including the `.ovito` redirect of the import path), the file dialog
   reopens in the last import directory and a session with several pipelines asks which one to keep - all of it checked by

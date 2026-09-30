@@ -1125,6 +1125,22 @@ reported inside an unrelated allocation (`malloc()`, `QThreadPool::start()`), an
 use-after-free and the two stacks involved, valgrind reported nothing at all.
 
 
+### 9.2.8 Where the checks live, and how to add one
+
+The spike used to be one 3300-line `Main.cpp`. It is now five files, and the rule for adding a check follows from that:
+
+| file | content |
+| --- | --- |
+| `spike/Main.cpp` | the application class, the **table** of options and steps, and `main()` |
+| `spike/SpikeHarness.h` / `.cpp` | the machinery every check uses: polling, picking probes, scene and camera dumps, fixture writers, the cached command models |
+| `spike/checks/ShellChecks.cpp` | layout, commands, settings, session, library, icons, parity (incl. the menu walk and the About dialog) |
+| `spike/checks/RenderingChecks.cpp` | graphics device, picking, hide/show, resize, offscreen service, picking pre-warm, frame rate, lifecycle |
+| `spike/checks/ImportChecks.cpp` | the import path: trajectory, unsupported file, cancelled import, playback |
+
+A new check is one entry in `main.cpp`'s `spikeSteps()` table - the option, the predicate that decides whether the value asks for the step at all, and the check to run. That table is the single source for the parser options, the help text, the run order and the *is this a verification run* decision, and it exists because those used to be three separate lists: a check that was registered in the parser but forgotten in the predicate hung until the caller's timeout killed it, which costs a CI round and looks like a product defect. A helper moves into `SpikeHarness.h` once two check files need it; a helper of one check stays `static` in its file.
+
+Order matters and the table's comments say why: the checks run in the order of the table, the importing checks come last because they load data sets of their own, and the shell checks that only read state come before the ones that change the scene. A new check that leaves the scene in a different state belongs at the end of the list, or it has to restore the scene itself.
+
 ## 10. Quick checklist
 
 1. Build the frontend: `cmake --preset native -DOVITO_BUILD_QML_FRONTEND=ON && cmake --build --preset native -j 16`.
