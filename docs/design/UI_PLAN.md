@@ -5,7 +5,8 @@
 > **Guiding Principle**: Validate high risks first, interaction parity before redesign
 >
 > **Status**: Phase 0 (audit), Phase 1 (rendering spike) and Phases 2 and 2.5 (shell, shared layer and fit-and-finish)
-> are executed; Phase 3 onward is the open roadmap. Details — the frontend selection (`--gui=qml`), the shared `gui/base` workbench base class, the layout-derived
+> are executed; Phase 2.6 is now the approved architecture-adaptation stage for the Python pipeline and AI/CLI automation
+> tracks, and Phase 3 onward remains the open implementation roadmap. Details — the frontend selection (`--gui=qml`), the shared `gui/base` workbench base class, the layout-derived
 > workbench shell, the import path with its empty/busy/cancelling/cancelled/error states and the shared rendering/
 > picking core are in the tree and verified on Linux/OpenGL, Linux/Vulkan, macOS/Metal and Windows/D3D12, see
 > [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) and [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md).
@@ -95,6 +96,9 @@ Phase 2: Minimal QML Shell & Build Scaffolding
    │
    ▼
 Phase 2.5: Shared-Layer Cleanup & Small Parity Gaps
+   │
+   ▼
+Phase 2.6: Automation & Python Architecture Adaptation
    │
    ▼
 Phase 3: Presentation Models & Command Layer
@@ -598,11 +602,14 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
      `--qml-hold-ms` instead of grabbing it itself) and upload the image as a job artifact. Deliberately **not** a
      byte-exact pixel comparison in the build: font rasterization alone would make that fail, so the artifact is for a
      reviewer and for comparing rounds by hand.
-     * **Delivered**: the Linux x86_64 job starts its own `Xvfb` on display `:77`, runs the spike in the background with
-       `--qml-hold-ms 8000`, waits for `VERIFICATION_DONE`, photographs the display with `ffmpeg -f x11grab` and uploads
-       `shell.png` as the artifact `qt-quick-shell-linux-x86_64`; the step still fails on the spike's exit code, and the
-       capture is taken with `|| true` so a missing image cannot mask a failing check. Only the x86_64 job captures, since
-       the other Linux job renders the same shell through the same llvmpipe/xcb path.
+     * **Delivered**: the Linux x86_64 job starts its own `Xvfb` on display `:77`, photographs the display with
+       `ffmpeg -f x11grab` and uploads `shell.png` as the artifact `qt-quick-shell-linux-x86_64`; the step still fails on
+       the spike's exit code and the capture is taken with `|| true` so a missing image cannot mask a failing check. Only
+       the x86_64 job captures, since the other Linux job renders the same shell through the same llvmpipe/xcb path. The
+       image comes from a second, short run (layout/command/pick checks plus `--qml-hold-ms`) because the gating sequence
+       ends with a cancelled import that leaves the scene empty - its first version photographed exactly that, an empty
+       shell, and also caught a dialog that a check had answered programmatically and that therefore stayed open (defect
+       F21, fixed by following the controller's state in the QML dialogs).
   10. **Harness maintainability** — the spike's `Main.cpp` is over 3000 lines and holds every check, and a new
      verification option has to be registered in two places (the parser and the predicate that decides whether a run is a
      verification run), a trap that has already produced a run which timed out without doing anything. The steps move into
@@ -692,6 +699,85 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
     directory cleared (UI_TEST_ENV.md section 5.5). Deliverable 1's Windows rows start from those prerequisites.
 
 ---
+
+### Phase 2.6: Automation & Python Architecture Adaptation
+- **Objective**: Adapt the shared core and `gui/base` boundaries so Python pipeline execution and live-session automation
+  can be added without making QML callbacks, QtWidgets actions, or a protocol transport part of the scientific core. This
+  is an architecture phase, not the delivery of a user-facing Python node, AI panel, or complete automation CLI.
+- **Scope boundary**: Phase 2.6 may add schemas, registries, probes, test harnesses, and no-op/read-only spikes needed to
+  validate the contracts below. It must not claim that Python computation, arbitrary pipeline mutation, AI planning, or
+  file-writing automation is available until the owning later phase passes its own acceptance gate.
+- **Deliverables**:
+  1. **Automation Gateway boundary**: define the shared controller above core `Scene`, `Pipeline`, `Modifier`,
+     `Property`, `Task`, `Undo`, and session semantics. QML, QtWidgets, CLI, Python, and future AI/MCP clients consume
+     this boundary; none of them owns duplicate mutation logic. Keep the existing UI `Command` type as a presentation
+     view and add machine-facing descriptors/results separately.
+  2. **Query and command contracts**: specify versioned command descriptors, query descriptors, parameter schemas,
+     required capabilities, structured results/errors, warnings, task IDs, transaction IDs, and artifact metadata. Query
+     operations must be usable without granting mutation permissions.
+  3. **Stable identity and revisions**: introduce the design-level contract for stable external IDs such as
+     `pipeline:p42`, `modifier:m108`, `viewport:v-perspective`, and `property:m108/distance`, plus a session revision and
+     `baseRevision` precondition. IDs must not be QML delegate indexes and must be invalidated clearly after dataset
+     replacement or object deletion.
+  4. **Task, event, transaction, and permission model**: make task lifecycle (`start`, progress, cancel, await, result,
+     error), semantic activity provenance, transaction/Undo boundaries, and capability scopes explicit. Initial AI/client
+     defaults are read-only; Python execution, file writes, network access, and external processes require separate
+     capabilities and authorization.
+  5. **Python package contract**: create the packaging/protocol design for a repository-supplied lightweight `ovito`
+     package and optional native bridge. Define the strict `pyproject.toml` compatibility envelope, package/protocol
+     versioning, supported CPython/platform/architecture matrix, and the runtime handshake fields. Do not silently install,
+     upgrade, or fall back to another environment.
+  6. **Interpreter and execution-topology spike**: compare a selected-interpreter persistent worker against an embedded
+     runtime on representative particle and mesh data. Measure startup, repeated evaluation, large-array transfer,
+     cancellation, crash recovery, and frame-change behavior. JSON/pickle is allowed for control metadata only, never as the
+     routine full-dataset transport. The spike must leave an evidence-backed decision or a documented compatibility seam,
+     not an assumed topology.
+  7. **Data-bridge and discovery spike**: define the first writable data bridge, ownership/copy rules, and supported array
+     transfer. Validate AST-only function preview versus explicit runtime import, including malformed syntax, dynamic
+     decorators, imports with side effects, and traceback mapping. This does not insert a Python function into a pipeline.
+  8. **Local protocol spike**: prove a local-only JSON Lines or equivalent IPC endpoint can discover one live workbench,
+     query a bounded session snapshot, observe task/scene events, and request a displayed-view PNG. Network listening is
+     disabled by default. The spike may be read-only and must report deterministic protocol errors.
+  9. **Activity and observability hooks**: add the minimum origin/revision hooks (`user`, `qml`, `cli`, `ai`, `python`) and
+     bounded recent semantic activity needed by later clients, without recording raw mouse/keyboard input or leaking paths
+     and data-derived values by default.
+  10. **Documentation and compatibility gate**: record the selected IDs, schemas, capability names, handshake, transfer
+      benchmark, and unresolved risks in [AUTOMATION_AND_PYTHON_PIPELINE_DESIGN.md](AUTOMATION_AND_PYTHON_PIPELINE_DESIGN.md).
+      Add a small contract test suite that can be run without a Python installation and a separate environment probe for
+      configured Python runtimes. Keep the classic UI, QML shell, headless mode, and existing spike checks passing.
+- **Not in this phase**: Python Function Modifier execution, Python parameter editing, Python source/analysis nodes, a
+  writable automation CLI, AI plan execution, MCP, remote automation, render/export workflows, or a built-in Python editor.
+- **Exit Gate**: The shared contracts are versioned and documented; stable IDs survive refresh and object replacement; stale
+  `baseRevision` requests are rejected; task/event/transaction/capability schemas have deterministic tests; the selected
+  Python environment can be probed without silent fallback; the worker/embedded benchmark has evidence; and a local client
+  can perform only the bounded read-only snapshot/PNG spike. No later feature is marked implemented by this gate.
+
+#### Formal feature placement after Phase 2.6
+
+The following mapping is normative for the two new tracks. Phase 2.6 owns the adaptation and proof obligations; the phase in
+the last column owns the first user-facing implementation and acceptance gate.
+
+| Capability | Phase 2.6 adaptation | Formal implementation phase |
+|---|---|---|
+| Lightweight `ovito` package, `pyproject.toml`, protocol/native versioning, runtime handshake | Package contract, compatibility matrix, probe and worker/embedded seam | **Phase 4** for the package used by the first Python Modifier; optional managed environment is **Phase 8** |
+| Decorator metadata and AST function preview | Schema format, static/dynamic discovery distinction, side-effect test cases | **Phase 4** with the Python Function Modifier |
+| Python Function Modifier with writable data and `None` return | Data ownership, transfer, cancellation, traceback and reload contracts | **Phase 4**, alongside pipeline editing and the generic property model |
+| Python scalar parameter model and persistence | `PythonParameterSet` schema, IDs, hashes, serialization contract | **Phase 4** initial scalar controls; richer types are **Phase 8** |
+| Python source/generator and analysis function kinds | Reserve separate operation/node contracts only | **Phase 8**, after the modifier contract is proven |
+| Headless Python batch/CI execution | Runtime selection, worker lifecycle and no-GUI boundary | **Phase 7** for batch, evaluation and export workflows |
+| Read-only live-session query API | Query descriptors, stable IDs, revisions, structured errors | **Phase 3** |
+| Local JSONL/IPC session discovery and CLI JSON mode | Endpoint framing, authentication/local trust and event protocol | **Phase 3** read-only attachment; writable commands are **Phase 4** |
+| Pipeline construction, modifier insertion, property mutation and evaluation through CLI | Shared operation catalog, transactions, capabilities and task results | **Phase 4**, using the same operations as the pipeline UI |
+| Task progress, await/cancel, stale-plan rejection and semantic activity context | Task/event/revision/provenance schemas | **Phase 3** foundation; full client workflow is **Phase 4** |
+| Viewport state, selection, frame and displayed-view PNG automation | Viewport IDs, artifact metadata and async completion rules | **Phase 5** |
+| Session save, export, explicit scene render and artifact retrieval through automation | File-write permissions, output metadata and rollback limits | **Phase 7**, aligned with parity render/export workflows |
+| AI read/query/plan/confirm/execute workflow | Capability scopes, transaction/confirmation model, activity context and revision preconditions | **Phase 8** |
+| MCP adapter, external tools and remote automation | Keep adapters outside core and define security/lifecycle boundary | **Phase 8**; remote access requires a separate security review |
+
+- **Cross-phase rule**: a later phase may consume the Phase 2.6 contracts, but may not bypass them with QML-specific object
+  indexes, direct Python globals, duplicated action handlers, or transport-specific scientific data formats.
+- **Phase ownership rule**: the first user-visible behavior belongs to the phase in the table, even if Phase 2.6 creates
+  test doubles or internal scaffolding for it.
 
 ### Phase 3: Presentation Models & Command Layer
 - **Objective**: Expose shared state and editing operations with explicit lifecycle and undo semantics.

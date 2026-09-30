@@ -126,7 +126,18 @@ what the Linux x86_64 CI job does: it starts `Xvfb :77 -screen 0 1400x900x24` it
 capture possible, `xvfb-run -a` hides the number it picks), runs the spike in the background with `--qml-hold-ms 8000`,
 waits for `VERIFICATION_DONE` in its log, captures **after** the checks (a capture taken while the checks run shows the
 window of an earlier moment - or a black screen, when it is taken before the window is mapped), and fails the step on the
-spike's exit code while the capture itself is allowed to fail:
+spike's exit code while the capture itself is allowed to fail.
+
+The job photographs a **second, short run** (layout, command and pick checks plus `--qml-hold-ms`), not the gating run:
+the check sequence ends with a cancelled import that deliberately leaves the scene empty, so a capture taken there shows
+the shell's empty state - which is honest but useless as the "does the frontend render scene data" image this artifact
+exists for. Two QML traps to know when a dialog shows up in such a picture:
+
+* A `Dialog` that the *frontend* answers (a check answers the multi-pipeline question programmatically, for example) never
+  goes through its own close path, so it stays open until something closes it. Follow the controller's state from a
+  `Connections` handler and call `close()` there - binding `visible` to the controller instead does not work, because a
+  popup writes `visible` itself and destroys the binding (the same reason the About dialog is opened from a signal
+  handler).
 
 ```bash
 DISPLAY=:99 ffmpeg -y -f x11grab -video_size 1280x800 -i :99 -frames:v 1 /tmp/workbench.png

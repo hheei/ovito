@@ -432,6 +432,7 @@ Published results of the four jobs: see section 3.5.
 
 ---
 
+| F21 | **A dialog that the frontend answers stayed open.** A verification check answers the multi-pipeline question programmatically (`QmlWorkbenchController::choosePipeline()`), so the QML chooser never went through its own close path and was still on screen when the Linux CI job photographed the workbench - the first shell artifact of the CI shows exactly that, a modal *"Multiple pipelines found"* dialog over an empty workbench. The message box had the adjoining problem: its `visible` was *bound* to `QmlWorkbenchController::messageBoxVisible`, and a popup writes `visible` itself when it closes, which destroys the binding. | Both dialogs follow the controller's state from a `Connections` handler (`pipelineChoiceChanged` and `messageBoxChanged`) and open or close themselves there, which is the same pattern the About dialog already used for the same reason. Found by looking at the artifact the CI uploads - the check suite itself was green, since it answers the question and then asserts the controller's state, not the dialog's visibility. |
 ## 5. Remaining Phase 1 Exit-Gate Items
 
 | Gate item | Status |
