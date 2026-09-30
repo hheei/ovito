@@ -62,7 +62,12 @@ export CCACHE_DEPEND=1
 
 With them a cached translation unit recompiles in 0.15s instead of about 6s. The CI jobs use the presets `ci-full` (whole
 product) and `ci-frontend` (Qt Quick frontend only, 512 instead of 951 translation units) in `Release`, with
-`OVITO_COMPILER_LAUNCHER` selecting `ccache` or `sccache`; measurements and rationale are in
+`OVITO_COMPILER_LAUNCHER` selecting `ccache` or `sccache` - that variable is what decides, because the top-level
+CMakeLists only enables ccache by itself when neither `CMAKE_C_COMPILER_LAUNCHER` nor `CMAKE_CXX_COMPILER_LAUNCHER` is
+already defined (an empty value therefore means "no compiler cache", which is what a build-time measurement needs).
+The Linux x86_64 jobs use the clang presets `ci-linux` and `ci-linux-frontend`, which need about 1.75 times less compile
+work than gcc here; for iterating on the Qt Quick frontend and the spike there is also a local `native-frontend` preset
+(clang, ccache, mold, `.qt`, 512 instead of 951 units, no product executable). Measurements and rationale:
 docs/design/UI_TEST_ENV.md section 6.1.
 
 ---

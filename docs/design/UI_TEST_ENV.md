@@ -675,7 +675,7 @@ about the test. Compose the variable in the shell instead
 The Build step is 92-95% of every job's wall time: in run `36665850459` (all four jobs green) Linux x86_64 took 24m52s of
 which 22m56s was building, Linux ARM64 27m52s/25m22s, macOS ARM64 30m57s/28m42s and Windows AMD64 19m57s/16m47s, while
 CTest takes about a second, the Qt Quick smoke tests 3-25 seconds and the dependency installs (apt, brew, vcpkg with its
-binary cache, Qt with the action's own cache) about a minute each. Four measures address that, and each was measured
+binary cache, Qt with the action's own cache) about a minute each. Five measures address that, and each was measured
 before it was wired into the workflow:
 
 * **A compiler cache - with the precompiled-header trap fixed.** OVITO compiles nearly every translation unit with
@@ -689,8 +689,18 @@ before it was wired into the workflow:
   263s. The workflow sets those variables in
   its `env:` block, keeps the cache inside the workspace (`CCACHE_DIR`/`CCACHE_BASEDIR`) so `actions/cache` can save it,
   and hashes `CMakeLists.txt`, `CMakePresets.json`, `cmake/**` and the workflow itself into the cache key (with matching
-  `restore-keys`, so a flag change does not start from zero). Windows uses `mozilla-actions/sccache-action`, whose
-  GitHub-Actions backend needs no `actions/cache`.
+  `restore-keys`, so a flag change does not start from zero). One cache per operating system and architecture is shared
+  by every job of that platform: the compile commands of the libraries the Qt Quick frontend is built on are identical in
+  both scopes, and ccache hashes the whole command line, so an entry another job wrote can only ever produce the correct
+  object - a scope suffix in the key just blocked those hits. Windows uses ccache as well (installed with chocolatey): it
+  is the only one of the two caches that can cache a translation unit which *consumes* an MSVC precompiled header
+  (`sccache` reports "MSVC Precompiled header flags not supported"), and a command it cannot handle is simply not cached.
+* **clang on the Linux x86_64 jobs.** Measured on the full tree (905 translation units, Release, compiler cache off):
+  clang 18 needed 1459s of compile work and 143s of wall time at `-j16`, gcc 13 needed 2570s and 233s, and the twelve
+  precompiled headers dropped from 170s to 90s - clang is much faster on the Qt and Boost template code. The presets
+  `ci-linux` and `ci-linux-frontend` are what the x86_64 jobs use, while the ARM64 job stays on gcc: the release workflow
+  builds the shipped Linux binaries with gcc, so that compiler keeps its verifier. The scoped frontend tree costs 715s of
+  compile work over 504 units with clang (170s of wall time at `-j16` with gcc before).
 * **Release instead of RelWithDebInfo.** Nothing debugs a CI binary and `NDEBUG` compiles the assertions out either way,
   while debug info costs real time: a 22-unit sample of the largest translation units compiled in 52.6s with `-g` against
   39.7s with `-g0` (about 25% per unit, 20-32% for the biggest ones), and a first-party target set of 211 units 109.3s
@@ -701,8 +711,11 @@ before it was wired into the workflow:
   `OVITO_BUILD_APP` and the CrystalAnalysis, Correlation, VoroTop, Galamost and oxDNA plugins, which is **512 instead of
   951 translation units**; `Mesh`, `Grid` and `Delaunay` have to stay enabled because `Particles` depends on them and
   `StdMod` on `Mesh`. Measured with gcc, Release, `-j16`: **170s** for the whole scoped tree cold, and the complete smoke
-  check list passes in that configuration (exit 0, no failed check). The Linux x86_64 and macOS jobs keep the full product
-  scope, so the desktop frontend and every plugin stay covered.
+  check list passes in that configuration (exit 0, no failed check). The Linux x86_64 job keeps the full product scope,
+  so the desktop frontend and every plugin stay covered there, and the macOS job uses the frontend scope: its smoke test
+  needs the spike executable, and both the spike (`Ovito.app/Contents/MacOS/ovito-qml-spike`) and the plugin libraries
+  (`Ovito.app/Contents/PlugIns/*.so`) land in the same bundle directories in either scope - verified by configuring such a
+  tree on the macOS host - while building the QtWidgets application on a three-core runner costs another ten minutes.
 * **A path filter, and a cheaper trigger for feature branches.** A change to Markdown cannot break a build, so
   `paths-ignore` skips `docs/**`, `**/*.md` and `graphify-out/**`. The full matrix runs for `master`/`main` pushes, pull
   requests and `workflow_dispatch`, while a push to `feature/**` runs only the frontend-scoped Linux x86_64 job - minutes
@@ -718,26 +731,40 @@ Two things were measured and deliberately **not** taken:
 
 * **The linker is not a bottleneck.** Relinking `Gui.so` (129 translation units) takes 0.10s with mold against 0.66s with
   bfd, so picking a faster linker in CI would save about a second per job.
-* **`OVITO_USE_UNITY_BUILD=ON` does not work in this tree.** It fails in the third-party libvterm sources (same-named
-  `static` functions such as `utf8_seqlen`/`fill_utf8` collide once the sources are merged) *and* in OVITO's own Core
-  target, where the meta-object macros emit file-scope `__metadata_N` variables that are redefined as soon as several
-  pipeline sources share a unity translation unit. Unity build could still be worth one to two times the compile time,
-  but it needs the macro symbol naming fixed and per-target opt-outs for third-party libraries first.
+* **`OVITO_USE_UNITY_BUILD=ON` does not work in this tree.** The measurement on the scoped frontend tree (clang,
+  compiler cache off, 504 units in 84s and 715s of compile time) stopped after 68 units: merging the sources of one
+  target makes file-scope symbols collide, first in sources OVITO does not own (`src/3rdparty/ptm/ptm_quat.cpp` redefines
+  `generator_cubic`, `generator_diamond_cubic` and `generator_hcp`; an earlier attempt also hit libvterm's
+  `utf8_seqlen`/`fill_utf8`) and then in its own meta-object macros, which emit one file-scope `__metadata_<line>`
+  variable per `OVITO_CLASSINFO` - switching that to `__COUNTER__` removes the collision but is not enough on its own.
+  Unity build would need a per-target `UNITY_BUILD OFF` for every third-party library plus whatever the first-party
+  targets surface next, and it masks missing includes (see the precompiled-header note above), so this project does not
+  take that lever; the compiler and the scope above are what reduce the work.
 
-The configure presets `ci-full` and `ci-frontend` plus the variable `OVITO_COMPILER_LAUNCHER` (empty, `ccache` or
-`sccache`) exist so that a developer can reproduce a CI build exactly:
+The configure presets `ci-full`, `ci-frontend`, `ci-linux` and `ci-linux-frontend` plus the variable
+`OVITO_COMPILER_LAUNCHER` (empty, `ccache` or `sccache`) exist so that a developer can reproduce a CI build exactly:
 
 ```bash
 # The Qt Quick frontend job, as CI runs it (the compiler cache is optional but strongly recommended here):
 export OVITO_COMPILER_LAUNCHER=ccache
 export CCACHE_SLOPPINESS=pch_defines,time_macros CCACHE_DEPEND=1
-cmake --preset ci-frontend && cmake --build --preset ci-frontend --parallel "$(nproc)"
+cmake --preset ci-linux-frontend -DCMAKE_PREFIX_PATH=<Qt prefix>
+cmake --build --preset ci-linux-frontend --parallel "$(nproc)"
 ```
 
-Windows note: sccache cannot use the `/Yu` precompiled-header flags CMake generates for MSVC (mozilla/sccache#988), so the
-Windows job builds with `-DOVITO_USE_PRECOMPILED_HEADERS=OFF` to keep its translation units cacheable. Its first build
-after a cache-key change is therefore slower and every later one is a lookup; dropping that flag trades the caching back
-for a faster cold build if that ever becomes the bottleneck.
+**The precompiled headers are not optional.** `OVITO_USE_PRECOMPILED_HEADERS=OFF` does not build this tree: without the
+header that the per-target precompiled header happens to provide, the translation units that include `TaskProgress.h` and
+`Application.h` fail with `invalid use of incomplete type 'class Ovito::UserInterface'`. They are also worth their cost -
+the twelve precompiled headers need 170s of the full tree's 2570s, and the units of the PCH-less run that did compile
+averaged 3.8s against 2.99s with them - so a compiler cache has to be made to coexist with them (the `CCACHE_SLOPPINESS`
+above) instead of switching them off. That is why the Windows job keeps them enabled and accepts that ccache cannot cache
+their *generation* (one compile per target; the units that consume them are cached).
+
+**`OVITO_USE_CCACHE` no longer overrides an explicit launcher.** Until this round the top-level `CMakeLists.txt` forced
+ccache into every build whenever it found the program, so a preset that asked for `sccache` was silently ignored and no
+build could be measured without a compiler cache at all. It applies now only when neither `CMAKE_C_COMPILER_LAUNCHER` nor
+`CMAKE_CXX_COMPILER_LAUNCHER` is defined, which is what makes `OVITO_COMPILER_LAUNCHER` authoritative and an empty value
+a usable "no cache" for measurements.
 
 ---
 
