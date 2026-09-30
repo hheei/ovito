@@ -40,6 +40,7 @@ SET(SourceFiles
     automation/AutomationObjectRegistry.cpp
     automation/AutomationProtocol.cpp
     automation/AutomationSession.cpp
+    automation/AutomationSessionDescriptor.cpp
     automation/AutomationTask.cpp
     automation/AutomationTransaction.cpp
     automation/python/PythonContract.cpp

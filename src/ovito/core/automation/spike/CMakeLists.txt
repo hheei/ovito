@@ -32,3 +32,41 @@ IF(APPLE)
 ELSEIF(LINUX)
     SET_TARGET_PROPERTIES(OvitoAutomationSpike PROPERTIES INSTALL_RPATH "$ORIGIN/../${OVITO_RELATIVE_LIBRARY_DIRECTORY}/:$ORIGIN/../${OVITO_RELATIVE_LIBRARY_DIRECTORY}/lib/:$ORIGIN/../${OVITO_RELATIVE_PLUGINS_DIRECTORY}/:$ORIGIN/../${OVITO_RELATIVE_3RDPARTY_LIBRARY_DIRECTORY}/")
 ENDIF()
+
+# Phase 2.6, deliverable 8: the local-protocol spike.
+#
+# The second prototype executable of the automation module: it hosts the automation session behind a local-only JSON
+# Lines endpoint, publishes a session descriptor for discovery, and drives itself as a client to check every rule the
+# endpoint claims to enforce. The endpoint, the client and the descriptor's discovery rules are spike code - Phase 3 owns
+# the production transport and Phase 4 the CLI that uses it - but the descriptor value type they build on deliberately
+# lives in Core (automation/AutomationSessionDescriptor), so that the discovery convention is tested without a socket.
+#
+# Qt6::Gui is linked for QImage alone: the artifact checks need PNG encoding, not a window, and this program never
+# creates a graphics device (see the note on capture in IpcSpikeMain.cpp). Qt Network provides the local socket, and is
+# the one Qt module Core does not link unless the Python support asks for it, so it is found here.
+OVITO_FIND_PACKAGE(Qt6 ${OVITO_MINIMUM_REQUIRED_QT_VERSION} COMPONENTS Network REQUIRED)
+
+ADD_EXECUTABLE(OvitoAutomationIpcSpike
+    IpcSpikeMain.cpp
+    ipc/AutomationLocalClient.cpp
+    ipc/AutomationLocalEndpoint.cpp)
+
+TARGET_LINK_LIBRARIES(OvitoAutomationIpcSpike PRIVATE
+    Core
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Network)
+
+OVITO_ADD_STANDARD_COMPILE_OPTIONS(OvitoAutomationIpcSpike)
+
+# The classes of the endpoint and the client are QObjects with signals, so the executable moc's its own sources.
+SET_TARGET_PROPERTIES(OvitoAutomationIpcSpike PROPERTIES AUTOMOC TRUE)
+
+SET_TARGET_PROPERTIES(OvitoAutomationIpcSpike PROPERTIES OUTPUT_NAME "ovito-automation-ipc-spike")
+SET_TARGET_PROPERTIES(OvitoAutomationIpcSpike PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${OVITO_BINARY_DIRECTORY}")
+SET_TARGET_PROPERTIES(OvitoAutomationIpcSpike PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE)
+IF(APPLE)
+    SET_TARGET_PROPERTIES(OvitoAutomationIpcSpike PROPERTIES INSTALL_RPATH "@executable_path/;@executable_path/../Frameworks/;@executable_path/../PlugIns/")
+ELSEIF(LINUX)
+    SET_TARGET_PROPERTIES(OvitoAutomationIpcSpike PROPERTIES INSTALL_RPATH "$ORIGIN/../${OVITO_RELATIVE_LIBRARY_DIRECTORY}/:$ORIGIN/../${OVITO_RELATIVE_LIBRARY_DIRECTORY}/lib/:$ORIGIN/../${OVITO_RELATIVE_PLUGINS_DIRECTORY}/:$ORIGIN/../${OVITO_RELATIVE_3RDPARTY_LIBRARY_DIRECTORY}/")
+ENDIF()
