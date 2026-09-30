@@ -227,8 +227,9 @@ These capabilities are independent of the classic frontend's absent scripting-co
 the shared contracts and compatibility probes and has delivered its adaptation set — the gateway, the identity/revision
 contract, the permission model and the task/event/transaction layer, the Python package contract with its runtime probe, the
 execution-topology spike, the local protocol with its discovery descriptor, and the Python seam (schema preview and data
-bridge) of the ◐ rows below, audit D39-D51 in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7; the phase in the table owns the
-first user-facing implementation.
+bridge) of the ◐ rows below - whose client-facing rules are normative in
+[AUTOMATION_CONTRACTS.md](AUTOMATION_CONTRACTS.md) - audit D39-D52 in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7; the phase
+in the table owns the first user-facing implementation.
 
 | Capability | Existing reference | Qt Quick / shared state | Phase | Acceptance case |
 |---|---|---|---|---|

@@ -4,9 +4,10 @@
 >
 > **Guiding Principle**: Validate high risks first, interaction parity before redesign
 >
-> **Status**: Phase 0 (audit), Phase 1 (rendering spike) and Phases 2 and 2.5 (shell, shared layer and fit-and-finish)
-> are executed; Phase 2.6 is now the approved architecture-adaptation stage for the Python pipeline and AI/CLI automation
-> tracks, and Phase 3 onward remains the open implementation roadmap. Details — the frontend selection (`--gui=qml`), the shared `gui/base` workbench base class, the layout-derived
+> **Status**: Phase 0 (audit), Phase 1 (rendering spike), Phases 2 and 2.5 (shell, shared layer and fit-and-finish) and
+> Phase 2.6 (the architecture adaptation of the Python pipeline and AI/CLI automation tracks) are executed, and Phase 2.6's
+> exit gate is verified against the contracts in [AUTOMATION_CONTRACTS.md](AUTOMATION_CONTRACTS.md); Phase 3 is the next
+> step and Phase 3 onward remains the open implementation roadmap. Details — the frontend selection (`--gui=qml`), the shared `gui/base` workbench base class, the layout-derived
 > workbench shell, the import path with its empty/busy/cancelling/cancelled/error states and the shared rendering/
 > picking core are in the tree and verified on Linux/OpenGL, Linux/Vulkan, macOS/Metal and Windows/D3D12, see
 > [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) and [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md).
@@ -24,7 +25,9 @@
 > that those phases are already touching).
 >
 > **Design Contracts**: [UI_DESIGN.md](UI_DESIGN.md) for the frontend;
-> [AUTOMATION_AND_PYTHON_PIPELINE_DESIGN.md](AUTOMATION_AND_PYTHON_PIPELINE_DESIGN.md) for the Python and automation tracks.
+> [AUTOMATION_AND_PYTHON_PIPELINE_DESIGN.md](AUTOMATION_AND_PYTHON_PIPELINE_DESIGN.md) for the Python and automation tracks,
+> with the client-facing rules of the latter written down normatively in
+> [AUTOMATION_CONTRACTS.md](AUTOMATION_CONTRACTS.md).
 
 ---
 
@@ -792,12 +795,14 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
       benchmark, and unresolved risks in [AUTOMATION_AND_PYTHON_PIPELINE_DESIGN.md](AUTOMATION_AND_PYTHON_PIPELINE_DESIGN.md).
       Add a small contract test suite that can be run without a Python installation and a separate environment probe for
       configured Python runtimes. Keep the classic UI, QML shell, headless mode, and existing spike checks passing.
-      **Partly delivered**: `tests/cpp/core/automation/tst_automation_contracts.cpp` is that suite and runs in `ctest` in
+      **Delivered** (D52): `tests/cpp/core/automation/tst_automation_contracts.cpp` is that suite and runs in `ctest` in
       a release and in an assertion-enabled build, `tests/cpp/core/automation/tst_python_environment_probe.cpp` is the
       environment probe for configured runtimes (it needs a `python3` and skips its environment cases without one), and
-      the handshake, the transfer benchmark and the unresolved risks are recorded in the design document and the topology
-      spike document. The prose contract `docs/design/AUTOMATION_CONTRACTS.md` that the contract test names is still open
-      ([UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §5, item O13).
+      the normative client-facing rules are written down in [AUTOMATION_CONTRACTS.md](AUTOMATION_CONTRACTS.md) - which
+      closes O13 - with the handshake, the transfer benchmark and the unresolved risks in the design, topology, IPC and
+      data-bridge documents. That document's §19 maps the exit gate of this phase to the test or measurement that answers
+      each of its items, and the classic UI, the QML shell, headless mode and the spike checks all still pass
+      (see the status note below).
 - **Not in this phase**: Python Function Modifier execution, Python parameter editing, Python source/analysis nodes, a
   writable automation CLI, AI plan execution, MCP, remote automation, render/export workflows, or a built-in Python editor.
 - **Exit Gate**: The shared contracts are versioned and documented; IDs survive presentation refresh and re-resolve after
@@ -805,24 +810,28 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   `baseRevision` requests are rejected; task/event/transaction/capability schemas have deterministic tests; the selected
   Python environment can be probed without silent fallback; the worker/embedded benchmark has evidence; and a local client
   can perform only the bounded read-only snapshot/PNG spike. No later feature is marked implemented by this gate.
-- **Status after the first slice**: deliverables 1-9 plus the environment probe of deliverable 10 are in the tree and
-  verified by `ctest --preset native` (11/11) and by the same suites in the assertion-enabled tree of
-  [UI_TEST_ENV.md](UI_TEST_ENV.md) §4 — the gateway with its identity, revision, permission, task, transaction and
-  observability contracts, the Python package contract with its runtime probe, the topology spike, the local protocol with
-  its discovery descriptor, the AST schema preview and the data bridge. The decisions behind them are D39-D51 of
+- **Status**: **complete, and its exit gate is verified.** All ten deliverables are in the tree: the gateway with its
+  identity, revision, permission, task, transaction and observability contracts; the Python package contract with its
+  runtime probe; the topology spike; the local protocol with its discovery descriptor; the AST schema preview and the data
+  bridge; and the documentation gate of deliverable 10, whose prose half is
+  [AUTOMATION_CONTRACTS.md](AUTOMATION_CONTRACTS.md) (D52, closing O13) and whose §19 maps every exit-gate item of this
+  phase to the test or measurement that answers it. The decisions behind the work are D39-D52 of
   [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7; the Python topology decision rests on the measurements of
   [AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md), the local protocol on
   [AUTOMATION_IPC_SPIKE.md](AUTOMATION_IPC_SPIKE.md) and the Python seam on
-  [AUTOMATION_DATA_BRIDGE.md](AUTOMATION_DATA_BRIDGE.md). Nothing is wired to a frontend yet — no session is attached, no
-  transport exists, and the layer has no callers outside its own tests (O18) — which is what "architecture adaptation"
-  means here. Open in this phase: the prose contract `docs/design/AUTOMATION_CONTRACTS.md` of deliverable 10 (O13) and the
-  exit-gate verification itself. The recorded limits of what is delivered are O16 and O21 (the package-location seam and
-  the missing property-array adapter), O17 (the unmeasured pooled shared-memory and embedded halves), O19 (the render half
-  of a capture, Phase 5) and O20 (the prototype parts of the endpoint, Phase 3). Four preconditions and traps of `core`
-  integration tests were found while getting the suites to run and are recorded in [UI_TEST_ENV.md](UI_TEST_ENV.md) §4.1:
-  creating a `RefTarget` needs an ambient task, creating a `SceneNode` needs an `Application`, a probe test needs a real
-  interpreter on the path and must not use `QSKIP` from a helper that returns a value, and a test that starts an
-  interpreter must stop it or it outlives the run.
+  [AUTOMATION_DATA_BRIDGE.md](AUTOMATION_DATA_BRIDGE.md). Verification at the close: `ctest --preset native` is 11/11
+  (five automation suites, 97 QtTest cases between them), the same suites pass in the assertion-enabled tree of
+  [UI_TEST_ENV.md](UI_TEST_ENV.md) §4, the whole native product builds including both spike programs, the topology spike
+  reports 93 checks with numpy and 89 without it, the IPC spike 24/24, and `ovito --nogui` still starts and prints its
+  version. Nothing is wired to a frontend yet — no session is attached, no production transport exists and the layer has
+  no callers outside its own tests (O18) — which is what "architecture adaptation" means here, and which is why every
+  user-facing capability of these two tracks is still a Phase 3-8 row. The recorded limits of what is delivered are O16
+  and O21 (the package-location seam and the missing property-array adapter), O17 (the unmeasured pooled shared-memory and
+  embedded halves), O19 (the render half of a capture, Phase 5) and O20 (the prototype parts of the endpoint, Phase 3).
+  Four preconditions and traps of `core` integration tests were found while getting the suites to run and are recorded in
+  [UI_TEST_ENV.md](UI_TEST_ENV.md) §4.1: creating a `RefTarget` needs an ambient task, creating a `SceneNode` needs an
+  `Application`, a probe test needs a real interpreter on the path and must not use `QSKIP` from a helper that returns a
+  value, and a test that starts an interpreter must stop it or it outlives the run.
 
 #### Formal feature placement after Phase 2.6
 
@@ -1059,6 +1068,7 @@ performance baseline are documented in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md),
 [UI_PLAN.md](UI_PLAN.md) and the audits in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md); the testing recipes and traps are in
 [UI_TEST_ENV.md](UI_TEST_ENV.md). The architecture status remains **proposed** until the owner freezes it — the technical
 preconditions (rendering bridge, picking, teardown, four platforms, assert-enabled run, performance baseline) are met. This
-roadmap describes planned work: Phases 1, 2 and 2.5 are recorded as verified above; Phase 2.6 has started and its first
-three deliverables plus its contract test suite are delivered (see the status note in the phase section); Phases 3–9 have
-not started.
+roadmap describes planned work: Phases 1, 2, 2.5 and 2.6 are recorded as verified above — Phase 2.6 completed its
+adaptation set and its exit gate with the decisions D39-D52 and the contract document
+[AUTOMATION_CONTRACTS.md](AUTOMATION_CONTRACTS.md) — and the next step in it is **Phase 3**, which builds the presentation
+models and the command layer of the new frontend on top of those contracts; Phases 4–9 have not started.

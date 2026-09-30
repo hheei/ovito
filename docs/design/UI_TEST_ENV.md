@@ -313,6 +313,11 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir build-asserts
 This configuration found a real defect in the picking path (F4: asynchronous work started from a Qt event handler runs in
 a task **without** a `UserInterface`), which the release build hid completely.
 
+`ctest --preset native` runs 11 tests, five of which are the automation suites of Phase 2.6
+(`tst_automation_contracts`, `tst_python_environment_probe`, `tst_python_data_bridge`, `tst_python_schema_preview`,
+`tst_session_descriptor`, 97 cases between them). What each of them is allowed to promise, and how the suites relate to
+the prose they check, is [AUTOMATION_CONTRACTS.md](AUTOMATION_CONTRACTS.md) §1 and §19.
+
 ### 4.1 What a core integration test has to provide
 
 A `ctest` unit test that creates OVITO objects — a `DataSet`, a `SceneNode`, a `Pipeline` — needs three preconditions that

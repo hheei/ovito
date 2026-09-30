@@ -6,7 +6,8 @@
 > 8) are implemented and verified, with their decisions recorded as D39-D51 in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7
 > and the evidence in [AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md),
 > [AUTOMATION_IPC_SPIKE.md](AUTOMATION_IPC_SPIKE.md) and [AUTOMATION_DATA_BRIDGE.md](AUTOMATION_DATA_BRIDGE.md). Sections
-> 3.4.1, 6 and 7 below carry the resulting resolutions. Formal feature placement is unchanged: the user-facing
+> 3.4.1, 6 and 7 below carry the resulting resolutions, and the client-facing rules themselves are normative in
+> [AUTOMATION_CONTRACTS.md](AUTOMATION_CONTRACTS.md) (D52). Formal feature placement is unchanged: the user-facing
 > capabilities remain gated by the later phase exits.
 >
 > **Scope**: Two related but distinct capabilities for the Qt Quick workbench: user-defined Python computation as part of
