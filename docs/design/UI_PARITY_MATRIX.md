@@ -4,7 +4,9 @@
 [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) section 6. This file is the **normative** list of what the Qt Quick frontend has,
 what it will get and in which phase, and what is deliberately not ported; the phase sections of UI_PLAN.md and the
 narrative of [UI_FRONTEND_REVIEW.md](UI_FRONTEND_REVIEW.md) have to stay consistent with it, and a row without a state is a
-defect of this file rather than an open question.
+defect of this file rather than an open question. The Python pipeline and live-session automation rows below are the
+normative phase mapping introduced by Phase 2.6; an architecture adaptation row does not mean that the user-facing
+capability is already implemented.
 
 ## 1. How to read this matrix
 
@@ -17,6 +19,7 @@ States:
 | State | Meaning |
 |---|---|
 | ✅ | implemented in the Qt Quick frontend (the acceptance column names the check that already passes) |
+| ◐ *Phase N* | the phase's architecture adaptation is in the tree and covered by the named check, but the user-facing capability of the row is still scheduled for that phase |
 | ▶ *Phase N* | scheduled, either in the phase that owns the feature or, for the small gaps, in Phase 2.5 deliverable 3 |
 | ✖ | deliberately not ported, with the reason in the same row (collected again in §4) |
 
@@ -167,7 +170,7 @@ The scope of this area is defined by the audited editors, not by reflection over
 | Renderer-specific parameters | `StandardRendererEditor`, `BaseSceneRendererEditor` | ▶ Phase 7 | 7 | change a renderer parameter and re-render |
 | Render output (image, movie) | `ACTION_RENDER_ACTIVE_VIEWPORT`, `FrameBufferWindow`, `SaveImageFileDialog`, `FFmpegSettingsPage` | ▶ Phase 7 (video needs OVITO's ffmpeg support, which is **not available in this build** — the matrix records it as unverifiable here) | 7 | render a PNG and compare with the classic output; video export documented as unavailable in this build |
 | Render preview inside the viewport | Phase 5 d7 (Preview Mode) | ▶ Phase 5 | 5 | toggle the preview; the pane shows the render aspect |
-| Viewport image grab | `WidgetViewportWindow::grabViewportImage` | ▶ Phase 7 (via the shared offscreen service of 2.5 d6) | 7 | grab a pane and compare with the classic grab |
+| Viewport image grab | `WidgetViewportWindow::grabViewportImage` | ▶ Phase 5 shared capture service/CLI (§3.15); Phase 7 desktop save workflow | 5/7 | capture a displayed pane with frame/dimension metadata; compare with the classic grab and verify authorized file output |
 | Ambient occlusion modifier | `AmbientOcclusionModifierEditor` | ▶ Phase 6 (editor) — the offscreen sampling path itself is core | 6 | enable AO on a representative scene |
 
 ### 3.10 Export paths
@@ -218,7 +221,36 @@ The scope of this area is defined by the audited editors, not by reflection over
 | Theme and font selection | `GeneralSettingsPage`, `FontSelectionDialog` | ▶ Phase 7 (settings dialog) | 7 | switch the theme and the font size; the shell follows |
 | Viewport mode cursors | `gui/base/resources/cursor` (shared) | ✅ through the shared modes | 1 (done) | each mode shows its cursor |
 
-### 3.15 Keyboard, accessibility, HiDPI
+### 3.15 Python pipeline and live-session automation
+
+These capabilities are independent of the classic frontend's absent scripting-console implementation. Phase 2.6 establishes
+the shared contracts and compatibility probes and has delivered its first three quarters — the gateway, the
+identity/revision contract, the permission model and the task/event/transaction layer, the Python package contract with its
+runtime probe, and the execution-topology spike (◐ rows below, audit D39-D49 in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md)
+§7); the phase in the table owns the first user-facing implementation.
+
+| Capability | Existing reference | Qt Quick / shared state | Phase | Acceptance case |
+|---|---|---|---|---|
+| Automation Gateway and machine-facing operation catalog | `gui/base::Command`, core pipeline/task/undo APIs | ◐ Phase 2.6 (D39, D42, D43): `core/automation/AutomationGateway` with the contract vocabulary and a read-only catalog (`session.describe`, `scene.list_nodes`, `pipeline.describe`), separate from the UI commands; the client/transport side is Phase 3 | 2.6 adaptation (done), Phase 3 foundation | CTest `tst_automation_contracts` rejects malformed parameters, unknown and unimplemented operations and unsupported capabilities; UI commands remain usable by both frontends |
+| Stable object IDs and session revisions | core object model and `PipelineListModel` | ◐ Phase 2.6 (D40, D41): numeric IDs that are never reused (`pipeline:p42`, `modifier:m108`, `viewport:v2`, `property:m108/distance`), `unknown_object` vs. `invalidated_object`, and a `baseRevision` precondition that answers `stale_revision`; ID survival across undo/redo is still untested (audit §5, O14) | 2.6 adaptation | CTest `tst_automation_contracts`: object deletion and data-set replacement produce deterministic invalidated/unknown-object and stale-revision errors, and a replaced object at the same address gets a fresh ID |
+| Task lifecycle, transaction boundaries and semantic activity provenance | `TaskScope`, `UndoStack`, `WorkbenchUI` | ◐ Phase 2.6 (D44-D47): client identity and origin, `task.list`/`describe`/`cancel` with a task record per command (progress, cooperative cancellation, capability-gated `task.control`), a failing command that leaves no partial change, a committed command that is exactly one undo step, and a bounded in-session event log; a blocking `await` and a subscription are Phase 3 transport work | 2.6 adaptation, Phase 3 foundation | CTest `tst_automation_contracts`: task events expose progress/completion/error/cancel with origin and revision, a cancelled operation is reported as `cancelled`, a failed command changes nothing, and a capability that was never granted cannot be used. No raw input is recorded |
+| Lightweight `ovito` package and selected Python environment probe | no implemented `src/ovito/pyscript` runtime in this checkout | ◐ Phase 2.6 (D48): `core/automation/python/` carries the handshake protocol `1.0`, the CPython 3.10-3.13 range, the platform/architecture matrix, the feature vocabulary and `PythonEnvironmentProbe`, which validates one environment in a fixed order and never installs or falls back; the package itself (`pyproject.toml`, decorator, bridge) and the installed-package lookup are Phase 4 (O16) | 2.6 adaptation (done), Phase 4 package | CTest `tst_python_environment_probe`: compatible, missing, unimportable, wrong-protocol, wrong-interpreter and featureless environments produce one deterministic status with a repair hint, and exactly one verdict per probe |
+| Python environment selection and saved default | shared `GuiSettings` facade; no existing Python selector | ▶ Phase 4 lightweight selector in the modifier workflow; Phase 7 Preferences integration | 4/7 | select/reset a compatible environment without the complete Preferences dialog; default and per-modifier identity persist, with no silent fallback |
+| AST preview of decorated Python functions | no existing implementation | ▶ Phase 2.6 discovery/data-bridge spike; file selection does not execute module code | 2.6 adaptation, Phase 4 | syntax errors, dynamic decorators and import side effects are reported with explicit preview/runtime distinctions |
+| Python Function Modifier | existing C++ `Modifier::evaluateModifier` contract | ▶ Phase 4 | 4 | decorated function mutates writable upstream data, returns `None`, evaluates asynchronously, reports traceback and survives save/reopen |
+| Python scalar parameters and persistence | existing property/undo/session infrastructure | ▶ Phase 2.6 schema contract; ▶ Phase 4 implementation | 4 | typed scalar values, defaults, validation, invalidation, undo and schema reload preserve compatible values |
+| Python source/generator and analysis functions | none | ▶ Phase 8; separate contracts from modifiers | 8 | source and analysis workflows have explicit node/result semantics; no return-value inference |
+| Richer Python parameter types and optional environment setup helper | none | ▶ Phase 8, beyond the Phase 4 scalar MVP | 8 | richer schemas validate and round-trip; any optional setup shows the environment and changes and requires consent, without silent installation |
+| Headless Python batch/CI execution | `--nogui` and existing core pipeline | ◐ Phase 2.6 (D49): the topology is decided and measured — a persistent worker on the selected interpreter with raw length-framed arrays ([AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md)) — and `ovito-automation-spike` demonstrates start, evaluate, cancel, crash-recover and frame-change behaviour; the production worker and the no-GUI pipeline path are Phase 7 (the first modifier is Phase 4) | 7 | selected environment evaluates a pipeline without QML/QWindow and produces deterministic results/errors |
+| Read-only live-session query API | no existing protocol | ▶ Phase 3 | 3 | a local client discovers a session and reads dataset, pipeline, properties, viewport and task state as structured JSON |
+| Local JSONL/IPC endpoint and CLI JSON mode | existing command-line startup only | ▶ Phase 2.6 transport spike; ▶ Phase 3 read-only endpoint | 3 | explicitly discover/connect/query/subscribe locally, report deterministic protocol errors, and reject unauthorized mutations; public PNG capture is Phase 5 |
+| Writable pipeline automation | core pipeline operations and transactions | ▶ Phase 4 | 4 | CLI adds a modifier, sets a validated parameter, evaluates, waits/cancels a task and verifies the resulting revision |
+| Viewport, selection and frame automation | `Viewport`, `SelectionMode`, animation commands | ▶ Phase 5 | 5 | client changes frame/selection/view state and requests a displayed-view PNG without blocking the GUI |
+| Session save, export and explicit scene render automation | Phase 7 file/render workflows | ▶ Phase 7 | 7 | authorized client saves/exports/renders, returns artifact metadata, and reports file-write failures without false success |
+| AI read/plan/confirm/execute workflow | none in this checkout; distinct from upstream Pro features | ▶ Phase 2.6 permission/revision/activity contracts; ▶ Phase 8 UI | 8 | read-only by default, destructive/Python/file-write actions require explicit authorization and stale plans are rejected |
+| MCP, external tools and remote automation adapters | none | ▶ Phase 8, outside the core gateway | 8 | adapter uses the same catalog, capability checks, task model and revision preconditions; remote access has a separate security gate |
+
+### 3.16 Keyboard, accessibility, HiDPI
 
 | Capability | Classic reference | Qt Quick | Phase | Acceptance case |
 |---|---|---|---|---|
@@ -228,7 +260,7 @@ The scope of this area is defined by the audited editors, not by reflection over
 | HiDPI scaling | `devicePixelRatio` handling | ✅ measured (picking uses device pixels, like the classic pick radius) | 1 (done) | `QT_SCALE_FACTOR=1.5` and `=2` runs |
 | Mixed-DPI multi-monitor | Qt handles it | ✖ not verifiable here (no second display) | — | §6 |
 
-### 3.16 Cross-cutting behaviour
+### 3.17 Cross-cutting behaviour
 
 | Capability | Classic reference | Qt Quick | Phase | Acceptance case |
 |---|---|---|---|---|
@@ -246,7 +278,7 @@ The scope of this area is defined by the audited editors, not by reflection over
 
 | Item | Reason |
 |---|---|
-| Python scripting console, "Run Script File", "Generate Script" | declared ids but **no implementation in this tree** (no `ovito/gui` scripting source; the File menu adds those entries only when they exist) |
+| Python scripting console, "Run Script File", "Generate Script" | declared ids but **no implementation in this tree** to port. Independently implemented Python pipeline/batch support is scheduled in §3.15; a new console is a Phase 8 enhancement, not an existing runtime |
 | Integrated SSH client and remote import | optional feature (`OVITO_BUILD_SSH_CLIENT`, off); its widgets are not instantiated anywhere in this checkout |
 | `NewPipeline.PythonSource` and `.LammpsScriptSource` placeholders | ids without a registered command |
 | Modal property editing (`ModalPropertiesEditorDialog`) | the QML shell edits in the inspector panel; the modal dialog exists to work around narrow widget layouts |
@@ -284,7 +316,14 @@ Every acceptance case above resolves to one of these fixtures and one of these h
 | `--qml-lifecycle-cycles N`, `--qml-hide-show`, `--qml-resize WxH` | resource teardown, hide/show, interactive resize |
 | Classic checks | `ctest --preset native`, `ovito --nogui`, a classic Xvfb run with an ffmpeg screenshot ([UI_TEST_ENV.md](UI_TEST_ENV.md) §3.2) |
 
-A row whose acceptance says "manual" names what to do; everything else is a spike option or a CTest run. Checks that the
+A row whose acceptance says "manual" names what to do; delivered checks otherwise use a spike option or a CTest run.
+The new §3.15 rows name scheduled acceptance cases, not checks that already exist, with one exception: the **◐** rows of §3.15
+are covered today by the CTest case `tst_automation_contracts` (see [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7), and the
+rest of each of those rows moves with the phase that owns the feature. Phase 2.6 introduces contract/probe
+harnesses (the contract test suite exists; the probes are open); Phase 3 adds local read-only protocol fixtures; Phase 4 adds compatible/incompatible Python environments,
+decorated files with syntax/import/runtime failures, schema reload and a downstream-native-modifier trajectory; Phase 5
+adds viewport capture fixtures; Phase 7 adds headless batch/output cases; Phase 8 adds AI/MCP permission and stale-plan
+cases. Link the actual harness and results before marking any of these rows ✅. Checks that the
 assert-enabled build has to cover are marked in [UI_TEST_ENV.md](UI_TEST_ENV.md) §4.
 
 ## 6. Verification gaps this matrix does not close

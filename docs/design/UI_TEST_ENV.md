@@ -313,6 +313,84 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir build-asserts
 This configuration found a real defect in the picking path (F4: asynchronous work started from a Qt event handler runs in
 a task **without** a `UserInterface`), which the release build hid completely.
 
+### 4.1 What a core integration test has to provide
+
+A `ctest` unit test that creates OVITO objects — a `DataSet`, a `SceneNode`, a `Pipeline` — needs three preconditions that
+the running application always has and a bare `QTest` process does not. All three are invisible in a release build: the
+mistake becomes a null-pointer dereference somewhere inside core instead of a failed assertion.
+
+* **An ambient task.** `OORef<X>::create()` of a `RefTarget` asks the current task whether the creation is interactive
+  (`this_task::isInteractive()`), so with no task installed a release build reads through a null `Task*`. Install one per
+  test function: `std::make_shared<Task>()` plus a `Task::Scope` held in a `std::unique_ptr` member, and undo it in
+  `cleanup()` — `setFinished()` before the shared pointer is dropped, because a task must be finished when it goes away. Do
+  not count on the assertion that is meant to catch the missing task: `OVITO_ASSERT(this)` sits inside the member function,
+  and the assertion-enabled build stayed quiet about it in practice (the abort of the automation suite came from the next
+  two bullets, not from this one).
+* **An `Application`.** Core asks `Application::instance()` for the main thread (`this_task::isMainThread()` in
+  `SceneNode::invalidateWorldTransformation()`), so creating a `SceneNode` in a test process without an application aborts
+  the assertion-enabled build with `ASSERT: "Application::instance() != nullptr"` in `Task.cpp`, and dereferences null in a
+  release build. Create it once for the whole suite in `initTestCase()` through `OORef::create()` (a plain stack object
+  trips an assertion when it is destroyed) using the minimal subclass the async tests already use —
+  `TestApplication : public Application` whose `createQtApplicationImpl()` returns `nullptr`, the only pure virtual;
+  `QTest` owns the real `QCoreApplication`, so it is never called. Retire it in `cleanupTestCase()` after
+  `_app->taskManager().requestShutdown()`, because the destructor asserts that the task manager was shut down. Unlike the
+  task, this creation needs no ambient task: `OvitoObject` is not a `RefTarget`, so that `create()` never asks the current
+  task.
+* **A user interface on the task.** `SceneNode::insertChildNode()` resolves `this_task::ui()->datasetContainer()` for the
+  current animation time, so a task that carries no user interface makes an unattended release run dereference null at
+  `UserInterface::datasetContainer()` (address `0x20` of a null object) the moment the test adds a node to a scene. Set it
+  with `_task->setUserInterface(app)` after the scope is installed.
+
+The working examples are `tests/cpp/core/utilities/concurrent/tst_concurrent_pool.cpp` (the application fixture) and
+`tests/cpp/core/automation/tst_automation_contracts.cpp` (all three together, in the fixture of a Phase 2.6 contract test).
+`ctest --preset native` sets `QT_QPA_PLATFORM=offscreen` for the test run; a single test binary started by hand needs the
+loader path **and** that variable:
+
+```bash
+LD_LIBRARY_PATH="$PWD/.qt/6.10.2/gcc_64/lib:$PWD/build-native/lib/ovito/plugins" \
+QT_QPA_PLATFORM=offscreen ./build-native/tests/cpp/core/automation/tst_automation_contracts
+```
+
+And run the suite in the assertion-enabled tree as well (§4): it is the only one of the two builds that reports the
+missing `Application` at all.
+
+A test that only touches value types and `QProcess` needs none of this. `tst_python_environment_probe.cpp` is the example:
+creating no `RefTarget`, it runs against a bare `QTest` process, and the one trap of writing it was different — `QSKIP`
+and `QVERIFY` expand to a bare `return`, which a helper that returns a value cannot use (`-Wreturn-type` is an error in
+this build). It skips from the test function itself instead (see `SKIP_WITHOUT_PYTHON` in that file).
+
+### 4.2 Running the Python runtime probe and the topology spike
+
+Both are part of the Phase 2.6 Python track and both expect a real interpreter. Three rules keep them honest on a machine
+that has one:
+
+* **The probe tests need a `python3` on the path** (`QStandardPaths::findExecutable`), never a specific one: they use the
+  interpreter they find and *skip* the cases that need one if there is none, so a machine without Python loses coverage
+  rather than reporting failures `ctest` cannot distinguish from real ones. Everything they assert about a package is
+  written into a temporary directory as a fixture (`ovito/automation/__init__.py` that answers `handshake()`), with
+  `PYTHONPATH` and an explicitly non-isolated interpreter, because `-I` ignores `PYTHONPATH` by design.
+* **The topology spike takes its interpreter explicitly.** Without `--python` it uses
+  `PythonEnvironmentProbe::findInterpreter()`, i.e. the same discovery the tests use, and prints the verdict of the
+  environment probe next to the numbers, so a recorded run always names its environment. The numpy comparison of
+  [AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md) §2 used a throwaway `uv` environment:
+  `uv venv .venv-automation --python 3.12 && uv pip install --python .venv-automation/bin/python numpy` (the directory is
+  git-ignored like every dot-directory and is *not* a supported configuration — OVITO never creates or modifies it).
+* **Both binaries need the same loader path as every other test**, and the spike needs no window system at all:
+
+```bash
+LD_LIBRARY_PATH="$PWD/.qt/6.10.2/gcc_64/lib:$PWD/build-native/lib/ovito/plugins" \
+QT_QPA_PLATFORM=offscreen ./build-native/tests/cpp/core/automation/tst_python_environment_probe
+
+LD_LIBRARY_PATH="$PWD/.qt/6.10.2/gcc_64/lib:$PWD/build-native/lib/ovito/plugins" \
+  ./build-native/bin/ovito-automation-spike --quick                      # smoke pass, seconds
+LD_LIBRARY_PATH="$PWD/.qt/6.10.2/gcc_64/lib:$PWD/build-native/lib/ovito/plugins" \
+  ./build-native/bin/ovito-automation-spike --python .venv-automation/bin/python --json /tmp/spike.json
+```
+
+The spike exits `0` when every check passed, `1` when a check failed (the measurements still print) and `2` when there was
+no interpreter to measure, so a CI job can tell a failure from a skip. It starts and kills its own interpreters; if a run
+is interrupted, `pgrep -fl ovito_worker.py` finds a leftover one, which is the only process it can leak.
+
 ---
 
 ## 5. macOS test host

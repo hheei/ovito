@@ -23,7 +23,8 @@
 > the four small gaps land there, while A3, A6 and A7 are explicitly assigned to Phases 5, 7 and 4 (they change semantics
 > that those phases are already touching).
 >
-> **Design Contract**: [UI_DESIGN.md](UI_DESIGN.md)
+> **Design Contracts**: [UI_DESIGN.md](UI_DESIGN.md) for the frontend;
+> [AUTOMATION_AND_PYTHON_PIPELINE_DESIGN.md](AUTOMATION_AND_PYTHON_PIPELINE_DESIGN.md) for the Python and automation tracks.
 
 ---
 
@@ -711,33 +712,58 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   1. **Automation Gateway boundary**: define the shared controller above core `Scene`, `Pipeline`, `Modifier`,
      `Property`, `Task`, `Undo`, and session semantics. QML, QtWidgets, CLI, Python, and future AI/MCP clients consume
      this boundary; none of them owns duplicate mutation logic. Keep the existing UI `Command` type as a presentation
-     view and add machine-facing descriptors/results separately.
+     view and add machine-facing descriptors/results separately. **Delivered** (audit decision D39): `core/automation/`
+     holds `AutomationContract`, `AutomationProtocol`, `AutomationObjectId`, `AutomationObjectRegistry`,
+     `AutomationSession` and `AutomationGateway`, compiled into `Core`; the presentation `Command` type is untouched and
+     neither side is derived from the other.
   2. **Query and command contracts**: specify versioned command descriptors, query descriptors, parameter schemas,
      required capabilities, structured results/errors, warnings, task IDs, transaction IDs, and artifact metadata. Query
-     operations must be usable without granting mutation permissions.
+     operations must be usable without granting mutation permissions. **Delivered** (D42, D43): contract version `0.1`
+     with kind, capability and error vocabularies, a parameter schema with types and constraints, and results that carry
+     the revision on success and on failure; a client connects with the read capabilities only, artifacts are in-memory
+     buffers and this phase writes nothing to disk.
   3. **Stable identity and revisions**: introduce the design-level contract for stable external IDs such as
      `pipeline:p42`, `modifier:m108`, `viewport:v-perspective`, and `property:m108/distance`, plus a session revision and
      `baseRevision` precondition. IDs must not be QML delegate indexes and must be invalidated clearly after dataset
-     replacement or object deletion.
+     replacement or object deletion. **Delivered** (D40, D41), with one deviation: the viewport ID is numeric
+     (`viewport:v2`) and not the `viewport:v-perspective` of this list, because a viewport's view type is neither unique
+     nor stable; a semantic alias may be added later as an additional name.
   4. **Task, event, transaction, and permission model**: make task lifecycle (`start`, progress, cancel, await, result,
      error), semantic activity provenance, transaction/Undo boundaries, and capability scopes explicit. Initial AI/client
      defaults are read-only; Python execution, file writes, network access, and external processes require separate
-     capabilities and authorization.
+     capabilities and authorization. **Delivered** (D43-D47): capabilities are granted only through recording gateway
+     methods, a client has an allocated identity and an origin, every dispatched command gets a task record with
+     progress, cooperative cancellation and a capability-gated control operation (`task.control`), the events
+     (`session.changed`, `task.started/progress/finished`, `activity`) live in a bounded in-session log, and every command
+     is a transaction that either becomes one undo step or leaves no change at all. Polling `task.describe` is how a
+     client waits in this phase; a blocking `await` and a subscription are Phase 3 transport work.
   5. **Python package contract**: create the packaging/protocol design for a repository-supplied lightweight `ovito`
      package and optional native bridge. Define the strict `pyproject.toml` compatibility envelope, package/protocol
      versioning, supported CPython/platform/architecture matrix, and the runtime handshake fields. Do not silently install,
-     upgrade, or fall back to another environment.
+     upgrade, or fall back to another environment. **Delivered** (D48) as the vocabulary and the runtime half:
+     `automation/python/PythonContract`, `PythonHandshake` and `PythonEnvironmentProbe` fix the protocol name and version,
+     the package name, the CPython 3.10-3.13 range, the platform/architecture matrix and the feature vocabulary, and the
+     probe validates one environment in a fixed order with a machine-readable result; the corresponding probe script is
+     `automation/python/ovito_probe.py`. What this phase does *not* ship is the package itself: `pyproject.toml`, the
+     decorator and the native bridge are Phase 4 (O16), and the probe finds the script through a build-time path until
+     then.
   6. **Interpreter and execution-topology spike**: compare a selected-interpreter persistent worker against an embedded
      runtime on representative particle and mesh data. Measure startup, repeated evaluation, large-array transfer,
      cancellation, crash recovery, and frame-change behavior. JSON/pickle is allowed for control metadata only, never as the
      routine full-dataset transport. The spike must leave an evidence-backed decision or a documented compatibility seam,
-     not an assumed topology.
+     not an assumed topology. **Delivered** (D49, evidence in
+     [AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md)): `ovito-automation-spike` measures a persistent worker
+     over JSON-lines control plus four array transports against the in-process baseline that an embedded runtime would
+     have to beat, and all 93/89 verification checks pass on a numpy and a numpy-free interpreter. The decision is the
+     worker with raw length-framed arrays; the pooled shared-memory variant and a real embedded runtime remain
+     unmeasured by design (O17).
   7. **Data-bridge and discovery spike**: define the first writable data bridge, ownership/copy rules, and supported array
      transfer. Validate AST-only function preview versus explicit runtime import, including malformed syntax, dynamic
      decorators, imports with side effects, and traceback mapping. This does not insert a Python function into a pipeline.
   8. **Local protocol spike**: prove a local-only JSON Lines or equivalent IPC endpoint can discover one live workbench,
-     query a bounded session snapshot, observe task/scene events, and request a displayed-view PNG. Network listening is
-     disabled by default. The spike may be read-only and must report deterministic protocol errors.
+     query a bounded session snapshot, observe task/scene events, and request a displayed-view PNG. Capture is an internal
+     feasibility probe, not a released CLI feature; return a bounded image buffer without arbitrary filesystem writes.
+     Network listening is disabled by default. The spike must report deterministic protocol errors.
   9. **Activity and observability hooks**: add the minimum origin/revision hooks (`user`, `qml`, `cli`, `ai`, `python`) and
      bounded recent semantic activity needed by later clients, without recording raw mouse/keyboard input or leaking paths
      and data-derived values by default.
@@ -745,12 +771,31 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
       benchmark, and unresolved risks in [AUTOMATION_AND_PYTHON_PIPELINE_DESIGN.md](AUTOMATION_AND_PYTHON_PIPELINE_DESIGN.md).
       Add a small contract test suite that can be run without a Python installation and a separate environment probe for
       configured Python runtimes. Keep the classic UI, QML shell, headless mode, and existing spike checks passing.
+      **Partly delivered**: `tests/cpp/core/automation/tst_automation_contracts.cpp` is that suite and runs in `ctest` in
+      a release and in an assertion-enabled build, `tests/cpp/core/automation/tst_python_environment_probe.cpp` is the
+      environment probe for configured runtimes (it needs a `python3` and skips its environment cases without one), and
+      the handshake, the transfer benchmark and the unresolved risks are recorded in the design document and the topology
+      spike document. The prose contract `docs/design/AUTOMATION_CONTRACTS.md` that the contract test names is still open
+      ([UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §5, item O13).
 - **Not in this phase**: Python Function Modifier execution, Python parameter editing, Python source/analysis nodes, a
   writable automation CLI, AI plan execution, MCP, remote automation, render/export workflows, or a built-in Python editor.
-- **Exit Gate**: The shared contracts are versioned and documented; stable IDs survive refresh and object replacement; stale
+- **Exit Gate**: The shared contracts are versioned and documented; IDs survive presentation refresh and re-resolve after
+  undo/redo, while deleted objects and dataset replacement invalidate old references deterministically; stale
   `baseRevision` requests are rejected; task/event/transaction/capability schemas have deterministic tests; the selected
   Python environment can be probed without silent fallback; the worker/embedded benchmark has evidence; and a local client
   can perform only the bounded read-only snapshot/PNG spike. No later feature is marked implemented by this gate.
+- **Status after the first slice**: deliverables 1-6 and the environment probe of deliverable 10 are in the tree and
+  verified by `ctest --preset native` (8/8) and by the same suites in the assertion-enabled tree of
+  [UI_TEST_ENV.md](UI_TEST_ENV.md) §4; the decisions behind them are D39-D49 of
+  [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7, and the Python topology decision rests on the recorded measurements of
+  [AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md). Nothing is wired to a frontend yet — no session is
+  attached, no transport exists, and the layer has no callers outside its own tests (O18) — which is what "architecture
+  adaptation" means here. Open in this phase: deliverables 7-9 (data bridge and AST preview, local protocol and
+  discovery, activity hooks beyond the log that exists) and the prose contract of deliverable 10 (O13). Three
+  preconditions and traps of `core` integration tests were found while getting the suites to run and are recorded in
+  [UI_TEST_ENV.md](UI_TEST_ENV.md) §4.1: creating a `RefTarget` needs an ambient task, creating a `SceneNode` needs an
+  `Application`, and a probe test needs a real interpreter on the path and must not use `QSKIP` from a helper that
+  returns a value.
 
 #### Formal feature placement after Phase 2.6
 
@@ -795,12 +840,19 @@ the last column owns the first user-facing implementation and acceptance gate.
      section 5.3.
   5. Define selection/status refresh and edit cancellation on target deletion, undo/redo, and dataset replacement. Do not retain row indices as object identity across deferred work.
   6. Session save/open and modified-session close handling using extracted shared operations and QML dialogs. Define scene-change and save-failure behavior before users rely on editing sessions.
+  7. **Automation foundation**: consume the Phase 2.6 machine-facing contracts to expose read-only session queries,
+     stable object IDs, revisions, structured errors, task/event subscriptions and a local JSONL/IPC endpoint. The first
+     CLI mode is read-only and must use the same query catalog as later writable clients. Production viewport PNG capture
+     belongs to Phase 5; Phase 2.6's capture probe is not a public Phase 3 operation.
 - **Exit Gate**: Verify the **model and command APIs**, not a UI workflow: insert/reorder/delete of pipeline items
   through the shared operations and their undo/redo, cancellation restoring the original value, coherent selection after
   deletion and undo, and no stale writes when a dataset is replaced during an edit. Reopen a saved session and verify
   that close cancellation and save failures preserve its content. The interaction acceptance of deliverable 4 — gestures,
   drag & drop, one undo step per continuous drag, editor entry — belongs to Phase 4, where the `PipelineView` and the
   editors actually arrive; Phase 3 verifies through the spike harness and the C++ tests.
+  For the automation foundation, connect explicitly to a local session, query its objects/revision/activity and subscribe
+  to task events. Verify protocol-version, malformed-request, unknown-object and unauthorized-command errors; the read-only
+  client cannot mutate the session, execute Python or write files. Python need not be installed to run these checks.
 
 ---
 
@@ -832,7 +884,27 @@ the last column owns the first user-facing implementation and acceptance gate.
      new pipeline and export the selected pipeline item(s) as a snippet, reusing the existing file-importer/exporter
      machinery and the shared file dialogs. Acceptance: round-trip one snippet through export and import, and undo the
      import.
+  8. **Python Function Modifier**: add the first user-facing Python pipeline node using the Phase 2.6 package, runtime
+     handshake, AST preview and data-bridge contracts. It accepts one explicitly decorated function, writable upstream data,
+     typed scalar parameters and a `None` return. Provide environment/file/function selection, scalar controls, compatibility
+     diagnostics and reload entry points in this phase, without requiring a built-in editor or console. It runs
+     asynchronously, reports traceback context, invalidates on script
+     or environment changes, and persists its script/function/schema/environment identity. It must not silently install or
+     switch interpreters.
+     The lightweight environment selector belongs to this modifier workflow and persists the application default through
+     the shared settings facade, alongside explicit per-modifier environment identity. It does not depend on the complete
+     Preferences dialog, which remains Phase 7 work.
+  9. **Writable automation operations**: expose the same pipeline insertion, parameter mutation, evaluation, task wait/cancel
+     and revision verification through the local CLI operation catalog. Permissions, transaction boundaries and stale-plan
+     failures are part of the acceptance case; the CLI does not duplicate QML or QtWidgets mutation logic.
 - **Exit Gate**: On a real imported trajectory, add/edit/reorder/delete modifiers and undo the sequence. Verify group drop boundaries, invalid numeric entry, unit conversion, current-time controller edits, and refresh after undo or time changes. Every initial field has a recorded supported or unsupported outcome. The shared A7 model must show the **same** fields, units, bounds and read-only flags that the classic panel shows for the same object, verified side by side on one scene rather than by trusting the QML side. Splitting and removing a viewport must be undoable and must leave no orphaned viewport window or QML item in either frontend.
+  For Python, preview a file without importing it, authorize activation in a compatible environment, add a property consumed
+  by a downstream native modifier, change scalar parameters and undo, save/reopen and reload the file. Verify frame-change
+  invalidation, incompatible environments, non-`None` returns, tracebacks, cancellation and shutdown without publishing
+  partial output. Verify the environment selector and saved default without the Phase 7 Preferences dialog, including
+  explicit selection/reset and per-modifier identity after reopening. For the writable CLI, insert/edit/evaluate through
+  the same operations, await/cancel the task and verify
+  the resulting revision; stale or unauthorized requests leave the scene unchanged.
 
 ---
 
@@ -862,7 +934,14 @@ the last column owns the first user-facing implementation and acceptance gate.
      progress. Acceptance: toggle it in a viewport with a known view, verify the flag, that the image switches to the
      render-output aspect and resolution, and that turning it off restores the previous interactive view; verify interaction
      is suspended while it is on.
+  8. **Attached viewport automation**: expose viewport, selection and frame queries/mutations through the Phase 2.6
+     operation catalog, including displayed-view PNG capture and asynchronous completion. The client must not block the GUI
+     thread or bypass the viewport's async pick/transaction rules.
 - **Exit Gate**: Execute navigation and animation cases side-by-side with classic on the same scene. Verify picking at fractional display scaling, frame/time mapping, playback cancellation, keyframe edit/undo/cancel, and parameter values at keyed and interpolated times. For A3: a hover pick in both frontends must complete without blocking the GUI thread and without deadlocking against the completion path (a test that fails fast if the pick result is only delivered through the blocked loop), and both frontends must agree on the pick result for the same position and scene. For deliverables 6–7 the disabled placeholders of Phase 2.5 must become working entries: no menu item this phase owns may stay disabled, and Adjust View and Preview Mode must match their classic counterparts on the same scene.
+  For viewport automation, change frame, selection and camera state and verify them in the GUI; capture the displayed view
+  without silently substituting a scene render. Return artifact dimensions, frame, viewport ID and capture path/type.
+  File output requires `files.write`; an in-memory capture does not grant filesystem access. Test async completion and
+  hidden/minimized/unavailable viewport errors without blocking the GUI thread.
 
 ---
 
@@ -892,7 +971,14 @@ These lists identify starting controls, not complete editor specifications. Incl
      Phase 2.5 leaves as a disabled placeholder), covering the persisted keys of the `gui/base` settings facade instead of
      introducing a second storage scheme. Validate keyboard/accessibility and small-window behavior throughout the workbench.
   6. Run the complete parity matrix in `ovito` and `ovito --gui=qml` using the same build configuration and datasets, and record platform results.
+  7. **Automation output and batch track**: expose authorized session save, data export, explicit scene render and artifact
+     retrieval through the same catalog; add no-GUI Python batch/CI execution using the selected compatible environment and
+     verify deterministic task/error behavior. File writes and external execution require explicit capabilities.
 - **Exit Gate**: Every applicable audited parity row passes, with evidence linked from the matrix; no unresolved parameter, workflow, or platform gaps remain under a complete-parity claim. Regression checks preserve classic and headless operation. If scope is reduced, label the release as partial parity and update both documents rather than marking omitted rows passed.
+  Separately verify the new Phase 7 track: authorized CLI session save/export/scene render returns inspectable artifacts;
+  cancellation and unwritable destinations do not report false success. A headless Python batch evaluates the same function
+  and parameters without QML/QWindow and agrees with the GUI's scientific output. These are new-feature checks, not claims
+  that the classic frontend already supplies Python or automation.
 
 ---
 
@@ -902,8 +988,17 @@ These lists identify starting controls, not complete editor specifications. Incl
   1. Global Command Palette (`Ctrl+P` fuzzy search for any modifier, action, or preset).
   2. Activity Bar for swift view toggling.
   3. Integrated multi-tab bottom panel (Timeline + Data Inspector + Python Console).
+  4. **AI and advanced automation**: add the optional AI plan/review workflow, semantic recent-activity context, explicit
+     confirmation for destructive/Python/file-write operations, Python source/analysis node kinds and richer parameter
+     types, plus an MCP adapter. These are clients/adapters of the Phase 2.6 gateway, not new mutation implementations;
+     remote automation requires a separate security review.
+     An optional managed-environment/setup helper may be considered here, but is not required for Python pipeline support;
+     it must show the target environment and changes and obtain consent before installation or upgrades.
 - **Entry Gate**: Phase 7 parity gate passed. Audit shortcut conflicts before assigning Command Palette bindings; preserve platform-native conventions.
-- **Exit Gate**: Each enhancement passes its workflow checks without regressing the parity matrix.
+- **Exit Gate**: Each enhancement passes its workflow checks without regressing the parity matrix. AI/MCP clients use the
+  same catalog, capabilities, tasks and revision checks as the CLI: a stale plan is rejected, denied execution/file writes
+  produce no side effects, and partial completion is reported without promising rollback of files or arbitrary Python.
+  Optional remote access remains disabled unless its separate security/lifecycle gate passes.
 
 ---
 
@@ -923,16 +1018,20 @@ These lists identify starting controls, not complete editor specifications. Incl
 
 ## 5. Immediate Next Step
 
-**Phase 3**, scoped above: the workbench shell and command-layer consumption. Phase 2.5 is complete — all seven
+**Phase 2.6**, scoped above: automation and Python architecture adaptation. Phase 2.5 is complete — all seven
 deliverables and the A1–A9 review items are implemented or explicitly assigned to a later phase, and its exit checks
 (automated spike checks in the four CI jobs, the classic regression runs) have been run and are recorded in this document,
 [UI_PARITY_MATRIX.md](UI_PARITY_MATRIX.md) and [UI_TEST_ENV.md](UI_TEST_ENV.md). What is *not* closed by it: the
 asynchronous pick API (A3, Phase 5), the import-options UI (A6, Phase 7), the property model (A7, Phase 4) and the
-architect/owner's freeze of the design.
+architect/owner's freeze of the overall frontend design. The new Python/automation track has approval for roadmap placement,
+not a frozen execution topology: Phase 2.6 must resolve its contract, runtime-probe, data-bridge and local protocol risks
+before their formal implementations. Phase 3 presentation and automation work then share the validated contracts.
 
 Phase 1 and Phase 2 are closed to the extent this environment allows: the rendering bridge, the picking path and the
 performance baseline are documented in [UI_PHASE1_SPIKE.md](UI_PHASE1_SPIKE.md), the shell, import path and packaging in
 [UI_PLAN.md](UI_PLAN.md) and the audits in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md); the testing recipes and traps are in
 [UI_TEST_ENV.md](UI_TEST_ENV.md). The architecture status remains **proposed** until the owner freezes it — the technical
 preconditions (rendering bridge, picking, teardown, four platforms, assert-enabled run, performance baseline) are met. This
-roadmap describes planned work: Phases 1, 2 and 2.5 are recorded as verified above, and Phases 3–9 have not started.
+roadmap describes planned work: Phases 1, 2 and 2.5 are recorded as verified above; Phase 2.6 has started and its first
+three deliverables plus its contract test suite are delivered (see the status note in the phase section); Phases 3–9 have
+not started.
