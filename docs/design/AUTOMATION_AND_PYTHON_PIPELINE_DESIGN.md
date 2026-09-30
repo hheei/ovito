@@ -1,6 +1,11 @@
 # Python Pipeline and AI/CLI Automation Design
 
-> **Status**: Revised design proposal for review. This document does not change the phase roadmap or authorize implementation.
+> **Status**: Accepted design basis for Phase 2.6, and partially executed: the machine-facing gateway (deliverables 1-4),
+> the Python package contract and its runtime probe (deliverable 5) and the execution-topology spike (deliverable 6) are
+> implemented and verified, with their decisions recorded as D39-D49 in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7 and the
+> topology evidence in [AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md). Sections 3.4.1, 6 and 7 below carry the
+> resulting resolutions. Formal feature placement is unchanged: the user-facing capabilities remain gated by the later
+> phase exits.
 >
 > **Scope**: Two related but distinct capabilities for the Qt Quick workbench: user-defined Python computation as part of
 > OVITO's data pipeline, and a semantic CLI/automation interface through which a person or AI agent can inspect and operate
@@ -45,9 +50,11 @@ and do not turn UI `Command` objects directly into an unrestricted remote API.
 
 The intended authoring workflow is:
 
-1. Choose a Python interpreter/environment in OVITO's Python settings.
+1. Choose a Python interpreter/environment using the Phase 4 modifier workflow's lightweight environment selector.
+   It can save an application default without waiting for the complete Phase 7 Preferences dialog.
 2. Point the Python-function modifier at an ordinary `.py` file.
-3. OVITO loads the file using that interpreter and discovers functions marked by the OVITO decorator.
+3. OVITO previews decorated functions without importing the file; explicit activation imports it in the selected
+   interpreter and validates the discovered metadata.
 4. Choose a discovered function and add it to the pipeline.
 5. OVITO displays the function's typed parameters as editable controls. Editing a parameter invalidates the relevant
    pipeline result and schedules normal reevaluation.
@@ -97,7 +104,8 @@ ignored. Importing a module executes Python code, so selecting a file must not s
 
 The decorator and annotations should describe a constrained, portable parameter schema:
 
-- Supported scalar values initially: `bool`, `int`, `float`, `str`, and a small set of OVITO-defined enums/vectors.
+- Supported scalar values initially (Phase 4): `bool`, `int`, `float`, and `str`. OVITO-defined enums/vectors and other
+  richer parameter types are Phase 8 extensions with explicit schemas.
 - Defaults are taken from Python defaults when representable and type-compatible.
 - Type hints describe the UI and validation contract; they are not a promise to support arbitrary Python typing
   constructs, runtime generics, or arbitrary object serialization.
@@ -128,6 +136,9 @@ design should provide:
 
 - An application setting for the interpreter executable/environment, plus a reliable way to select or reset to a supported
   environment. The UI should call this a **Python environment**, not promise that every arbitrary executable is compatible.
+  Phase 4 supplies a lightweight selector in the modifier workflow, persisting the default through the shared settings
+  facade and keeping explicit per-modifier environment identity. Phase 7 integrates it into the full Preferences UI;
+  that dialog is not a prerequisite for the first Python modifier.
 - A package supplied by this repository/distribution that exposes the decorator, supported data bindings, and runtime bridge.
 - An explicit compatibility check before loading a script: Python implementation/version, package version, native extension
   ABI, platform, architecture, and required features. Explain precisely what is missing and how to repair it.
@@ -205,21 +216,19 @@ small control messages; it should not carry routine full particle arrays. If the
 interactive pipeline latency, retain the same package-level API but add an embedded-runtime backend for a fixed, supported
 Python ABI.
 
-The package requirement should mean a compatible OVITO package is present in the selected environment, not that OVITO
-silently installs packages into a user's environment. Any setup helper must be explicit, opt-in, and show the target
-environment and package version before modifying it.
-
 There remains an execution-topology choice. An embedded runtime gives direct access to native OVITO objects but couples the
 application binary to one CPython ABI and requires careful GIL/thread integration. A persistent worker lets OVITO launch the
 selected environment and isolates crashes, but requires an efficient bridge for large arrays, task cancellation, errors, and
-object identity. A worker must not use JSON or pickle as the default transport for full scientific datasets. If external
-environments are a priority, prototype a worker with shared-memory or buffer-oriented array transfer; if native pipeline
-performance is the priority, prototype an embedded runtime. Freeze neither topology nor public Python signatures until one
-representative particle/mesh benchmark and failure-recovery test pass.
+object identity. A worker must not use JSON or pickle as the default transport for full scientific datasets.
 
-The package requirement should mean a compatible OVITO package is present in the selected environment, not that OVITO
-silently installs packages into a user's environment. Any install/setup helper must be explicit, opt-in, and show the
-target environment and package version before modifying it.
+**Resolved in Phase 2.6** (audit decision D49 of [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7, evidence in
+[AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md)): the topology is a **persistent worker process on the
+user-selected interpreter**, with arrays as raw length-prefixed buffers and shared memory as an optional optimisation. The
+spike measured the seam against the in-process baseline an embedded runtime would have to beat - for 500 000 particles plus
+200 000 triangles (13.7 MB), computing the same data in process costs 10.8 ms and the worker's framed transfer costs
+13.0 ms, while JSON costs 539 ms for 2.3× the bytes, cancellation lands within 1.3 ms and a deliberately killed worker is
+noticed within 4.7 ms and replaced within 43 ms. Embedding could save only that ≈2 ms while giving up the crash isolation
+and freezing one ABI, so it stays a possible additive backend behind the same package API rather than the first choice.
 
 ### 3.5 Runtime and pipeline execution contract
 
@@ -422,47 +431,73 @@ service, not a privileged special case.
 
 ## 6. Design Decisions Still Open
 
-Resolve these through small prototypes before freezing user-facing APIs:
+Resolve these through small prototypes before freezing user-facing APIs. The *gateway-side* half of items 6 and 9 is
+settled since Phase 2.6's first slice — the operation catalog, the ID grammar, the session revision, the dispatch order and
+the capability names are decisions D39-D43 of [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7 — so what stays open in those two
+items is the transport and the consent/user-interface half.
 
 1. **Python execution topology**: embedded runtime versus persistent worker process; measure throughput and data-transfer
    cost on representative particle and mesh inputs. Do not use JSON/pickle for routine full-dataset transfer.
+   **Resolved in Phase 2.6** (D49): the persistent worker is chosen, with raw length-framed array transfer as the default
+   and a pooled shared-memory path left as an optimisation; the measurements, the caveats (one machine, synthetic payload,
+   pooled segment and embedded runtime unmeasured) and the reproduction recipe are in
+   [AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md). The public Python signatures are still not frozen - the
+   decorator and the data contract are items 3 and 5 below.
 2. **Interpreter/package compatibility**: exact supported CPython versions/ABIs, packaging per platform, and whether the
-   project supplies only a compatible package or also an optional managed environment.
+   project supplies only a compatible package or also an optional managed environment. **Partly resolved in Phase 2.6**
+   (D48): the runtime half exists as `automation/python/` - the handshake protocol `ovito.automation.handshake` version
+   `1.0`, the CPython 3.10-3.13 envelope, the platform/architecture matrix, the feature vocabulary
+   (`schema.introspection`, `function.inplace`, `parameter.scalar`, `array.buffer`, `array.shared-memory`,
+   `task.cancellation`, `traceback.mapping`) and a probe that validates one environment without installing or falling
+   back. What remains open is the *shipping* half: which wheels are built per platform and ABI, what the strict
+   `pyproject.toml` says, and whether an optional managed environment is offered at all (Phase 4 for the package, Phase 8
+   for a managed environment).
 3. **Python data contract**: first modifier is writable in-place `DataCollection` plus `None` return; later source/analysis
    contracts remain separate.
 4. **Python concurrency/cancellation**: GIL strategy, serial execution policy, cooperative cancellation, and application
    shutdown behavior.
 5. **Decorator schema**: supported annotations and metadata, module reload, code-file change detection, and parameter
    persistence.
-6. **Automation transport**: stdio broker vs local socket, Windows/macOS/Linux endpoint lifecycle, and client discovery.
+6. **Automation transport**: stdio broker vs local socket, Windows/macOS/Linux endpoint lifecycle, and client discovery (the
+   operation catalog and its framing-independent error rules are already fixed by D39/D42).
 7. **GUI capture vs scene rendering**: exact semantics and whether current viewport capture is available on all target
    platforms while hidden/minimized.
 8. **Undo and transaction scope**: which scene mutations are undoable and how a multi-command AI plan interacts with the
    existing undo stack.
-9. **Permission UX**: local process trust model, script execution consent, file-write confirmation, and policy persistence.
+9. **Permission UX**: local process trust model, script execution consent, file-write confirmation, and policy persistence
+   (the capability vocabulary and the read-only connect default are fixed by D43; what is open is who may grant what, and
+   how the user is asked).
 
-## 7. Proposed Delivery Slices (Not Yet Applied to `UI_PLAN.md`)
+## 7. Delivery Slices Mapped to `UI_PLAN.md`
 
-This is a capability-oriented sequence, not a revision of the existing frontend phase plan:
+The normative mapping is now recorded in [UI_PLAN.md](UI_PLAN.md) under **Phase 2.6: Automation & Python Architecture
+Adaptation**, and summarized below. Phase 2.6 owns adaptation and evidence; it does not make the later user-facing features
+available.
 
-1. **Architecture spike**: validate the custom package's `pyproject.toml` constraints plus runtime ABI probe; compare an
-   embedded runtime with a worker using one representative data bridge. Separately validate an automation client can attach
-   to one running session, inspect it, and request a PNG. No AI UI required.
-2. **Automation foundation**: stable session/object identifiers, query catalog, structured results/errors, revision
-   preconditions, task events, local endpoint, and CLI JSON mode. Begin read-only, then add a small set of reversible
-   pipeline operations.
-3. **Python Function Modifier MVP**: AST preview followed by explicit import, one compatible environment, `@ovito.modifier`,
-   writable in-place data plus `None` return, typed scalar parameters, `PythonParameterSet`, pipeline execution,
-   traceback display, frame-aware invalidation, and session persistence.
-4. **Automation authoring workflow**: pipeline construction/parameter editing, task wait/cancel, session save/export/render,
-   output artifact retrieval, permissions and confirmation, and bounded semantic activity context.
-5. **Workbench integration and advanced capabilities**: user-facing Python file/function selection and parameter editor;
-   optional AI plan/review panel; richer types, source/analysis decorators, optional managed environment, MCP adapter,
+1. **Phase 2.6 architecture adaptation**: validate the custom package's `pyproject.toml` constraints plus runtime ABI probe;
+   compare an embedded runtime with a worker using one representative data bridge. Separately validate a local client can
+   attach to one running session, inspect it, and request a bounded in-memory PNG as an internal feasibility probe, not a
+   released feature. No AI UI required.
+2. **Phase 3 automation foundation**: stable session/object identifiers, query catalog, structured results/errors, revision
+   preconditions, task events, bounded semantic activity context, local endpoint, and CLI JSON mode. Ship read-only queries;
+   writable pipeline operations belong to Phase 4 and public viewport capture to Phase 5.
+3. **Phase 4 Python Function Modifier MVP and pipeline automation**: environment/file/function selection, AST preview
+   followed by authorized import, one compatible environment, `@ovito.modifier`, writable in-place data plus `None` return,
+   scalar parameter controls, `PythonParameterSet`, pipeline execution, traceback display, reload, frame-aware invalidation,
+   and session persistence. CLI pipeline construction/parameter editing/evaluation and task wait/cancel consume the same
+   shared operations and revision/permission checks.
+4. **Phase 5 interactive automation**: viewport/selection/frame control and production displayed-view PNG capture, with
+   asynchronous completion, artifact metadata and explicit file-write authorization where output is saved.
+5. **Phase 7 output and batch automation**: authorized session save, data export, explicit scene render and artifact
+   retrieval, plus headless Python batch/CI execution without QML/QWindow.
+6. **Phase 8 advanced workbench capabilities**: optional AI plan/review panel; richer parameter types, source/analysis
+   decorators, an optional managed environment/setup helper, Python Console, MCP adapter,
    external tool integrations, and remote automation only after their own security and lifecycle designs.
 
-The phase roadmap should be edited only after agreement on this design and the architecture spikes resolve the high-risk
-choices. It should then assign Python pipeline and AI/CLI as distinct tracks that can proceed in parallel where their shared
-contracts allow.
+The execution topology is decided by the Phase 2.6 spike (D49, [AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md)):
+a persistent worker on the user-selected interpreter, driven over JSON-lines control with raw length-framed array
+payloads. Later phases consume the stable package and automation contracts regardless; an embedded runtime remains an
+additive backend behind the same package API for a fixed, supported ABI.
 
 ## 8. Initial Acceptance Criteria
 
