@@ -1,5 +1,10 @@
 name: Release
 
+# The release half of the pipeline: this workflow builds and packages the binaries that ship, with the full plugin set
+# and the `-O3` of a Release build. The CI workflow (ci.yml) is the test half and deliberately builds with `-O2` on
+# clang/MSVC and with a reduced scope, so a change that is sensitive to the optimization level or to gcc should be
+# reproduced locally with the `release` preset (docs/design/UI_TEST_ENV.md section 6.1) before tagging.
+
 on:
   push:
     tags:

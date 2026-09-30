@@ -1,10 +1,12 @@
 name: CI
 
-# Build and test matrix for the four supported platforms.
+# Build and test matrix for the three supported platforms.
 #
 # The wall-clock cost of this workflow is the Build step: it used to be 92-95% of every job (16m47s of 19m57s on
 # Windows, 28m42s of 30m57s on macOS) while CTest takes about a second and the Qt Quick smoke tests 3-25 seconds.
-# Four measures keep it down, and each one is measurable on its own (docs/design/UI_TEST_ENV.md section 6):
+# This workflow is the *test* half of the pipeline and optimizes for that: it builds with -O2 instead of the -O3 of
+# the release workflow (release.yml), because nothing here measures performance. Every measure below is documented
+# with the measurement behind it in docs/design/UI_TEST_ENV.md section 6.1:
 #
 #   * a compiler cache (ccache on every platform, one cache per OS and architecture shared by all jobs of that
 #     platform), which makes a rebuild of an unchanged translation unit a lookup instead of a compile. OVITO
@@ -12,24 +14,18 @@ name: CI
 #     CCACHE_SLOPPINESS names pch_defines and time_macros - without those two words 81% of the calls here were
 #     uncacheable and the cache did nothing; with them a changed translation unit went from 5.9 s to 0.15 s and
 #     a fully warm rebuild of the whole tree takes 0.7 s at -j4.
-#   * clang on the two Linux x86_64 jobs: measured on the full tree, clang needs 1459 s of compile work against
+#   * clang on the Linux x86_64 job: measured on the full tree, clang needs 1459 s of compile work against
 #     2570 s for gcc (143 s of wall time at -j16 against 233 s), because it is much faster on the Qt and Boost
-#     template code. The shipped Linux binaries come from the release workflow, which uses gcc, so the Linux
-#     ARM64 job deliberately keeps gcc and that compiler verified.
-#   * Release instead of RelWithDebInfo. Nothing debugs a CI binary, assertions are compiled out in either case
-#     (NDEBUG), and debug info costs about a quarter of the compile time of a single translation unit.
-#   * a smaller build scope for the jobs that only exercise the Qt Quick frontend: no QtWidgets application and
-#     none of the plugins its smoke test does not touch, which is 512 instead of 951 translation units. The macOS
-#     job uses that scope as well - its smoke test needs the spike executable, not the product application, and
-#     the spike lands in the same bundle directory either way.
-#   * a path filter: a change to documentation alone cannot break the build, so it does not start a 30-minute
+#     template code. The shipped Linux binaries come from the release workflow, which uses gcc and -O3 - run that
+#     workflow (a tag or a manual dispatch) before a release that touches compiler-specific code.
+#   * the macOS job builds the frontend scope: its smoke test needs the spike executable, not the QtWidgets
+#     application, and the spike lands in the same bundle directory either way (512 instead of 951 translation
+#     units, about ten minutes less).
+#   * a path filter: a change to documentation alone cannot break the build, so it does not start a 20-minute
 #     matrix. Note for a repository that requires these checks before merging: a skipped workflow reports no
 #     status, so a docs-only pull request would wait forever - lift the filter then.
 #
-# The expensive jobs run for master/main pushes, pull requests and manual dispatch; a push to a feature branch
-# runs only the fast Qt Quick job (about 3 minutes cold, well under a minute warm), which is the trade-off of
-# that speed-up: a Windows-only break surfaces on the full matrix instead. Start the full matrix on a feature
-# branch on purpose with "gh workflow run CI --ref <branch>".
+# All three jobs run for every push to a monitored branch, for pull requests and for a manual dispatch.
 
 on:
   push:
@@ -65,8 +61,9 @@ env:
   CCACHE_DIR: ${{ github.workspace }}/.ccache
   CCACHE_MAXSIZE: 2G
   CCACHE_COMPRESS: '1'
-  # Selects the compiler cache of the CMake preset "ci" (ccache here, sccache on Windows, empty on a machine
-  # without one, in which case CMake simply compiles directly).
+  # Selects the compiler cache of the CMake presets (ccache here, empty on a machine without one, in which case
+  # CMake simply compiles directly; the top-level CMakeLists only enables ccache by itself when no launcher is
+  # configured).
   OVITO_COMPILER_LAUNCHER: ccache
   # The checks every Qt Quick smoke test runs, in the order the spike expects them (see src/ovito/gui/qml/spike).
   # One list for all four platforms: the shell checks lost their per-platform duplication when they moved into
@@ -80,119 +77,12 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Linux x86_64 - the fast Qt Quick frontend gate, and the only job a feature
-  # branch runs. Builds the frontend-scoped configuration (see the CMake preset
-  # "ci-frontend") with a warm ccache in well under a minute.
-  # ---------------------------------------------------------------------------
-  build-linux-x64-frontend:
-    name: Linux x86_64 (Qt Quick frontend)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
-            ninja-build build-essential ccache clang \
-            libboost-dev libnetcdf-dev libhdf5-dev \
-            libgl1-mesa-dev libgl1-mesa-dri libvulkan-dev mesa-vulkan-drivers xvfb \
-            libxkbcommon-dev libxkbcommon-x11-0 \
-            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
-            libxcb-render-util0 libxcb-shape0 libxcb-sync1 libxcb-xfixes0 \
-            libxcb-xinerama0 libxcb-xkb1
-
-      - name: Install Qt 6.10.2
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.10.2'
-          modules: 'qtshadertools'
-          cache: true
-          set-env: true
-
-      - name: Restore the compiler cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          # One cache per OS and architecture, shared by every job and scope of that platform: the compile
-          # commands of the libraries this frontend is built on are identical in both scopes, and ccache hashes the
-          # whole command line, so a cache populated by another scope can only ever produce correct objects.
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Configure CMake
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: |
-          cmake --preset ci-linux-frontend
-
-      - name: Build
-        run: |
-          cmake --build --preset ci-linux-frontend --parallel "$(nproc)"
-          ccache --show-stats
-
-      - name: Test (CTest)
-        env:
-          QT_QPA_PLATFORM: offscreen
-          LD_LIBRARY_PATH: ${{ env.QT_ROOT_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
-        run: |
-          ctest --test-dir build --output-on-failure
-
-      # The Qt Quick frontend must notice when its platform plugin provides no graphics device and must name the
-      # plugin at fault instead of leaving the viewports empty (plan item A8.4). Qt's offscreen plugin provides no
-      # QRhi, so this run takes that error path, and the spike fails if the frontend reports a device that the
-      # window does not have.
-      - name: Smoke test the missing-graphics-device report
-        env:
-          QT_QPA_PLATFORM: offscreen
-          LD_LIBRARY_PATH: ${{ env.QT_ROOT_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
-        run: |
-          ./build/bin/ovito-qml-spike \
-            --qml-startup-delay 3000 \
-            --qml-device-check
-
-      # The Qt Quick viewport needs a QRhi, which the offscreen QPA plugin cannot provide, so the smoke test
-      # renders into an Xvfb display with the software rasterizer. Picking runs through OVITO's own offscreen
-      # RenderThread, which uses Vulkan on Linux and therefore needs a usable ICD (lavapipe here, since the
-      # runners have no GPU). See docs/design/UI_TEST_ENV.md.
-      - name: Smoke test the Qt Quick frontend
-        env:
-          QT_QPA_PLATFORM: xcb
-          # The smoke test asserts that the frontend starts, renders, picks and imports; that is independent of the
-          # render loop. The scene graph's own threading is left out here, because the runner has no GPU and few
-          # cores, where the threaded loop's frame synchronization is a source of flakiness rather than of
-          # signal. Both loops are part of the local verification on real hardware (UI_TEST_ENV.md section 9.5).
-          QSG_RENDER_LOOP: basic
-          # Both spellings: the Vulkan loader accepts VK_DRIVER_FILES since 1.3.234, older ones only the
-          # deprecated VK_ICD_FILENAMES.
-          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
-          LD_LIBRARY_PATH: ${{ env.QT_ROOT_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
-        run: |
-          python3 - <<'PY'
-          import os, pathlib
-          a, n = 3.6, 8
-          # The comment line must not contain the word "atoms": OVITO's importer autodetection then hands the
-          # file to the LAMMPS data importer, which parses an empty scene out of it (see UI_TEST_ENV.md section 1).
-          lines = [f"{n**3}", "simple cubic lattice, a=3.6"]
-          lines += [f"Ar {i*a} {j*a} {k*a}" for i in range(n) for j in range(n) for k in range(n)]
-          pathlib.Path(os.environ["RUNNER_TEMP"], "lattice_512.xyz").write_text("\n".join(lines) + "\n")
-          PY
-          xvfb-run -a --server-args='-screen 0 1400x900x24' \
-            # QML_SMOKE_CHECKS holds the check list as separate arguments, which is what shellcheck warns about.
-            # shellcheck disable=SC2086
-            build/bin/ovito-qml-spike $QML_SMOKE_CHECKS "$RUNNER_TEMP/lattice_512.xyz"
-
-  # ---------------------------------------------------------------------------
   # Linux x86_64 - the full product: every plugin, the QtWidgets frontend and
-  # the Qt Quick frontend, plus the screenshot of the workbench.
+  # the Qt Quick frontend, plus the screenshot of the workbench. Compiles with
+  # clang (CMake preset "ci-linux").
   # ---------------------------------------------------------------------------
   build-linux-x64:
     name: Linux x86_64
-    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/feature/')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -317,111 +207,15 @@ jobs:
           if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
-  # Linux ARM64 - same frontend scope as the Linux x86_64 gate, on the second
-  # architecture. The desktop application is covered by the x86_64 job.
-  # ---------------------------------------------------------------------------
-  build-linux-arm64:
-    # The only Linux job that still compiles with gcc, on purpose: the release workflow builds the shipped
-    # binaries with gcc, so a gcc-only regression must be caught here. Its scope is small enough for that.
-    name: Linux ARM64
-    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/feature/')
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
-            ninja-build build-essential ccache \
-            libboost-dev libnetcdf-dev libhdf5-dev \
-            libgl1-mesa-dev libgl1-mesa-dri libvulkan-dev mesa-vulkan-drivers xvfb \
-            libxkbcommon-dev libxkbcommon-x11-0 \
-            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
-            libxcb-render-util0 libxcb-shape0 libxcb-sync1 libxcb-xfixes0 \
-            libxcb-xinerama0 libxcb-xkb1
-
-      - name: Install Qt 6.10.2
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.10.2'
-          modules: 'qtshadertools'
-          cache: true
-          set-env: true
-
-      - name: Restore the compiler cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          # One cache per OS and architecture, shared by every job and scope of that platform: the compile
-          # commands of the libraries this frontend is built on are identical in both scopes, and ccache hashes the
-          # whole command line, so a cache populated by another scope can only ever produce correct objects.
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Configure CMake
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: |
-          cmake --preset ci-frontend
-
-      - name: Build
-        run: |
-          cmake --build --preset ci-frontend --parallel "$(nproc)"
-          ccache --show-stats
-
-      - name: Test (CTest)
-        env:
-          QT_QPA_PLATFORM: offscreen
-          LD_LIBRARY_PATH: ${{ env.QT_ROOT_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
-        run: |
-          ctest --test-dir build --output-on-failure
-
-      # See the Linux x86_64 job for what this run is about.
-      - name: Smoke test the missing-graphics-device report
-        env:
-          QT_QPA_PLATFORM: offscreen
-          LD_LIBRARY_PATH: ${{ env.QT_ROOT_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
-        run: |
-          ./build/bin/ovito-qml-spike \
-            --qml-startup-delay 3000 \
-            --qml-device-check
-
-      - name: Smoke test the Qt Quick frontend
-        env:
-          QT_QPA_PLATFORM: xcb
-          QSG_RENDER_LOOP: basic
-          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
-          LD_LIBRARY_PATH: ${{ env.QT_ROOT_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
-        run: |
-          python3 - <<'PY'
-          import os, pathlib
-          a, n = 3.6, 8
-          # The comment line must not contain the word "atoms" (see UI_TEST_ENV.md section 1).
-          lines = [f"{n**3}", "simple cubic lattice, a=3.6"]
-          lines += [f"Ar {i*a} {j*a} {k*a}" for i in range(n) for j in range(n) for k in range(n)]
-          pathlib.Path(os.environ["RUNNER_TEMP"], "lattice_512.xyz").write_text("\n".join(lines) + "\n")
-          PY
-          xvfb-run -a --server-args='-screen 0 1400x900x24' \
-            # QML_SMOKE_CHECKS holds the check list as separate arguments, which is what shellcheck warns about.
-            # shellcheck disable=SC2086
-            build/bin/ovito-qml-spike $QML_SMOKE_CHECKS "$RUNNER_TEMP/lattice_512.xyz"
-
-  # ---------------------------------------------------------------------------
   # macOS (Apple Silicon ARM64) - the Qt Quick frontend. Qt (both the scene graph
   # and OVITO's offscreen picking) uses Metal here, which the runner provides
-  # without a physical display. The job uses the frontend scope of the Linux
-  # ARM64 job, which is what its smoke test needs: the spike lives in the same
-  # Ovito.app/Contents/MacOS directory in either scope, while building the
-  # QtWidgets application on a three-core runner costs another ten minutes.
+  # without a physical display. The job builds the frontend scope, which is what
+  # its smoke test needs: the spike lives in the same Ovito.app/Contents/MacOS
+  # directory in either scope, while building the QtWidgets application on a
+  # three-core runner costs another ten minutes.
   # ---------------------------------------------------------------------------
   build-macos-arm64:
     name: macOS ARM64
-    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/feature/')
     runs-on: macos-15
     steps:
       - name: Checkout repository
@@ -458,11 +252,11 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          cmake --preset ci-frontend -DCMAKE_PREFIX_PATH="${{ env.QT_ROOT_DIR }}"
+          cmake --preset ci-macos -DCMAKE_PREFIX_PATH="${{ env.QT_ROOT_DIR }}"
 
       - name: Build
         run: |
-          cmake --build --preset ci-frontend --parallel "$(sysctl -n hw.ncpu)"
+          cmake --build --preset ci-macos --parallel "$(sysctl -n hw.ncpu)"
           ccache --show-stats
 
       - name: Test (CTest)
@@ -489,11 +283,10 @@ jobs:
             $QML_SMOKE_CHECKS "$RUNNER_TEMP/lattice_512.xyz"
 
   # ---------------------------------------------------------------------------
-  # Windows AMD64 - the full product, with sccache.
+  # Windows AMD64 - the full product, with ccache.
   # ---------------------------------------------------------------------------
   build-windows-x64:
     name: Windows AMD64
-    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/feature/')
     runs-on: windows-2022
     env:
       # ccache on every platform. It is the only one of the two that can cache a translation unit which *consumes*
@@ -606,7 +399,7 @@ jobs:
       - name: Configure CMake
         shell: pwsh
         run: |
-          cmake --preset ci-full `
+          cmake --preset ci-windows `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_TOOLCHAIN" `
             -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" `
             -DBOOST_ROOT="${{ github.workspace }}\.boost" -DBoost_NO_BOOST_CMAKE=ON
@@ -614,7 +407,7 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          cmake --build --preset ci-full --parallel $env:NUMBER_OF_PROCESSORS
+          cmake --build --preset ci-windows --parallel $env:NUMBER_OF_PROCESSORS
           if (Get-Command ccache -ErrorAction SilentlyContinue) { ccache --show-stats }
 
       - name: Test (CTest)
