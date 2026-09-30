@@ -183,10 +183,12 @@ The scope of this area is defined by the audited editors, not by reflection over
 
 | Capability | Classic reference | Qt Quick | Phase | Acceptance case |
 |---|---|---|---|---|
-| Save/open session, dirty state, unsaved-change question | `WorkbenchUI` session workflow (shared since D28) plus `MainWindowUI` dialogs | ✅ logic shared and checked; ▶ Phase 3 d6 for the menu entries and the close hook | 2 (done) / 3 | `--qml-session-check` (save, reopen, discard changes, missing file dialog) |
+| Save/open session, dirty state, unsaved-change question | `WorkbenchUI` session workflow (shared since D28) plus `MainWindowUI` dialogs | ✅ closing the window or quitting asks through `askForSaveChanges()` (`canCloseWorkbench()`, a cancelled close keeps the window open), the title marks a modified session, and a `.ovito` file handed to the import path opens as a session | 2.5 (done) | `--qml-session-check` (save, reopen, discard changes, missing file dialog, the question answered three ways, the title marker, `openRecentFile` and a `.ovito` import) |
+| Session file with several pipelines | `MainWindowUI::checkLoadedDataset` asks which pipeline to keep | ✅ the same question in a QML chooser; a cancelled question aborts the load | 2.5 (done, end to end still manual) | the chooser is exercised by `--qml-parity-check` (asked and answered in both ways); the full path needs a session file with two file sources, see §6 |
 | Application settings dialog (general, viewport, ffmpeg, templates) | `ApplicationSettingsDialog` with its pages | ▶ Phase 7 d5 | 7 | each page's values persist and are read back through the shared facade |
 | Settings storage: one owner for key names and defaults | scattered `QSettings` uses | ▶ Phase 2.5 d2 | 2.5 | a grep for the literal keys finds them in the facade only |
-| Recently used directories per dialog | `HistoryFileDialog` over `QSettings` | ▶ Phase 2.5 d2/d3 (facade plus the QML file dialog) | 2.5 | reopen the import dialog; it starts in the last used directory |
+| Recently used directories per dialog | `HistoryFileDialog` over `QSettings` | ✅ the import dialog reopens in the directory of the last import, which the frontend remembers through the facade | 2.5 (done) | `--qml-parity-check` asserts the directory the dialog would open in |
+| Recently opened files (`File → Open Recent`) | `RecentFilesList` plus `MainWindow::updateRecentFilesMenu` | ✅ the shared list in a submenu of the File menu, with session entries reopening the session and data entries re-importing through the remembered importer and format; a file that cannot be opened is dropped from the list | 2.5 (done) | `--qml-parity-check` compares the submenu with the shared list; `--qml-session-check` opens a session entry |
 | Saving into a non-writable location fails visibly | `MainWindowUI::fileSave` error path | ▶ Phase 3 d6 | 3 | save to a read-only directory: the error dialog appears, the dirty state stays |
 
 ### 3.12 Status bar, task progress and errors
@@ -266,6 +268,7 @@ Every acceptance case above resolves to one of these fixtures and one of these h
 | `lattice_traj.xyz` | a three-file trajectory | multi-frame import, playback probe |
 | `poscar_512000.vasp` | a large, eagerly parsed structure | import cancellation |
 | `session.ovito` | a saved session used by the session check | session workflow, recent files |
+| session with two file sources | a `.ovito` file holding two pipelines, which only OVITO Pro can write | the multi-pipeline question (§3.11): manual, see §6 |
 | mixed-DPI/`QT_SCALE_FACTOR` runs | the same scene under `1.5` and `2` | HiDPI |
 
 **Harness steps** (`OvitoQmlSpike`, all four CI jobs run a subset):
@@ -296,3 +299,4 @@ assert-enabled build has to cover are marked in [UI_TEST_ENV.md](UI_TEST_ENV.md)
 | Mixed-DPI multi-monitor | no such setup available | two displays with different scale factors |
 | Frame-time claims for a release build with assertions | assertions are compiled out under `NDEBUG`; the assert build is a separate tree | already covered: the assert build runs the same steps (Phase 1, F5/§4 of UI_TEST_ENV.md) |
 | Video export | OVITO's ffmpeg support is not built in this tree | a build with ffmpeg available |
+| The multi-pipeline question end to end | its fixture is a session file with two file sources, which this frontend cannot write (OVITO Basic imports one pipeline at a time) and which no build in this tree produces | load such a session (written by OVITO Pro) and answer the question in both ways; the chooser itself is already checked by `--qml-parity-check` |

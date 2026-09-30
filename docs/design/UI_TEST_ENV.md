@@ -578,6 +578,16 @@ window-manager notes in §9.2.3).
 pre-warm of §9.2.7) on all four platforms. CI usage is still deliberately kept low: a verification should be a deliberate
 push, not a debug loop.
 
+**`--qml-session-check` and `--qml-parity-check` cover the closing behaviour of the shell.** The session check answers the
+question about a modified session three ways (cancel keeps the window open and the changes, discard lets the close
+proceed, save writes the file and clears the marker), closes the real window once to prove that its close event goes
+through the same question, and opens the session again through its recent files entry and through the import path. Two
+traps that cost a run each: a *closed* menu reports all of its items as `visible: false`, so a menu walk must not filter
+by visibility (the shell's recent files submenu names its empty-list placeholder instead), and the items a `Repeater`
+creates inside a `Menu` are not children of that menu - they are read through `QMetaObject::invokeMethod(repeater,
+"itemAt", ...)`. The submenu entry itself is a `MenuItem` whose `subMenu` property points at the menu it opens; that
+property is what tells a container apart from an action.
+
 **A trap that cost a CI cycle:** `install-qt-action` exports `QT_ROOT_DIR` (the Qt prefix) and the plugin/QML paths, but
 `Qt6_DIR` - which it sets for CMake - is **not** visible as an environment variable inside the steps. The Windows
 configure step therefore passed an empty `CMAKE_PREFIX_PATH` (CMake still found Qt through the `qmake` on `PATH`) and the

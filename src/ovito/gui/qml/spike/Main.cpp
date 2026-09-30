@@ -2040,6 +2040,61 @@ void verifyFocusOrder(QmlMainWindowUI* ui)
                 << "the keyboard focus), so the order is verified by the tabbable items above";
 }
 
+/// Answers the next pipeline question of the workbench. Like the message dialog, the question blocks the main thread and
+/// is answered from the timer of this poll, which the nested event loop keeps running.
+void answerNextPipelineChoice(QmlMainWindowUI* ui, QmlWorkbenchController* controller, int index)
+{
+    pollUntil(ui, 50, 10000,
+        [ui, controller]() {
+            if(!controller->pipelineChoiceVisible())
+                return false;
+            // The question is presented by the QML scene, so the dialog has to be there while the frontend waits.
+            QQuickItem* rootObject = ui->view() ? ui->view()->rootObject() : nullptr;
+            QObject* dialog = rootObject ? rootObject->findChild<QObject*>(QStringLiteral("pipelineChooser")) : nullptr;
+            if(dialog == nullptr || !dialog->property("visible").toBool())
+                reportVerificationFailure(QStringLiteral("the pipeline question is not visible in the workbench window"));
+            return true;
+        },
+        [controller, index](bool appeared) {
+            if(appeared)
+                controller->answerPipelineChoice(index);
+            else
+                reportVerificationFailure(QStringLiteral("the workbench did not ask which pipeline to keep"));
+        });
+}
+
+/// Verifies the question the workbench asks when a session holds several pipelines. A session file with two file source
+/// pipelines cannot be produced by this frontend (OVITO Basic imports one pipeline at a time, which is the reason the
+/// question exists), so the check asks the question itself and answers it in both ways - the same way the check of the
+/// task list fabricates the tasks it displays.
+void verifyPipelineChooser(QmlMainWindowUI* ui, std::function<void()> continuation)
+{
+    QmlWorkbenchController* controller = ui->workbenchController();
+    const QStringList pipelines{ QStringLiteral("first.xyz [XYZ]"), QStringLiteral("second.xyz [XYZ]") };
+
+    // Picking the second pipeline hands that index back to the caller that is waiting on the answer.
+    answerNextPipelineChoice(ui, controller, 1);
+    const int picked = controller->choosePipeline(pipelines);
+    if(picked != 1)
+        reportVerificationFailure(QStringLiteral("the pipeline question answered with index 1 returned %1").arg(picked));
+
+    // Aborting the question returns no index, which makes the caller refuse to load the session.
+    answerNextPipelineChoice(ui, controller, -1);
+    const int aborted = controller->choosePipeline(pipelines);
+    if(aborted != -1)
+        reportVerificationFailure(QStringLiteral("an aborted pipeline question returned %1 instead of -1").arg(aborted));
+
+    if(controller->pipelineChoiceVisible())
+        reportVerificationFailure(QStringLiteral("the pipeline question stayed visible after it was answered"));
+    if(controller->pipelineChoiceItems().size() != pipelines.size())
+        reportVerificationFailure(QStringLiteral("the pipeline question lists %1 pipelines instead of %2")
+            .arg(controller->pipelineChoiceItems().size()).arg(pipelines.size()));
+
+    qInfo() << "PARITY_TEST the pipeline question of a session with several pipelines is presented by the workbench and"
+            << "both answers reach the caller that is waiting for them";
+    continuation();
+}
+
 /// Verifies that the File menu offers the recent files of the shared list and that the file selection dialog reopens
 /// where the last import was - two places where the shell has to use the shared layer rather than keep its own state.
 void verifyRecentFiles(QmlMainWindowUI* ui, std::function<void()> continuation)
@@ -2123,12 +2178,14 @@ void runParityTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 
     verifyContextMenu(ui, [ui, continuation]() {
         verifyAboutDialog(ui, [ui, continuation]() {
+            verifyPipelineChooser(ui, [ui, continuation]() {
             verifyTaskRows(ui, [ui, continuation]() {
                 verifyWindowState(ui, [ui, continuation]() {
                     verifyImportNotice(ui, [ui, continuation]() {
                         verifyRecentFiles(ui, std::move(continuation));
                     });
                 });
+            });
             });
         });
     });

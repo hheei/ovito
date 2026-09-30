@@ -68,6 +68,11 @@ class OVITO_GUIQML_EXPORT QmlWorkbenchController : public QObject
     Q_PROPERTY(int defaultMessageBoxButton READ defaultMessageBoxButton NOTIFY messageBoxChanged)
 
     /// The name of the application, as the About dialog and the error messages show it.
+    /// Whether the dialog that asks which pipeline to keep of a session with several of them is open, and the pipelines
+    /// it offers (the titles of the scene nodes that come from a file source).
+    Q_PROPERTY(bool pipelineChoiceVisible READ pipelineChoiceVisible NOTIFY pipelineChoiceChanged)
+    Q_PROPERTY(QStringList pipelineChoiceItems READ pipelineChoiceItems NOTIFY pipelineChoiceChanged)
+
     Q_PROPERTY(QString applicationName READ applicationName CONSTANT)
 
     /// The version of the application, as the About dialog shows it.
@@ -144,6 +149,20 @@ public:
     /// Asks the scene to open the file selection dialog, starting in the last used directory.
     Q_INVOKABLE void showImportDialog();
 
+    /// Asks the user which of the given pipelines to keep, in a dialog of the QML scene, and blocks until it is
+    /// answered (the same nested event loop the message dialog of this controller uses).
+    /// \return The index of the pipeline to keep, or -1 if the user aborted the question.
+    int choosePipeline(const QStringList& titles);
+
+    /// Answers the pipeline question with the index of the pipeline to keep, or with -1 for "load nothing".
+    Q_INVOKABLE void answerPipelineChoice(int index);
+
+    /// Returns whether the pipeline question is open (see the pipelineChoiceVisible property).
+    bool pipelineChoiceVisible() const { return _pipelineChoiceVisible; }
+
+    /// Returns the pipelines the open question offers (see the pipelineChoiceItems property).
+    QStringList pipelineChoiceItems() const { return _pipelineChoiceItems; }
+
     /// Opens the recently opened file with the given index of recentFiles(): a session file replaces the current session
     /// (asking about unsaved changes first), a data file is imported again through the importer and the format the entry
     /// remembers.
@@ -210,6 +229,10 @@ Q_SIGNALS:
     /// Is emitted when the list of recently opened files changed.
     void recentFilesChanged();
 
+    /// Is emitted when the scene should open the dialog that asks which pipeline to keep, or when its state changed.
+    void pipelineChoiceRequested();
+    void pipelineChoiceChanged();
+
     /// Is emitted when the scene should display the About dialog.
     void aboutDialogRequested();
 
@@ -261,6 +284,14 @@ private:
 
     /// The event loop that presentMessageBox() blocks in, or null when no message dialog is open.
     QEventLoop* _messageBoxLoop = nullptr;
+
+    /// The state of the dialog that asks which pipeline of a session with several of them to keep.
+    bool _pipelineChoiceVisible = false;
+    QStringList _pipelineChoiceItems;
+    int _pipelineChoiceAnswer = -1;
+
+    /// The event loop that choosePipeline() blocks in, or null when no pipeline question is open.
+    QEventLoop* _pipelineChoiceLoop = nullptr;
 
     /// The directory the file selection dialog should start in.
     QString _importDialogDirectory;

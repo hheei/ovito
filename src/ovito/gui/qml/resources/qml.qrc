@@ -7,6 +7,7 @@
 	<file>WorkbenchSplitter.qml</file>
 	<file>WorkbenchStatusBar.qml</file>
 	<file>WorkbenchMessageBox.qml</file>
+	<file>WorkbenchPipelineChooser.qml</file>
 	<file>WorkbenchMenuBar.qml</file>
 	<file>WorkbenchMenuItem.qml</file>
 	<file>WorkbenchPlaceholderMenuItem.qml</file>

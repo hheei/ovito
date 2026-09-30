@@ -90,6 +90,10 @@ public:
     /// Cancels all running tasks associated with this user interface and closes the user interface.
     bool shutdown() override;
 
+    /// Checks whether the given data set can be loaded, asking which pipeline to keep when it holds several of them
+    /// (OVITO Basic displays one file source pipeline at a time, see MainWindowUI::checkLoadedDataset).
+    bool checkLoadedDataset(DataSet* dataset) override;
+
     /// Displays a message box to the user.
     MessageBoxButton showMessageBox(MessageBoxIcon icon, const QString& title, const QString& text, int buttons, MessageBoxButton defaultButton = NoButton, const QString& detailedText = {}) override;
 

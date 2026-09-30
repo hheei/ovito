@@ -579,6 +579,12 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
        the shell kept all of them without a word, which is a difference in what the user gets rather than in how it looks.
        The QML frontend asks the same question with a chooser listing the pipelines (a message box cannot return a choice
        of N), and a cancelled load leaves the data set untouched, as in the classic frontend.
+     * **Delivered** (audit decision D37): the shell asks before it closes, marks a modified session in its title, offers
+       the recent files of the shared list (including the `.ovito` redirect of the import path), reopens the file dialog
+       in the directory of the last import and asks which pipeline to keep of a session that holds several. What stays
+       manual is the end-to-end path of that last item, because its fixture - a session file with two file sources - can
+       only be written by OVITO Pro (see the matrix's §6); the chooser itself is asked and answered in both ways by
+       `--qml-parity-check`.
      * **Acceptance**: `--qml-session-check` covers the prompt (a modified session answered three ways: cancel keeps the
        window and the session, discarding proceeds without saving, saving writes the file and leaves a clean state) and
        `--qml-parity-check` covers the Recent Files submenu and the directory the import dialog opens in; the multi-

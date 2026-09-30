@@ -322,6 +322,12 @@ Rectangle {
         controller: workbenchController
     }
 
+    // The dialog that asks which pipeline to keep when a session holds several of them.
+    WorkbenchPipelineChooser {
+        id: pipelineChooser
+        controller: workbenchController
+    }
+
     // The context menu of the viewports. It belongs to the pane whose caption was clicked; the frontend opens it through
     // the viewport menu model.
     ViewportContextMenu {
@@ -345,6 +351,13 @@ Rectangle {
         // The About dialog belongs to the shared About command, whose handler is a surface of the frontend.
         function onAboutDialogRequested() {
             aboutDialog.open()
+        }
+
+        // A dialog is opened from a signal handler rather than by binding its visibility: opening and closing a popup
+        // writes that property itself, which would break the binding.
+        function onPipelineChoiceRequested() {
+            pipelineChooser.pickedIndex = -1
+            pipelineChooser.open()
         }
     }
 }

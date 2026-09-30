@@ -357,6 +357,52 @@ UserInterface::MessageBoxButton QmlWorkbenchController::presentMessageBox(UserIn
 }
 
 /******************************************************************************
+* Asks the user which of several pipelines to keep.
+******************************************************************************/
+int QmlWorkbenchController::choosePipeline(const QStringList& titles)
+{
+    // Without a QML scene there is nobody who could answer the question, so the first pipeline is kept - the load has
+    // to fail loudly rather than silently lose a scene (the shared code reports the missing dialog of an unbuilt
+    // frontend that way as well).
+    if(_ui.view() == nullptr || _ui.view()->rootObject() == nullptr) {
+        qWarning() << "The session file contains" << titles.size() << "pipelines, of which only the first one can be kept.";
+        return 0;
+    }
+
+    _pipelineChoiceItems = titles;
+    _pipelineChoiceAnswer = -1;
+    _pipelineChoiceVisible = true;
+    Q_EMIT pipelineChoiceRequested();
+    Q_EMIT pipelineChoiceChanged();
+
+    // Wait for the scene to answer, exactly like the message dialog of this controller does: the shared code that loads
+    // the session is blocked in this call and cannot continue without an answer.
+    QEventLoop eventLoop;
+    _pipelineChoiceLoop = &eventLoop;
+    const QMetaObject::Connection connection = connect(this, &QmlWorkbenchController::pipelineChoiceChanged, &eventLoop, &QEventLoop::quit);
+    eventLoop.exec();
+    disconnect(connection);
+    _pipelineChoiceLoop = nullptr;
+
+    _pipelineChoiceVisible = false;
+    Q_EMIT pipelineChoiceChanged();
+    return _pipelineChoiceAnswer;
+}
+
+/******************************************************************************
+* Answers the question which pipeline to keep.
+******************************************************************************/
+void QmlWorkbenchController::answerPipelineChoice(int index)
+{
+    if(!_pipelineChoiceVisible)
+        return;
+    if(index >= _pipelineChoiceItems.size())
+        index = -1;
+    _pipelineChoiceAnswer = index;
+    Q_EMIT pipelineChoiceChanged();
+}
+
+/******************************************************************************
 * Returns the name of the application.
 ******************************************************************************/
 QString QmlWorkbenchController::applicationName() const

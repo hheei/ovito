@@ -348,6 +348,41 @@ void QmlMainWindowUI::initializeDataset()
 }
 
 /******************************************************************************
+* Checks whether the given data set can be loaded as it is.
+******************************************************************************/
+bool QmlMainWindowUI::checkLoadedDataset(DataSet* dataset)
+{
+    if(!UserInterface::checkLoadedDataset(dataset))
+        return false;
+
+#ifndef OVITO_BUILD_PROFESSIONAL
+    // OVITO Basic displays one file source pipeline at a time (MainWindowUI::checkLoadedDataset does the same): a
+    // session file that holds several of them can only be loaded after the user picked the one to keep. Silently keeping
+    // all of them, as this frontend did, shows the user a scene the classic frontend refuses to load.
+    std::vector<OORef<SceneNode>> fileSourcePipelines = WorkbenchUI::fileSourcePipelines(dataset);
+    if(fileSourcePipelines.size() >= 2) {
+        QStringList titles;
+        titles.reserve(fileSourcePipelines.size());
+        for(const OORef<SceneNode>& sceneNode : fileSourcePipelines)
+            titles.push_back(sceneNode->objectTitle());
+
+        const int keepIndex = _workbenchController ? _workbenchController->choosePipeline(titles) : 0;
+        if(keepIndex < 0 || keepIndex >= static_cast<int>(fileSourcePipelines.size()))
+            return false;   // The user aborted the question, so the session is not loaded.
+
+        if(Scene* scene = fileSourcePipelines[keepIndex]->scene())
+            scene->selection()->setNode(fileSourcePipelines[keepIndex]);
+        for(const OORef<SceneNode>& sceneNode : fileSourcePipelines) {
+            if(sceneNode != fileSourcePipelines[keepIndex])
+                sceneNode->requestObjectDeletion();
+        }
+    }
+#endif
+
+    return true;
+}
+
+/******************************************************************************
 * Asks the user about the changes of a modified session before the workbench is closed.
 ******************************************************************************/
 bool QmlMainWindowUI::canCloseWorkbench()
