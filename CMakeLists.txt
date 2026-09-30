@@ -25,11 +25,16 @@ PROJECT(Ovito)
 # Build acceleration: ccache & mold linker
 OPTION(OVITO_USE_CCACHE "Enable ccache compiler launcher if available" ON)
 IF(OVITO_USE_CCACHE)
-    FIND_PROGRAM(CCACHE_PROGRAM ccache)
-    IF(CCACHE_PROGRAM)
-        MESSAGE(STATUS "Build speedup: ccache enabled (${CCACHE_PROGRAM})")
-        SET(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-        SET(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    # An explicitly configured launcher wins. The CI presets select ccache or sccache through the variable
+    # OVITO_COMPILER_LAUNCHER (see CMAKE_CXX_COMPILER_LAUNCHER in CMakePresets.json); overriding that here would
+    # silently ignore the choice, and an empty value could not be used to ask for a build without a compiler cache.
+    IF(NOT DEFINED CMAKE_C_COMPILER_LAUNCHER AND NOT DEFINED CMAKE_CXX_COMPILER_LAUNCHER)
+        FIND_PROGRAM(CCACHE_PROGRAM ccache)
+        IF(CCACHE_PROGRAM)
+            MESSAGE(STATUS "Build speedup: ccache enabled (${CCACHE_PROGRAM})")
+            SET(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+            SET(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+        ENDIF()
     ENDIF()
 ENDIF()
 

@@ -6,15 +6,22 @@ name: CI
 # Windows, 28m42s of 30m57s on macOS) while CTest takes about a second and the Qt Quick smoke tests 3-25 seconds.
 # Four measures keep it down, and each one is measurable on its own (docs/design/UI_TEST_ENV.md section 6):
 #
-#   * a compiler cache (ccache on Linux/macOS, sccache on Windows), which makes a rebuild of an unchanged
-#     translation unit a lookup instead of a compile. OVITO compiles nearly every translation unit with a
-#     precompiled header, which ccache refuses to cache unless CCACHE_SLOPPINESS names pch_defines and
-#     time_macros - without those two words 81% of the calls here were uncacheable and the cache did nothing;
-#     with them a changed translation unit went from 5.9 s to 0.15 s.
+#   * a compiler cache (ccache on every platform, one cache per OS and architecture shared by all jobs of that
+#     platform), which makes a rebuild of an unchanged translation unit a lookup instead of a compile. OVITO
+#     compiles nearly every translation unit with a precompiled header, which ccache refuses to cache unless
+#     CCACHE_SLOPPINESS names pch_defines and time_macros - without those two words 81% of the calls here were
+#     uncacheable and the cache did nothing; with them a changed translation unit went from 5.9 s to 0.15 s and
+#     a fully warm rebuild of the whole tree takes 0.7 s at -j4.
+#   * clang on the two Linux x86_64 jobs: measured on the full tree, clang needs 1459 s of compile work against
+#     2570 s for gcc (143 s of wall time at -j16 against 233 s), because it is much faster on the Qt and Boost
+#     template code. The shipped Linux binaries come from the release workflow, which uses gcc, so the Linux
+#     ARM64 job deliberately keeps gcc and that compiler verified.
 #   * Release instead of RelWithDebInfo. Nothing debugs a CI binary, assertions are compiled out in either case
 #     (NDEBUG), and debug info costs about a quarter of the compile time of a single translation unit.
 #   * a smaller build scope for the jobs that only exercise the Qt Quick frontend: no QtWidgets application and
-#     none of the plugins its smoke test does not touch, which is 512 instead of 951 translation units.
+#     none of the plugins its smoke test does not touch, which is 512 instead of 951 translation units. The macOS
+#     job uses that scope as well - its smoke test needs the spike executable, not the product application, and
+#     the spike lands in the same bundle directory either way.
 #   * a path filter: a change to documentation alone cannot break the build, so it does not start a 30-minute
 #     matrix. Note for a repository that requires these checks before merging: a skipped workflow reports no
 #     status, so a docs-only pull request would wait forever - lift the filter then.
@@ -89,7 +96,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends \
-            ninja-build build-essential ccache \
+            ninja-build build-essential ccache clang \
             libboost-dev libnetcdf-dev libhdf5-dev \
             libgl1-mesa-dev libgl1-mesa-dri libvulkan-dev mesa-vulkan-drivers xvfb \
             libxkbcommon-dev libxkbcommon-x11-0 \
@@ -109,20 +116,22 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-frontend-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**', '.github/workflows/ci.yml') }}
+          # One cache per OS and architecture, shared by every job and scope of that platform: the compile
+          # commands of the libraries this frontend is built on are identical in both scopes, and ccache hashes the
+          # whole command line, so a cache populated by another scope can only ever produce correct objects.
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-frontend-
             ccache-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Configure CMake
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          cmake --preset ci-frontend
+          cmake --preset ci-linux-frontend
 
       - name: Build
         run: |
-          cmake --build --preset ci-frontend --parallel "$(nproc)"
+          cmake --build --preset ci-linux-frontend --parallel "$(nproc)"
           ccache --show-stats
 
       - name: Test (CTest)
@@ -194,7 +203,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends \
-            ninja-build build-essential ccache \
+            ninja-build build-essential ccache clang \
             libboost-dev libnetcdf-dev libhdf5-dev \
             libgl1-mesa-dev libgl1-mesa-dri libvulkan-dev mesa-vulkan-drivers xvfb ffmpeg \
             libxkbcommon-dev libxkbcommon-x11-0 \
@@ -214,20 +223,22 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-full-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**', '.github/workflows/ci.yml') }}
+          # One cache per OS and architecture, shared by every job and scope of that platform: the compile
+          # commands of the libraries this frontend is built on are identical in both scopes, and ccache hashes the
+          # whole command line, so a cache populated by another scope can only ever produce correct objects.
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-full-
             ccache-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Configure CMake
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          cmake --preset ci-full
+          cmake --preset ci-linux
 
       - name: Build
         run: |
-          cmake --build --preset ci-full --parallel "$(nproc)"
+          cmake --build --preset ci-linux --parallel "$(nproc)"
           ccache --show-stats
 
       - name: Test (CTest)
@@ -310,6 +321,8 @@ jobs:
   # architecture. The desktop application is covered by the x86_64 job.
   # ---------------------------------------------------------------------------
   build-linux-arm64:
+    # The only Linux job that still compiles with gcc, on purpose: the release workflow builds the shipped
+    # binaries with gcc, so a gcc-only regression must be caught here. Its scope is small enough for that.
     name: Linux ARM64
     if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/feature/')
     runs-on: ubuntu-24.04-arm
@@ -342,9 +355,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-frontend-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**', '.github/workflows/ci.yml') }}
+          # One cache per OS and architecture, shared by every job and scope of that platform: the compile
+          # commands of the libraries this frontend is built on are identical in both scopes, and ccache hashes the
+          # whole command line, so a cache populated by another scope can only ever produce correct objects.
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-frontend-
             ccache-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Configure CMake
@@ -397,9 +412,12 @@ jobs:
             build/bin/ovito-qml-spike $QML_SMOKE_CHECKS "$RUNNER_TEMP/lattice_512.xyz"
 
   # ---------------------------------------------------------------------------
-  # macOS (Apple Silicon ARM64) - the full product. Qt (both the scene graph and
-  # OVITO's offscreen picking) uses Metal here, which the runner provides
-  # without a physical display.
+  # macOS (Apple Silicon ARM64) - the Qt Quick frontend. Qt (both the scene graph
+  # and OVITO's offscreen picking) uses Metal here, which the runner provides
+  # without a physical display. The job uses the frontend scope of the Linux
+  # ARM64 job, which is what its smoke test needs: the spike lives in the same
+  # Ovito.app/Contents/MacOS directory in either scope, while building the
+  # QtWidgets application on a three-core runner costs another ten minutes.
   # ---------------------------------------------------------------------------
   build-macos-arm64:
     name: macOS ARM64
@@ -429,20 +447,22 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ runner.arch }}-full-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**', '.github/workflows/ci.yml') }}
+          # One cache per OS and architecture, shared by every job and scope of that platform: the compile
+          # commands of the libraries this frontend is built on are identical in both scopes, and ccache hashes the
+          # whole command line, so a cache populated by another scope can only ever produce correct objects.
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ runner.arch }}-full-
             ccache-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Configure CMake
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          cmake --preset ci-full -DCMAKE_PREFIX_PATH="${{ env.QT_ROOT_DIR }}"
+          cmake --preset ci-frontend -DCMAKE_PREFIX_PATH="${{ env.QT_ROOT_DIR }}"
 
       - name: Build
         run: |
-          cmake --build --preset ci-full --parallel "$(sysctl -n hw.ncpu)"
+          cmake --build --preset ci-frontend --parallel "$(sysctl -n hw.ncpu)"
           ccache --show-stats
 
       - name: Test (CTest)
@@ -450,12 +470,6 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           ctest --test-dir build --output-on-failure
-
-      - name: Smoke test the application without a user interface
-        env:
-          DYLD_LIBRARY_PATH: ${{ env.QT_ROOT_DIR }}/lib
-        run: |
-          ./build/Ovito.app/Contents/MacOS/ovito --nogui
 
       - name: Smoke test the Qt Quick frontend
         env:
@@ -482,8 +496,10 @@ jobs:
     if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/feature/')
     runs-on: windows-2022
     env:
-      # sccache replaces ccache on MSVC (the mozilla-actions/sccache-action below sets its cache backend).
-      OVITO_COMPILER_LAUNCHER: sccache
+      # ccache on every platform. It is the only one of the two that can cache a translation unit which *consumes*
+      # an MSVC precompiled header (sccache reports "MSVC Precompiled header flags not supported"), and a command it
+      # cannot handle is simply not cached - never miscompiled.
+      OVITO_COMPILER_LAUNCHER: ccache
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -493,15 +509,25 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      # sccache on MSVC does not support the /Yu precompiled-header flags CMake generates ("MSVC Precompiled
-      # header flags not supported", mozilla/sccache#988), so the cache would stay almost unused with the headers
-      # enabled. They are therefore turned off for this job: the first build after a cache-key change re-parses
-      # the headers and is slower, every later build is a cache lookup. Removing the flag trades that away if a
-      # cold Windows build ever becomes the bottleneck.
-      - name: Compiler cache
-        uses: mozilla-actions/sccache-action@v8
+      # The precompiled headers stay enabled here. OVITO's sources need them to compile at all (measured on
+      # Linux: with OVITO_USE_PRECOMPILED_HEADERS=OFF the translation units that include TaskProgress.h fail on an
+      # incomplete UserInterface type), so disabling them is not a way to make the Windows cache work. ccache
+      # caches the translation units that consume the headers; it cannot cache their generation, which costs one
+      # compile per target and nothing else.
+      - name: Install the compiler cache
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          # Not fatal: without a launcher the build simply compiles everything.
+          choco install ccache --no-progress -y
+
+      - name: Restore the compiler cache
+        uses: actions/cache@v4
         with:
-          version: 'v0.18.0'
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-
 
       # The runner image provides neither Boost (geogram) nor HDF5/NetCDF-C (the Particles plugin's
       # netcdf_integration module) outside of the bundled release packages, so they come from vcpkg.
@@ -583,14 +609,13 @@ jobs:
           cmake --preset ci-full `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_TOOLCHAIN" `
             -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" `
-            -DBOOST_ROOT="${{ github.workspace }}\.boost" -DBoost_NO_BOOST_CMAKE=ON `
-            -DOVITO_USE_PRECOMPILED_HEADERS=OFF
+            -DBOOST_ROOT="${{ github.workspace }}\.boost" -DBoost_NO_BOOST_CMAKE=ON
 
       - name: Build
         shell: pwsh
         run: |
           cmake --build --preset ci-full --parallel $env:NUMBER_OF_PROCESSORS
-          sccache --show-stats
+          if (Get-Command ccache -ErrorAction SilentlyContinue) { ccache --show-stats }
 
       - name: Test (CTest)
         env:

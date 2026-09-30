@@ -123,12 +123,44 @@
             }
         },
         {
+            "name": "native-frontend",
+            "displayName": "Native Host, Qt Quick frontend only (.qt, Clang + mold + ccache)",
+            "description": "The scope of ci-frontend (no QtWidgets application, 512 instead of 951 translation units) but with the local Qt in .qt and with debug info, for iterating on the Qt Quick frontend and the OvitoQmlSpike. It does not build the ovito executable - iterating on the product frontend needs the native preset.",
+            "inherits": "ci-frontend",
+            "binaryDir": "${sourceDir}/build-native-frontend",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_C_COMPILER_LAUNCHER": "ccache",
+                "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
+                "CMAKE_EXE_LINKER_FLAGS_INIT": "-fuse-ld=mold",
+                "CMAKE_SHARED_LINKER_FLAGS_INIT": "-fuse-ld=mold",
+                "CMAKE_MODULE_LINKER_FLAGS_INIT": "-fuse-ld=mold",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/.qt/6.10.2/gcc_64",
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_INSTALL_RPATH_USE_LINK_PATH": "ON",
+                "CMAKE_BUILD_WITH_INSTALL_RPATH": "ON"
+            }
+        },
+        {
             "name": "ci-linux",
             "displayName": "CI Linux",
-            "description": "Preset tailored for Linux CI runners",
+            "description": "Preset tailored for Linux CI runners: the whole product, compiled with clang. Measured on the full tree, clang needs 1459 s of compile time against 2570 s for gcc and 143 s of wall time at -j16 against 233 s, so the Linux jobs use it. The shipped Linux binaries are built by the release workflow with gcc, which is why the Linux ARM64 job deliberately stays on gcc and keeps that compiler verified.",
             "inherits": "ci-full",
             "cacheVariables": {
-                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install"
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/install",
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++"
+            }
+        },
+        {
+            "name": "ci-linux-frontend",
+            "displayName": "CI Linux: Qt Quick frontend only",
+            "description": "The scope of ci-frontend with the clang of ci-linux.",
+            "inherits": "ci-frontend",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++"
             }
         }
     ],
@@ -158,12 +190,20 @@
             "configurePreset": "ci-linux"
         },
         {
+            "name": "ci-linux-frontend",
+            "configurePreset": "ci-linux-frontend"
+        },
+        {
             "name": "ci-full",
             "configurePreset": "ci-full"
         },
         {
             "name": "ci-frontend",
             "configurePreset": "ci-frontend"
+        },
+        {
+            "name": "native-frontend",
+            "configurePreset": "native-frontend"
         }
     ],
     "testPresets": [
