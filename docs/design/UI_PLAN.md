@@ -763,7 +763,15 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   8. **Local protocol spike**: prove a local-only JSON Lines or equivalent IPC endpoint can discover one live workbench,
      query a bounded session snapshot, observe task/scene events, and request a displayed-view PNG. Capture is an internal
      feasibility probe, not a released CLI feature; return a bounded image buffer without arbitrary filesystem writes.
-     Network listening is disabled by default. The spike must report deterministic protocol errors.
+     Network listening is disabled by default. The spike must report deterministic protocol errors. **Delivered** (D50,
+     evidence in [AUTOMATION_IPC_SPIKE.md](AUTOMATION_IPC_SPIKE.md)): `ovito-automation-ipc-spike` hosts a session behind a
+     per-user local socket, publishes a session descriptor (a Core value type with its own test suite,
+     `tst_session_descriptor`), and its self-test passes 24/24 checks — discovery, a capability handshake that names every
+     refusal, a bounded snapshot composed of contract answers, dispatch, a subscription with pushed events, a bounded
+     in-memory PNG artifact that the client verifies byte for byte, deterministic transport errors, both shutdown modes
+     and a client limit. Two limits are recorded rather than papered over: the artifact is measured with a generated image
+     because a real one needs a graphics device (O19, Phase 5), and the endpoint is a prototype without backpressure or
+     authentication beyond file permissions (O20, Phase 3).
   9. **Activity and observability hooks**: add the minimum origin/revision hooks (`user`, `qml`, `cli`, `ai`, `python`) and
      bounded recent semantic activity needed by later clients, without recording raw mouse/keyboard input or leaking paths
      and data-derived values by default. **Delivered** (D44, D47): every gateway has an origin and an allocated client
@@ -789,14 +797,15 @@ Phase 9: Classic Frontend Retirement (Long-term, optional)
   `baseRevision` requests are rejected; task/event/transaction/capability schemas have deterministic tests; the selected
   Python environment can be probed without silent fallback; the worker/embedded benchmark has evidence; and a local client
   can perform only the bounded read-only snapshot/PNG spike. No later feature is marked implemented by this gate.
-- **Status after the first slice**: deliverables 1-6 and the environment probe of deliverable 10 are in the tree and
-  verified by `ctest --preset native` (8/8) and by the same suites in the assertion-enabled tree of
+- **Status after the first slice**: deliverables 1-6 and 8 plus the environment probe of deliverable 10 are in the tree
+  and verified by `ctest --preset native` (9/9) and by the same suites in the assertion-enabled tree of
   [UI_TEST_ENV.md](UI_TEST_ENV.md) §4; the decisions behind them are D39-D49 of
   [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §7, and the Python topology decision rests on the recorded measurements of
   [AUTOMATION_TOPOLOGY_SPIKE.md](AUTOMATION_TOPOLOGY_SPIKE.md). Nothing is wired to a frontend yet — no session is
   attached, no transport exists, and the layer has no callers outside its own tests (O18) — which is what "architecture
-  adaptation" means here. Open in this phase: deliverables 7-9 (data bridge and AST preview, local protocol and
-  discovery, activity hooks beyond the log that exists) and the prose contract of deliverable 10 (O13). Three
+  adaptation" means here. Open in this phase: deliverable 7 (the data bridge and the AST preview) and the prose contract
+  of deliverable 10 (O13); the local protocol of deliverable 8 is delivered and its two recorded limits are O19 (the render
+  half of a capture, Phase 5) and O20 (the prototype parts of the endpoint, Phase 3). Three
   preconditions and traps of `core` integration tests were found while getting the suites to run and are recorded in
   [UI_TEST_ENV.md](UI_TEST_ENV.md) §4.1: creating a `RefTarget` needs an ambient task, creating a `SceneNode` needs an
   `Application`, and a probe test needs a real interpreter on the path and must not use `QSKIP` from a helper that

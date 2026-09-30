@@ -459,9 +459,21 @@ items is the transport and the consent/user-interface half.
 5. **Decorator schema**: supported annotations and metadata, module reload, code-file change detection, and parameter
    persistence.
 6. **Automation transport**: stdio broker vs local socket, Windows/macOS/Linux endpoint lifecycle, and client discovery (the
-   operation catalog and its framing-independent error rules are already fixed by D39/D42).
+   operation catalog and its framing-independent error rules are already fixed by D39/D42). **Partly settled in Phase 2.6**
+   (D50, evidence in [AUTOMATION_IPC_SPIKE.md](AUTOMATION_IPC_SPIKE.md)): the transport is a per-user **local socket**
+   carrying JSON Lines control messages, discovery is a session descriptor in a per-user runtime directory
+   (`AutomationSessionDescriptor`, in Core and tested without a socket), the socket is an **absolute path inside that
+   owner-only directory** so no other user can own the name, capabilities are granted per connection with every refusal
+   named, the snapshot is a composition of contract answers with explicit truncation flags, artifacts are bounded and in
+   memory, and the transport's error codes are disjoint from the contract's. What is *not* settled and belongs to Phase 3:
+   the production endpoint (backpressure, resume, a client that stops reading), the CLI and its JSON mode, and the
+   Windows/macOS runs (O20). Remote access is not designed here and would need real authentication.
 7. **GUI capture vs scene rendering**: exact semantics and whether current viewport capture is available on all target
-   platforms while hidden/minimized.
+   platforms while hidden/minimized. **Partly settled in Phase 2.6**: the protocol half is measured (a capture returns a
+   bounded in-memory PNG artifact, no file is written, the client verifies the bytes) while the rendering half is not,
+   because a core-only process has no graphics device (O19); the design's own split - the currently displayed view comes
+   from the frontend's retained frame graph, an explicit scene render from the shared offscreen service (D34) - is what
+   Phase 5 implements, and the frontend's offscreen check is today's evidence that a view can be rendered headlessly.
 8. **Undo and transaction scope**: which scene mutations are undoable and how a multi-command AI plan interacts with the
    existing undo stack.
 9. **Permission UX**: local process trust model, script execution consent, file-write confirmation, and policy persistence

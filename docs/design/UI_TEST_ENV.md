@@ -391,6 +391,39 @@ The spike exits `0` when every check passed, `1` when a check failed (the measur
 no interpreter to measure, so a CI job can tell a failure from a skip. It starts and kills its own interpreters; if a run
 is interrupted, `pgrep -fl ovito_worker.py` finds a leftover one, which is the only process it can leak.
 
+### 4.3 Running the local-protocol spike
+
+The discovery half is a CTest case like any other (`tst_session_descriptor`); the endpoint itself is driven by a program
+that starts servers of its own and talks to them:
+
+```bash
+LD_LIBRARY_PATH="$PWD/.qt/6.10.2/gcc_64/lib:$PWD/build-native/lib/ovito/plugins" \
+  ./build-native/bin/ovito-automation-ipc-spike --json /tmp/ipc-spike.json    # the 24-check self-test
+
+# Discovery by hand, with two live workbenches that a client may have to choose between.
+LD_LIBRARY_PATH="$PWD/.qt/6.10.2/gcc_64/lib:$PWD/build-native/lib/ovito/plugins" \
+  ./build-native/bin/ovito-automation-ipc-spike --serve --scope /tmp/ipctwo &
+LD_LIBRARY_PATH="$PWD/.qt/6.10.2/gcc_64/lib:$PWD/build-native/lib/ovito/plugins" \
+  ./build-native/bin/ovito-automation-ipc-spike --list --scope /tmp/ipctwo | python3 -m json.tool
+pkill -f 'ovito-automation-ipc-spike --serve'; rm -rf /tmp/ipctwo      # always clean up
+```
+
+Three things about it are worth knowing before running it:
+
+* **It writes outside the build tree, and where it writes is controlled.** The sessions of a run live in one discovery
+  directory: `--scope <dir>` (and the `OVITO_AUTOMATION_SESSION_DIR` variable the spike exports for its children), or a
+  private directory under the system temporary directory when nothing is passed. The self-test's own runs are therefore
+  invisible to a user's real sessions - and a `--serve` started without a scope is *not*, which is why a hand-started
+  server belongs in a temporary scope.
+* **A `--serve` process serves until it is told to stop or killed.** `--allow-quit` lets a client send the `quit`
+  message, which is the graceful case (the descriptor is removed); `pkill` is the killed case, and it leaves a *stale*
+  descriptor behind on purpose - that is what `--list --prune` is for. Always kill the processes and remove the scope
+  directory afterwards, and check with `pgrep -fl 'ovito-automation-ipc-spike --serve'`.
+* **A capture needs a graphics device, which this program does not create.** An endpoint started with
+  `--synthetic-capture` answers with a generated image (the transport checks); one started without it answers
+  `render_unavailable`, which is the honest answer of a process without a QRhi and the one the audit's O1 predicts for any
+  headless run of the frontend.
+
 ---
 
 ## 5. macOS test host
