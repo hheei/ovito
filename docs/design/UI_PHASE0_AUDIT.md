@@ -277,6 +277,7 @@ All of these are subject to the regression checks in [UI_PHASE1_SPIKE.md](UI_PHA
 | O18 | **The Phase 2.6 modules have no caller outside their own tests.** No frontend, CLI, transport or Python package uses `AutomationGateway`, `AutomationSession` or `PythonEnvironmentProbe` yet: `session.attachToContainer()`, `setUserInterface()` and the catalog are exercised by the contract suite and the spike, and the gateway is never constructed by the application. This is what "architecture adaptation" means for the phase, but it also means the layer's integration risks (thread affinity under a live frontend, teardown order on session close, an actually attached `DataSetContainer`) are still unproven and belong to the phase that first attaches it. **S1 closed the attached-`DataSetContainer` half** and **S4 the rest:** every workbench now creates its `AutomationSession` and attaches it in `WorkbenchUI::initializeWorkbench()` (D55, D59), and a workbench that serves the session creates the endpoint there too, which is what exercised the layer under a live frontend - the session's revision moving with the frontend's own signals, a local client reading it, and the endpoint being destroyed with the object that owns the session before the session itself (D67, D70, `--qml-automation-check`). | Resolved by Phase 3 |
 | O22 | **The classic frontend keeps its own action search.** `gui/desktop/actions/SearchActions.cpp` ranks `QAction`s by a use-count map it stores in raw `QSettings` (`actions/use_counts`), so until it adopts the shared command list model of D57 the two frontends rank the same commands from different data and one `QSettings` key group lives outside the facade of D30. The adoption is Phase 8 work (the command palette) and must not be done in passing, because the desktop's ranking is user-visible. | Phase 8 |
 | O24 | **The walk that finds animated parameters, and the formatting of a key's value, are duplicated.** They exist once in the classic `AnimationTrackBar` (a desktop widget, and the only implementation in the tree) and now again in `QmlAnimationModel`, so a change to the labelling rule (`owner->objectTitle() + " - " + field->displayName()`, comma-appending when several owners share a controller) or to the value of a key would have to be made twice. Unifying them means moving the walk into `gui/base` as a service both timelines use, which is exactly the work of handing the timeline over (Phase 5 d2); doing it in Phase 3 would have meant designing that service against one consumer. | Phase 5 d2 |
+| O25 | **The automation command line lives in Core.** `AutomationCommandLine` - option parsing, the human-readable formatting and the exit-code policy - is `OVITO_CORE_EXPORT`ed from `src/ovito/core/automation/`, although it is a frontend of the machine-facing layer rather than domain code, so the domain library owns a CLI's text and every plugin links it. Moving it beside the executable (`src/main/`, where `GuiApplication` already calls it) needs a library of its own, because `tst_automation_cli` links only `Core`; until then the placement is deliberate rather than accidental. | Phase 4 (together with the writable verbs) |
 | O23 | **Phase 3 proves models, not views.** The QML pipeline view, the animation timeline and the editors arrive in Phases 4-6, so a model verified through the spike harness is not yet proven against a real view's iteration, delegate-recycling and lifetime patterns - the failures that only appear when a view reuses a delegate for a different object (defect F12 of the Phase 1 spike was of this kind). The first of those views is Phase 4 d1 and it has to re-run the S1 check with the view in place. | Phase 4 |
 
 ## 6. Action, Editor and Control Inventory (Phase 0 deliverables 1, 3 and 4)
@@ -789,6 +790,32 @@ counterpart must enumerate the same registry instead of naming utilities. The ob
     caller that cannot be suspended between the check and the use, so none of them is a place this race can land - which
     is why only the frame graph path is changed.
 
+21. **The post-phase review found one operational hazard, several small defects, and one of its own claims was wrong.**
+    An open-code-review pass over `037df0c50..HEAD` in the tool's delegate mode (the tool selects the files and resolves
+    the rules, the reviewing intelligence is the agent's) went through the 42 changed files. The hazard worth a code
+    change is the three nested event loops of `QmlWorkbenchController`: the file selection dialog, the message dialog and
+    the pipeline question each block their caller in a `QEventLoop`, and the members that remember those loops
+    (`_fileDialogLoop`, `_messageBoxLoop`, `_pipelineChoiceLoop`) were written but never read - so a second question asked
+    while the first was open would reset the state the first one is blocked on, and because both loops wait on the same
+    `*Changed` signal, one answer would release both of them. A request that cannot be answered now says so instead
+    (each of the three refuses while its loop is open), which is also what makes the "or null when no dialog is open"
+    comment on those members true. The same pass showed that `QmlPipelineController::idOfObject` named four kinds while
+    the only code that stores an object in a row (`PipelineListModel::refreshList`) stores a visual element, a modifier
+    group, a modification node or a non-modification source node - so its pipeline, scene node and viewport branches were
+    unreachable: they are gone, its four repeated row-bound checks became one `itemAt(row)`, and the class comment now
+    says which rows have an ID. Three smaller ones were fixed with them: `AutomationCommandLine::humanValue` carried an
+    unreachable `QJsonValue` branch (a reply is a `QVariantMap` parsed from JSON), the `events` verb was whichever branch
+    fell through the dispatch chain rather than a matched one (a verb added to `verbs()` without a branch would have been
+    answered with the event list), and a `status` run whose `selection.describe` was refused replaced that answer with a
+    synthetic empty selection while a refused `viewport.list` was left empty - two treatments of one situation that a
+    script reading only the payload cannot tell apart, so the selection now carries `unavailable` and the session's own
+    error. The review's claim that the spike checks skip their phases silently is **withdrawn**: the shape it counted (13
+    sites of `if(!controller) { state->continuation(); return; }`) goes through `pipelineController()`,
+    `animationModel()` and `insertModifier()`, and every one of those calls `reportVerificationFailure()` before
+    returning null. What is left of that thought is a hardening idea, not a defect - the harness counts failures, not
+    completion, so a phase that stopped being reached would not be noticed (the false pass of the first
+    `--qml-pipeline-check` had exactly that shape); a per-check phase count is the change that would notice it.
+
 ### Verification
 
 D53-D60 are the outcome of reading the shared layer (findings 1-8) before the phase started; findings 9 and 10 and
@@ -866,3 +893,11 @@ verified, which completes Phase 3.**
   contract suite's own commands), the `--automation-serve` option itself (the check calls `startAutomationServer()`
   directly, so the option's plumbing through `initializeWorkbench()` is covered by the shared code path but not by the
   check), and O20's remaining half - a transport for a remote client - which no phase has designed.
+* **The post-phase review's fixes are verified.** The native product builds with no new warnings; `ctest --preset
+  native` and `ctest --test-dir build-asserts` are 12/12 each; `--qml-pipeline-check`, `--qml-animation-check`,
+  `--qml-session-check` and `--qml-automation-check` report 0 failed checks in both the release and the assert-enabled
+  build, as does the whole `QML_SMOKE_CHECKS` list in the release build. `tst_automation_cli` passes with
+  `OVITO_REQUIRE_TEST_BINARY=1`, the variable the CI jobs that build the application now set, so the suite fails instead
+  of skipping when a binary that should exist does not - verified by moving `bin/ovito` aside, where the run then reports
+  the failure and exits 1 instead of skipping with 0. The file-dialog guard is what `--qml-session-check` drives, and the
+  animation model's row-to-track cache is what `--qml-animation-check` reads through its row roles.

@@ -1560,7 +1560,11 @@ Traps it records:
 The command line itself has a CTest suite of its own, `tst_automation_cli`, which needs no GUI and covers the failing
 paths (an empty discovery scope, a descriptor whose process is gone, unknown verbs and missing arguments, the exit codes
 and the one-JSON-object rule). Run it with `ctest --preset native -R tst_automation_cli`, or directly with the
-`LD_LIBRARY_PATH` of §4.1.
+`LD_LIBRARY_PATH` of §4.1. The suite looks for the `ovito` executable
+by walking up from its own build directory, and **skips itself with `QSKIP` when the build has no application** - which
+is right for a frontend-only preset and a trap for a job that builds the product, because `ctest` counts a skipped test
+as passed. The CI jobs that build the application therefore set `OVITO_REQUIRE_TEST_BINARY=1`, which turns the skip into
+a `QFAIL`; a local run can do the same, or move `bin/ovito` aside once to see the difference (exit 1 instead of 0).
 
 ## 10. Quick checklist
 

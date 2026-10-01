@@ -662,6 +662,10 @@ ovito --automation events    [--json] [--session <id>] [--since <n>] [--limit <n
   `2` the request could not be carried out at all (no running session, no session matching `--session`, an unknown verb or
   a missing argument). A script reads the code and, on failure, the `error.code` of the JSON answer - which is how
   `no_session`, a transport failure and a contract error stay distinguishable.
+* **`status` reports its optional parts as far as the session grants them.** `session.describe` is required, while the
+  viewport list, the selection and the tasks are asked for and included when they are answered; a refused
+  `selection.describe` appears as `count: 0` with `unavailable: true` and the session's own `error` rather than as an
+  empty selection, so a caller that reads only the payload can tell "nothing is selected" from "not allowed to look".
 * **The session it talks to must have been asked to serve.** A workbench publishes its session only when it was started
   with `--automation-serve`, in which case it grants connecting clients the read capabilities of D43 (audit decision
   D59); the command line says so when it finds nothing.
