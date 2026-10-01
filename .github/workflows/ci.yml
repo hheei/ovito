@@ -461,6 +461,10 @@ jobs:
         shell: pwsh
         run: |
           cmake --build --preset ci-windows --parallel $env:NUMBER_OF_PROCESSORS
+          # PowerShell decides the step's outcome by the exit code of its last statement, so the ccache report below
+          # would swallow a failed build: the run that failed to link tst_python_data_bridge reported a successful
+          # Build step and only showed the linker error as a mysterious CTest failure.
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (Get-Command ccache -ErrorAction SilentlyContinue) { ccache --show-stats }
 
       - name: Install a Python the contract supports

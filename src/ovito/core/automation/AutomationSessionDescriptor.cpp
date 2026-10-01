@@ -38,13 +38,16 @@ bool isPlainName(const QString& name)
 }
 
 /// True if an endpoint is something a client may connect to: an absolute socket path or, on a platform that has no
-/// such thing, a plain name. A relative path is refused because it would resolve differently for the two processes
+/// such thing, a plain name. The path test goes through QDir rather than looking for a leading '/', because a session
+/// on Windows lives in an absolute path such as C:/Users/.../ovito/automation/ovito-1-cafe0001, which a rule written
+/// for UNIX would refuse - and that would leave Windows with no sessions at all. A relative path is still refused
+/// because it would resolve differently for the two processes
 /// that have to agree on it, and ".." is refused because a descriptor is a file a client reads, not a router.
 bool isUsableEndpoint(const QString& endpoint)
 {
     if(endpoint.isEmpty() || endpoint.size() > 104 || endpoint.contains(QStringLiteral("..")))
         return false;
-    if(endpoint.startsWith(u'/'))
+    if(QDir::isAbsolutePath(endpoint))
         return true;
     return isPlainName(endpoint);
 }

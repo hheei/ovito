@@ -935,6 +935,41 @@ a usable "no cache" for measurements.
 
 ---
 
+### 6.2 What only the three-platform run finds
+
+A green Linux build says nothing about whether the automation module builds or its suites pass elsewhere: run `36817421518`
+was green on Linux x86_64 while Windows AMD64 could not link `tst_python_data_bridge` at all and macOS ARM64 failed four
+cases of `tst_session_descriptor`. Four traps are behind that, and each is a rule rather than an accident.
+
+* **A nested type's out-of-line member is not exported from a DLL on Windows.** `PythonArrayBridge::Result::toString()` was
+  declared in the header (inside a nested `struct Result`) and defined in the `.cpp`; because only the *enclosing*
+  `OVITO_CORE_EXPORT PythonArrayBridge` carries the export macro, MSVC produced `Core.lib` without that symbol and the
+  test failed with `LNK2019: unresolved external symbol`. GCC and clang link it anyway, so the build only breaks on
+  Windows. Define such a member inline in the header (or export the nested type itself).
+* **A UNIX socket path may be 104 characters on macOS, and a platform's temporary directory can be long enough to exceed
+  that on its own.** On macOS `QDir::tempPath()` is `/var/folders/<2>/<30>/T/`, so a per-test scope below it plus a session
+  ID crosses the limit and `AutomationSessionDescriptor::writeToDisk()` refuses the descriptor - correctly, because a
+  client could not connect to the socket. Every case of `tst_session_descriptor` that *writes* a descriptor failed there
+  while the others passed, which is the signature of this trap; the suite now creates its private scope under the shortest
+  temp base the platform has (`/tmp` on UNIX) and pins the refusal deliberately in
+  `an_endpoint_that_does_not_fit_a_socket_path_is_refused`. Reproduce it on Linux without a Mac by pointing `TMPDIR` at a
+  60-character directory (`TMPDIR=/tmp/$(printf 'a%.0s' {1..60}) build-native/tests/cpp/core/automation/tst_session_descriptor`).
+* **The descriptor's endpoint is a path, not a string that starts with `/`.** On Windows the session directory is an
+  absolute `C:/Users/...` path, so a validity rule written for UNIX refuses every session there and no workbench could ever
+  serve one. `isUsableEndpoint()` therefore tests `QDir::isAbsolutePath()` and keeps refusing *relative* paths, which is the
+  property that matters (a relative endpoint would resolve differently in the two processes).
+* **Where the platform cannot answer, the suite asserts the documented rule.** `AutomationSessionDescriptor::isProcessAlive()`
+  asks the operating system with `kill(pid, 0)` on UNIX and answers "alive" everywhere else, because deleting the descriptor
+  of a live session is worse than trying to connect to a dead one and failing. A case that asserts "a dead PID is stale"
+  is therefore a UNIX case; the suite branches on the platform and checks the rule in both directions.
+* **A `pwsh` step's exit code is the exit code of its last statement.** The Windows Build step ended with an
+  `if (Get-Command ccache ...) { ccache --show-stats }` report, so the failed `cmake --build` did not fail the step: the job
+  reported a *successful* Build and the linker error reappeared 20 seconds later as an unexplained `Test (CTest)` failure
+  with nine tests missing their executables. The step now exits with `$LASTEXITCODE` when it is non-zero; macOS and Linux
+  use `bash -e`, whose last-command rule is safe.
+
+---
+
 ## 7. Temporary benchmark instrumentation (never commit)
 
 The classic frontend and the render thread expose no frame-time counters, and on macOS vsync makes "how many frames per

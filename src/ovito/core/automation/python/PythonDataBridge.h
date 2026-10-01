@@ -251,7 +251,20 @@ public:
         /// The digests of what the worker received, by array name - the proof that the outbound transfer was exact.
         QVariantMap receivedInputDigests() const { return response.value(QStringLiteral("inputSha256")).toMap(); }
 
-        QString toString() const;
+        /// What the caller experienced, in one line, for a log or a test failure.
+        ///
+        /// Defined inline rather than in the .cpp because this is a nested type: a nested type's out-of-line member
+        /// is not exported from a DLL on Windows even when the enclosing class is (the Windows build reported it as an
+        /// unresolved external in the data-bridge test).
+        QString toString() const
+        {
+            if(ok)
+                return QStringLiteral("the bridge returned %1 array(s), %2 bytes, in %3 ms")
+                    .arg(arrays.arrayCount())
+                    .arg(arrays.totalBytes())
+                    .arg(elapsedMs, 0, 'f', 2);
+            return QStringLiteral("the bridge failed: %1: %2").arg(errorCode, errorMessage);
+        }
     };
 
     /**

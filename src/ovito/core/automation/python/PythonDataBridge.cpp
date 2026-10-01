@@ -366,16 +366,6 @@ std::optional<PythonArrayBridge::Operation> PythonArrayBridge::operationFromName
     return {};
 }
 
-QString PythonArrayBridge::Result::toString() const
-{
-    if(ok)
-        return QStringLiteral("the bridge returned %1 array(s), %2 bytes, in %3 ms")
-            .arg(arrays.arrayCount())
-            .arg(arrays.totalBytes())
-            .arg(elapsedMs, 0, 'f', 2);
-    return QStringLiteral("the bridge failed: %1: %2").arg(errorCode, errorMessage);
-}
-
 PythonArrayBridge::Result PythonArrayBridge::exchange(PythonWorkerProcess& worker, const PythonArrayBlock& inputs, Operation operation,
                                                      double factor, int timeoutMs)
 {

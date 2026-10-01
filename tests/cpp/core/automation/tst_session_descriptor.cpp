@@ -17,6 +17,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 
 using namespace Ovito;
@@ -44,6 +45,39 @@ public:
 
 private:
     QByteArray _previous;
+};
+
+/**
+ * A temporary directory that a session's socket path fits into.
+ *
+ * The descriptor refuses an endpoint longer than 104 characters, which is what a UNIX socket path may be on macOS, and
+ * the platform's own temporary directory is long enough to exceed that on its own: on macOS it is
+ * /var/folders/<2>/<30>/T/, so a scope below it plus a session ID does not fit and every case that writes a descriptor
+ * failed there. The scope therefore goes under the shortest temp base the platform has; a scope that is deliberately
+ * too deep is the subject of an_endpoint_that_does_not_fit_a_socket_path_is_refused.
+ */
+class ShortTemporaryDirectory
+{
+public:
+    ShortTemporaryDirectory() : _directory(templatePath()) {}
+
+    bool isValid() const { return _directory.isValid(); }
+    QString filePath(const QString& name) const { return _directory.filePath(name); }
+
+private:
+    static QString templatePath()
+    {
+#if defined(Q_OS_UNIX)
+        // '/tmp' is short everywhere on UNIX (macOS resolves it to /private/tmp) and is the platform's own place for
+        // short-lived files; TMPDIR may point into a long /var/folders path instead.
+        const QFileInfo base(QStringLiteral("/tmp"));
+        if(base.isDir() && base.isWritable())
+            return QStringLiteral("/tmp/ovito-session-descriptor-XXXXXX");
+#endif
+        return QDir::tempPath() + QStringLiteral("/ovito-session-descriptor-XXXXXX");
+    }
+
+    QTemporaryDir _directory;
 };
 
 /// Writes a file of arbitrary content into the session directory.
@@ -195,7 +229,7 @@ private Q_SLOTS:
 
     void descriptor_is_written_with_owner_only_permissions()
     {
-        QTemporaryDir temporaryDirectory;
+        ShortTemporaryDirectory temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
         const QString scope = temporaryDirectory.filePath(QStringLiteral("sessions"));
         PrivateSessionDirectory sessionDirectory(scope);
@@ -245,7 +279,7 @@ private Q_SLOTS:
 
     void write_is_refused_for_an_unusable_descriptor()
     {
-        QTemporaryDir temporaryDirectory;
+        ShortTemporaryDirectory temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
         PrivateSessionDirectory sessionDirectory(temporaryDirectory.filePath(QStringLiteral("sessions")));
 
@@ -258,13 +292,33 @@ private Q_SLOTS:
         QVERIFY(QDir(AutomationSessionDescriptor::directory()).entryList(QDir::Files).isEmpty());
     }
 
+    void an_endpoint_that_does_not_fit_a_socket_path_is_refused()
+    {
+        ShortTemporaryDirectory temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+
+        // 104 characters is what a UNIX socket path may be on macOS. A discovery scope nested this deeply cannot hold
+        // one - a machine whose temporary directory is that long looks exactly like this - so the descriptor has to say
+        // so instead of publishing a path no client could ever connect to.
+        PrivateSessionDirectory sessionDirectory(temporaryDirectory.filePath(QString(120, u'x')));
+
+        const AutomationSessionDescriptor descriptor = AutomationSessionDescriptor::allocateNewSession();
+        QVERIFY(!descriptor.isValid());
+        QVERIFY(descriptor.validityProblem().contains(QStringLiteral("too long")));
+
+        QString error;
+        QVERIFY(!descriptor.writeToDisk(&error));
+        QVERIFY(error.contains(QStringLiteral("too long")));
+        QVERIFY(AutomationSessionDescriptor::discover().isEmpty());
+    }
+
     // -----------------------------------------------------------------------
     // Discovery
     // -----------------------------------------------------------------------
 
     void discovery_reports_foreign_files_and_respects_its_limit()
     {
-        QTemporaryDir temporaryDirectory;
+        ShortTemporaryDirectory temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
         const QString scope = temporaryDirectory.filePath(QStringLiteral("sessions"));
         PrivateSessionDirectory sessionDirectory(scope);
@@ -304,7 +358,7 @@ private Q_SLOTS:
 
     void a_session_whose_process_is_gone_is_reported_as_stale()
     {
-        QTemporaryDir temporaryDirectory;
+        ShortTemporaryDirectory temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
         PrivateSessionDirectory sessionDirectory(temporaryDirectory.filePath(QStringLiteral("sessions")));
 
@@ -319,8 +373,18 @@ private Q_SLOTS:
         const AutomationSessionDescriptor live = AutomationSessionDescriptor::allocateNewSession();
         QVERIFY(live.writeToDisk());
 
+        // Whether the process of a descriptor still exists is a platform question, and the answer is deliberately
+        // asymmetric where the platform cannot tell: a client that deletes the descriptor of a live session is worse
+        // off than one that tries to connect to a dead session and fails, so an unknown answer is "alive" and the
+        // connection attempt decides (AutomationSessionDescriptor::isProcessAlive). This case asserts that rule, not
+        // one platform's answer.
+#if defined(Q_OS_UNIX)
         QVERIFY(leftover.isStale());
         QVERIFY(!leftover.isProcessAlive());
+#else
+        QVERIFY(leftover.isProcessAlive());
+        QVERIFY(!leftover.isStale());
+#endif
         QVERIFY(!live.isStale());
 
         // Discovery reports both, with the truth about each: a client decides what to do with a stale entry (the spike's
@@ -330,12 +394,17 @@ private Q_SLOTS:
         int staleCount = 0;
         for(const AutomationSessionDescriptor& descriptor : found)
             staleCount += descriptor.isStale() ? 1 : 0;
+#if defined(Q_OS_UNIX)
         QCOMPARE(staleCount, 1);
+#else
+        // Nothing is reported stale where the process check cannot answer; the connect attempt is what tells the client.
+        QCOMPARE(staleCount, 0);
+#endif
     }
 
     void the_discovery_scope_can_be_relocated()
     {
-        QTemporaryDir temporaryDirectory;
+        ShortTemporaryDirectory temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
         const QString scope = temporaryDirectory.filePath(QStringLiteral("relocated"));
         {
