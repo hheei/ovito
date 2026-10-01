@@ -110,6 +110,35 @@ int spikeVerificationFailures();
 /// Records a verification check that did not produce the expected result.
 void reportVerificationFailure(const QString& message);
 
+/**
+ * The phase contract of a check: the check declares the phases it is going to walk through, reports each of them while
+ * it runs, and the harness reports a failure if one of the declared phases never arrived.
+ *
+ * A check that stops early - because a precondition is missing, because an awaited state never arrived, or because a
+ * phase was deleted while the rest of the chain was adapted - used to be indistinguishable from a check that verified
+ * everything: both call their continuation and both leave the failure counter at zero. Declaring the phases makes the
+ * difference visible, and the message names the check and the phase that is missing, which is the part of a failed run
+ * a log reader needs.
+ *
+ * The phases are named in the order they run, and a phase may be reported more than once (a phase that iterates over
+ * the objects of a scene is one phase, not one per object). A check whose phases depend on the platform declares the
+ * ones that this run has, e.g. by naming the phase with a conditional expression, and every report has to name a
+ * declared phase - a name a check reports without declaring it is a failure too, because it means the declaration and
+ * the check have drifted apart.
+ */
+void declareCheckPhases(std::initializer_list<const char*> phases);
+
+/// Reports that the running check reached the named phase. See declareCheckPhases() above.
+void reportCheckPhase(const char* phase);
+
+/// Opens the phase contract of a check. Called by the harness before a step runs; the name is the step's command line
+/// option, which is how a missing phase names the check it belongs to.
+void beginCheckPhases(const QString& checkName);
+
+/// Closes the phase contract of a check and reports every declared phase that was not reported. Called by the harness
+/// when the step's continuation runs, i.e. when the check says it is finished.
+void verifyCheckPhases();
+
 /// Runs the given function after the specified delay.
 void scheduleDelayed(QmlMainWindowUI* ui, int delay, std::function<void()> action);
 

@@ -373,6 +373,8 @@ void verifyImportNotice(QmlMainWindowUI* ui, std::function<void()> continuation)
 
 void runLibraryTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
+    declareCheckPhases({ "modifier library", "viewport layer library" });
+
     // Creating the models instantiates OVITO objects, which requires a task context when this runs from a Qt callback.
     GuiTaskScope taskScope(*ui);
 
@@ -404,6 +406,7 @@ void runLibraryTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         }
     }
     qInfo() << "LIBRARY_TEST modifier library:" << categories << "categories," << entries << "commands";
+    reportCheckPhase("modifier library");
 
     int overlayEntries = 0;
     int overlayCategories = 0;
@@ -422,6 +425,7 @@ void runLibraryTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         }
     }
     qInfo() << "LIBRARY_TEST viewport layer library:" << overlayCategories << "categories," << overlayEntries << "commands";
+    reportCheckPhase("viewport layer library");
 
     if(entries == 0)
         reportVerificationFailure(QStringLiteral("the modifier library is empty, so nothing was verified"));
@@ -488,6 +492,9 @@ static QVector<IconImage> shellIconImages(QmlMainWindowUI* ui, const QString& ho
 ******************************************************************************/
 void runIconTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
+    declareCheckPhases({ "shared rule", "other theme", "qml provider", "displayed icons", "maximize switch",
+                         "theme-dependent url" });
+
     // 1. The shared rule resolves the icons of the icon set itself and those the commands of the shell carry.
     const QString themeName = IconTheme::currentThemeName();
     const QString expectedTheme = IconTheme::themeName(GuiSettings::instance().usingDarkTheme());
@@ -509,6 +516,8 @@ void runIconTest(QmlMainWindowUI* ui, std::function<void()> continuation)
                 .arg(iconPath).arg(image.size().width()).arg(image.size().height()));
     }
 
+    reportCheckPhase("shared rule");
+
     // 2. The other theme of the set resolves them as well: both frontends follow the color scheme, so both themes have
     // to hold the icons the shell uses.
     IconTheme::apply(true);
@@ -518,6 +527,10 @@ void runIconTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     }
     IconTheme::apply(GuiSettings::instance().usingDarkTheme());
 
+    reportCheckPhase("other theme");
+
+
+
     // 3. The QML side: the singleton reports the theme of the shared layer and builds URLs of its image provider.
     const QVariant reportedTheme = evaluateInQml(ui, QStringLiteral("Icons.themeName"));
     if(reportedTheme.toString() != themeName)
@@ -525,6 +538,10 @@ void runIconTest(QmlMainWindowUI* ui, std::function<void()> continuation)
             .arg(reportedTheme.toString(), themeName));
     const QUrl restoreUrl = evaluateInQml(ui, QStringLiteral("Icons.url(\"viewport_restore\", Icons.themeName).toString()")).toString();
     const QUrl maximizeUrl = evaluateInQml(ui, QStringLiteral("Icons.url(\"viewport_maximize\", Icons.themeName).toString()")).toString();
+
+    reportCheckPhase("qml provider");
+
+
 
     // 4. The icons of the shell are displayed: the maximize button of every pane shows the icon of the state of its pane,
     //    and no icon of the shell failed to load.
@@ -540,6 +557,10 @@ void runIconTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         reportVerificationFailure(QStringLiteral("the shell displays no icon of the shared icon set"));
     if(paneButtons == 0)
         reportVerificationFailure(QStringLiteral("the maximize button of no pane shows an icon of the shared icon set"));
+
+    reportCheckPhase("displayed icons");
+
+
 
     // 5. Maximizing a viewport switches the button of that pane to the restore icon, which is the asset this frontend
     //    needed and the classic icon set did not have; the layout is put back before the check is done.
@@ -563,7 +584,9 @@ void runIconTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         }
         evaluateInQml(ui, QStringLiteral("viewportLayout.toggleMaximize(viewportLayout.activeViewportIndex)"));
 
-        // 6. An icon reaches the scene graph as an Image, which caches its pixmap by URL - so the URL has to depend on
+        reportCheckPhase("maximize switch");
+
+    // 6. An icon reaches the scene graph as an Image, which caches its pixmap by URL - so the URL has to depend on
         //    the theme, or the shell would keep the icons of the old color scheme when the user switches between light
         //    and dark. (Whether the operating system reports such a switch is out of the hands of the shell; only the
         //    URL contract can be verified here.)
@@ -575,15 +598,11 @@ void runIconTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         qInfo() << "ICON_TEST theme" << themeName << "resolved" << iconPaths.size() << "icons," << "pane buttons"
                 << paneButtons << "of which switched to the restore icon:" << restored
                 << "| the URL of an icon follows the theme:" << (otherThemeUrl != restoreUrl);
+        reportCheckPhase("theme-dependent url");
         continuation();
     });
 }
 
-static /// Verifies the features the shell gained for parity with the classic frontend: the menus of the workbench present the
-/// shared commands, the viewport has a context menu, the status line lists the running tasks, the window state is
-/// remembered and an import reports what it did with the file.
-/// Verifies the keyboard focus chain of the shell: a keyboard user starts at the import control, and the chain continues
-/// into the viewports - the pane that takes the focus is the one keyboard events of the viewport input modes arrive at.
 /// Verifies the keyboard focus order of the shell: a keyboard user starts at the import control, and the chain continues
 /// into the viewports - the pane that takes the focus is the one keyboard events of the viewport input modes arrive at.
 ///
@@ -777,20 +796,37 @@ void verifyRecentFiles(QmlMainWindowUI* ui, std::function<void()> continuation)
     continuation();
 }
 
+/// Verifies the features the shell gained for parity with the classic frontend: the menus of the workbench present the
+/// shared commands, the viewport has a context menu, the status line lists the running tasks, the window state is
+/// remembered and an import reports what it did with the file.
 void runParityTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
+    declareCheckPhases({ "menu bar", "focus order", "context menu", "about dialog", "pipeline chooser", "task rows",
+                         "window state", "import notice", "recent files" });
+
     QQuickItem* rootObject = ui->view() ? ui->view()->rootObject() : nullptr;
     verifyMenuEntries(rootObject ? rootObject->findChild<QObject*>(QStringLiteral("workbenchMenuBar")) : nullptr,
         QStringLiteral("menu bar of the workbench"), false);
+    reportCheckPhase("menu bar");
     verifyFocusOrder(ui);
+    reportCheckPhase("focus order");
 
     verifyContextMenu(ui, [ui, continuation]() {
+        reportCheckPhase("context menu");
         verifyAboutDialog(ui, [ui, continuation]() {
+            reportCheckPhase("about dialog");
             verifyPipelineChooser(ui, [ui, continuation]() {
+                reportCheckPhase("pipeline chooser");
             verifyTaskRows(ui, [ui, continuation]() {
+                reportCheckPhase("task rows");
                 verifyWindowState(ui, [ui, continuation]() {
+                    reportCheckPhase("window state");
                     verifyImportNotice(ui, [ui, continuation]() {
-                        verifyRecentFiles(ui, std::move(continuation));
+                        reportCheckPhase("import notice");
+                        verifyRecentFiles(ui, [continuation]() {
+                            reportCheckPhase("recent files");
+                            continuation();
+                        });
                     });
                 });
             });
@@ -803,6 +839,8 @@ void runParityTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 /// handle resizes them through the undo system, and maximizing a viewport keeps exactly one pane visible.
 void runLayoutTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
+    declareCheckPhases({ "panes", "drag and undo", "maximize" });
+
     QmlViewportLayout* layout = ui->viewportLayout();
     QQuickView* view = ui->view();
     QQuickWindow* window = view;
@@ -846,6 +884,8 @@ void runLayoutTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         return;
     }
 
+    reportCheckPhase("panes");
+
     const QString before = layoutSnapshot(layout);
 
     // Drag the first handle with synthetic mouse events, i.e. through the QML mouse area a user would grab - not by
@@ -884,6 +924,7 @@ void runLayoutTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     if(layoutSnapshot(layout) != before)
         reportVerificationFailure(QStringLiteral("layout check: a second undo did not return to the layout from before the drag"));
     qInfo() << "LAYOUT_UNDO the drag was undone and redone with the pane sizes restored";
+    reportCheckPhase("drag and undo");
 
     // Maximizing keeps exactly one pane visible and restores the layout afterwards.
     const int activeIndex = layout->activeViewportIndex();
@@ -898,6 +939,7 @@ void runLayoutTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     if(layoutSnapshot(layout) != before)
         reportVerificationFailure(QStringLiteral("layout check: restoring the layout did not bring the pane sizes back"));
 
+    reportCheckPhase("maximize");
     continuation();
 }
 
@@ -913,6 +955,10 @@ void runLayoutTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 ******************************************************************************/
 void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
+    // The numbered sections of this check, in the order they run. A section that is skipped for a static scene still
+    // walks its phase, which is what "the check finished" means.
+    declareCheckPhases({ "catalog", "qml state", "qml invocation", "undo stack", "playback", "input modes", "maximize" });
+
     ActionManager* actionManager = ui->actionManager();
     QQuickView* view = ui->view();
     if(!actionManager || !view || !view->rootObject()) {
@@ -947,6 +993,8 @@ void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     qInfo() << "COMMAND_TEST the command layer provides" << actionManager->commands().size() << "commands,"
             << "including all" << ids.size() << "commands of this check";
 
+    reportCheckPhase("catalog");
+
     // 2. The QML side of the workbench sees the same objects, and can read the state of a command. The expressions are
     //    evaluated by the QML engine, so the context property, the registered type and the properties are all covered.
     Command* undoCommand = actionManager->findCommand(QStringLiteral("EditUndo"));
@@ -959,6 +1007,8 @@ void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         reportVerificationFailure(QStringLiteral("command check: QML sees %1 of %2 commands").arg(qmlCommandCount.toInt()).arg(actionManager->commands().size()));
     qInfo() << "COMMAND_TEST QML reads the Undo command as" << qmlUndoText.toString() << "and sees" << qmlCommandCount.toInt() << "commands";
 
+    reportCheckPhase("qml state");
+
     // 3. Invoking a command through the QML engine has to run the handler the two frontends share.
     ViewportConfiguration* viewportConfig = ui->datasetContainer().activeViewportConfig();
     if(viewportConfig) {
@@ -970,6 +1020,8 @@ void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
             reportVerificationFailure(QStringLiteral("command check: invoking a command through QML did not restore the layout"));
         qInfo() << "COMMAND_TEST QML can invoke a command and run its handler";
     }
+
+    reportCheckPhase("qml invocation");
 
     // 4. The state rules of the frontend drive the commands. The undo stack is the most important one: its state has to
     //    reach the Undo/Redo commands (and their QAction views) without the frontend wiring them up again.
@@ -1003,6 +1055,8 @@ void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         qInfo() << "COMMAND_TEST the shared undo stack drives the Undo/Redo commands and their QAction views";
     }
 
+    reportCheckPhase("undo stack");
+
     // 5. A checkable command that mirrors program state: starting and stopping the animation playback goes through the
     //    command, which is what the menu entry of the classic frontend toggles. A playback needs an animation with more
     //    than one frame, so the probe is skipped for a static scene instead of importing data here: this step must leave
@@ -1017,6 +1071,8 @@ void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
             probeAnimationPlaybackCommand(ui, playbackCommand);
         }
     }
+
+    reportCheckPhase("playback");
 
     // 6. Viewport input modes are commands as well, including the rule that an exclusive mode stays active.
     ViewportInputManager* inputManager = ui->viewportInputManager();
@@ -1042,6 +1098,8 @@ void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         qInfo() << "COMMAND_TEST the viewport input modes are commands, including the exclusive selection mode";
     }
 
+    reportCheckPhase("input modes");
+
     // 7. Maximizing the active viewport is the same command the classic frontend has in its toolbar.
     if(Command* maximizeCommand = actionManager->findCommand(QStringLiteral("ViewportMaximize"))) {
         ViewportConfiguration* config = ui->datasetContainer().activeViewportConfig();
@@ -1056,6 +1114,7 @@ void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         }
     }
 
+    reportCheckPhase("maximize");
     continuation();
 }
 
@@ -1073,6 +1132,9 @@ void runCommandTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 ******************************************************************************/
 void runSettingsTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
+    declareCheckPhases({ "facade and theme", "window state", "window blobs", "file dialogs", "first-start flags",
+                         "round trip" });
+
     GuiSettings& settings = GuiSettings::instance();
 
     // 1. The QML scene reaches the same facade object, and the theme of the shell resolves to it. Both values are read
@@ -1086,6 +1148,9 @@ void runSettingsTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     if(qmlThemeDark.toBool() != cppDarkTheme)
         reportVerificationFailure(QStringLiteral("settings check: the shell's theme resolved to %1 while the shared settings report %2 - the theme does not follow the shared policy")
             .arg(qmlThemeDark.toBool()).arg(cppDarkTheme));
+
+    reportCheckPhase("facade and theme");
+
 
     // 2. The window placement of a frontend without widgets. The Qt Quick shell restores its window from these, which the
     //    classic frontend does not use (it stores QWidget geometry blobs instead).
@@ -1107,6 +1172,9 @@ void runSettingsTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     settings.setWorkbenchWindowMaximized(originalMaximized);
     expect(QStringLiteral("the maximized flag after restoring the original"), settings.isWorkbenchWindowMaximized(), originalMaximized);
 
+    reportCheckPhase("window state");
+
+
     // 3. The opaque blobs of the classic main window. They are not converted into rectangles on purpose: a QWidget
     //    geometry blob also carries the screen and the maximized state of the window.
     const QByteArray originalGeometry = settings.mainWindowGeometry();
@@ -1117,6 +1185,9 @@ void runSettingsTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     expect(QStringLiteral("the main window layout blob"), settings.mainWindowState(), QByteArrayLiteral("spike-state-blob"));
     settings.setMainWindowGeometry(originalGeometry);
     settings.setMainWindowState(originalState);
+
+    reportCheckPhase("window blobs");
+
 
     // 4. The behavior of the file dialogs, which both frontends follow.
     const bool originalKeepHistory = settings.keepDirectoryHistory();
@@ -1144,6 +1215,9 @@ void runSettingsTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     settings.rememberDirectory(dialogClass, QStringLiteral("/tmp/ovito-check-a"));
     expect(QStringLiteral("the directory history after returning to the first directory"), settings.recentDirectories(dialogClass), QStringList{QStringLiteral("/tmp/ovito-check-a")});
 
+    reportCheckPhase("file dialogs");
+
+
     // 5. The flags the first start sets: the classic frontend shows its GPU adapter dialog while this one is not set.
     const bool originalSetupDone = settings.graphicsAdapterSetupDone();
     settings.setGraphicsAdapterSetupDone(true);
@@ -1165,6 +1239,7 @@ void runSettingsTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 #if defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
     if(!settings.followsSystemColorScheme())
         reportVerificationFailure(QStringLiteral("settings check: following the system color scheme is not compulsory on this platform"));
+    reportCheckPhase("first-start flags");
     qInfo() << "SETTINGS_TEST the color scheme always follows the system on this platform, dark theme is" << cppDarkTheme;
 #else
     const bool originalFollowSystem = settings.followsSystemColorScheme();
@@ -1176,6 +1251,7 @@ void runSettingsTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 
     qInfo() << "SETTINGS_TEST the shared settings facade round-trips the window state, the file dialog behaviour and"
             << "the first-start flags; the shell's theme follows it";
+    reportCheckPhase("round trip");
     continuation();
 }
 
@@ -1225,6 +1301,10 @@ void answerNextFileDialog(QmlMainWindowUI* ui, QmlWorkbenchController* controlle
 /// Quick shell has no session commands yet), so this check drives the operations that do not need a file name.
 void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
+    // The phases of the session workflow, in the order its numbered sections run.
+    declareCheckPhases({ "save", "modified state", "reload", "recent files", "file dialog", "unwritable save",
+                         "open through the dialog", "working directory", "close question", "recent files reopened" });
+
     const QString sessionFile = QDir::tempPath() + QStringLiteral("/ovito-qml-session-test/session.ovito");
     QDir().mkpath(QFileInfo(sessionFile).absolutePath());
     QFile::remove(sessionFile);
@@ -1262,6 +1342,9 @@ void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         qInfo() << "SESSION_TEST saved the scene to" << QFileInfo(sessionFile).fileName()
                 << QStringLiteral("(%1 bytes)").arg(QFileInfo(sessionFile).size());
 
+        reportCheckPhase("save");
+
+
         // 2. A change marks the session as modified, and saving it again (into the remembered file) clears that.
         ui->performTransaction(QStringLiteral("Rename pipeline"), [&]() { node->setSceneNodeName(QStringLiteral("renamed after saving")); });
         if(!ui->isSessionModified())
@@ -1269,6 +1352,9 @@ void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         ui->saveSession();
         if(ui->isSessionModified())
             reportVerificationFailure(QStringLiteral("session check: the modified session is still reported as modified after saving it again"));
+
+        reportCheckPhase("modified state");
+
 
         // 3. Loading the session file has to replace the current scene by the saved one. Change the scene again without
         //    saving it first, so that the reload has something to undo.
@@ -1295,6 +1381,9 @@ void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
                 reportVerificationFailure(QStringLiteral("session check: the loaded session does not remember its file"));
         }
 
+        reportCheckPhase("reload");
+
+
         // 4. The session file ends up in the recently opened files, which is the list the frontends offer to the user.
         const auto& recentEntries = RecentFilesList::instance().entries();
         const bool isMostRecent = !recentEntries.isEmpty() && recentEntries.front().urls.size() == 1
@@ -1303,6 +1392,9 @@ void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
             reportVerificationFailure(QStringLiteral("session check: the session file is not the most recently opened file"));
         qInfo() << "SESSION_TEST the session workflow saved, modified and reloaded the scene;"
                 << RecentFilesList::instance().entries().size() << "recent file(s)";
+
+        reportCheckPhase("recent files");
+
 
         // 5. A session without a file name asks the frontend for one. The frontend presents the file dialog of the QML
         //    scene (the controller owns its state so that this check can answer it, exactly like the message box), and
@@ -1323,6 +1415,8 @@ void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
             reportVerificationFailure(QStringLiteral("session check: a cancelled file dialog gave the session a file"));
         if(!QFileInfo::exists(saveAsFile))
             qInfo() << "SESSION_TEST a cancelled file dialog wrote no file and left the session without one";
+
+        reportCheckPhase("file dialog");
 
         // 5b. An answered question (and the "Save As" command that goes through it) writes the session to that file.
         answerNextFileDialog(ui, controller, saveAsFile);
@@ -1379,6 +1473,8 @@ void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
                 qInfo() << "SESSION_TEST a save that cannot be written keeps the session and reports:" << controller->statusMessage();
         }
 
+        reportCheckPhase("unwritable save");
+
         // 5d. Opening a session asks the same question, and the file it answers with becomes the current session.
         answerNextFileDialog(ui, controller, saveAsFile2);
         if(!ui->openSession())
@@ -1394,6 +1490,8 @@ void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         if(OORef<DataSet> reloaded = ui->datasetContainer().currentSet())
             reloaded->setFilePath(rememberedPath);
 
+        reportCheckPhase("open through the dialog");
+
         // 5e. A directory is not a file to import but the directory to work in: the shared import path makes it the
         //     working directory of the process and opens the file dialog there, which is what the command line does.
         const QString directory = QDir::tempPath() + QStringLiteral("/ovito-qml-session-test/working");
@@ -1405,6 +1503,11 @@ void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         else
             qInfo() << "SESSION_TEST a directory handed to the import path becomes the working directory";
         QDir::setCurrent(previousWorkingDirectory);
+
+        reportCheckPhase("close question");
+
+
+        reportCheckPhase("working directory");
 
         // 6. Closing a workbench with unsaved changes asks about them, which is the question the classic frontend asks
         //    in its close event (MainWindow::closeEvent); the title marks the modified session in the meantime.
@@ -1474,6 +1577,7 @@ void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
             qInfo() << "SESSION_TEST the recent files entry of the session and a .ovito file handed to the import path"
                     << "both restore the saved session";
         }
+    reportCheckPhase("recent files reopened");
     });
 
     continuation();

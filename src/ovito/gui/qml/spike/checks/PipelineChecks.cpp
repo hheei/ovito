@@ -254,6 +254,7 @@ void checkRolesAndIdentity(const StatePtr& state)
 
     qInfo() << "PIPELINE_TEST roles:" << model->rowCount() << "rows," << objectRows << "object rows," << idRows << "with a contract ID";
 
+    reportCheckPhase("roles and identity");
     afterSettle(state, checkInsertion);
 }
 
@@ -299,6 +300,7 @@ void checkInsertion(const StatePtr& state)
 
         // The insertion is one undo step, and the undo takes the row and the validity of the ID away with it.
         state->ui->undoStack()->undo();
+        reportCheckPhase("insertion");
         afterSettle(state, checkUndoneInsertionAndReordering);
     });
 }
@@ -393,6 +395,7 @@ void checkUndoneInsertionAndReordering(const StatePtr& state)
                 qInfo() << "PIPELINE_TEST reordering: the two modifiers are rows" << rowAfter << "and" << otherRowAfter;
 
                 state->ui->undoStack()->undo();
+                reportCheckPhase("reordering");
                 afterSettle(state, checkDeletionAndSelection);
             });
         });
@@ -461,6 +464,7 @@ void checkDeletionAndSelection(const StatePtr& state)
 
             qInfo() << "PIPELINE_TEST deletion: the deletion and its undo restored" << state->secondObjectId << "in row" << restoredRow;
 
+            reportCheckPhase("deletion and undo");
             afterSettle(state, checkEnablement);
         });
     });
@@ -518,6 +522,7 @@ void checkEnablement(const StatePtr& state)
                 reportVerificationFailure(QStringLiteral("undoing the disablement did not enable the modifier \"%1\" again").arg(state->objectId));
             qInfo() << "PIPELINE_TEST enablement: disabling and undoing it left the modifier enabled";
 
+            reportCheckPhase("enablement");
             afterSettle(state, checkDataSetReplacement);
         });
     });
@@ -568,6 +573,7 @@ void checkDataSetReplacement(const StatePtr& state)
 
         qInfo() << "PIPELINE_TEST data set replacement: revision" << session->revision() << "and the old IDs resolve to nothing";
 
+        reportCheckPhase("data set replacement");
         checkCommandList(state);
     });
 }
@@ -648,6 +654,7 @@ void checkCommandList(const StatePtr& state)
 
     qInfo() << "PIPELINE_TEST command list:" << rowsUnfiltered << "commands, filtering, visibility and enablement verified";
 
+    reportCheckPhase("command list");
     state->continuation();
 }
 
@@ -655,6 +662,10 @@ void checkCommandList(const StatePtr& state)
 
 void runPipelineTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
+    // The phases this check walks through, in the order the check functions hand over to each other.
+    declareCheckPhases({ "import", "roles and identity", "insertion", "reordering", "deletion and undo", "enablement",
+                         "data set replacement", "command list" });
+
     auto state = std::make_shared<PipelineCheckState>();
     state->ui = ui;
     state->continuation = std::move(continuation);
@@ -691,6 +702,7 @@ void runPipelineTest(QmlMainWindowUI* ui, std::function<void()> continuation)
                 state->continuation();
                 return;
             }
+            reportCheckPhase("import");
             scheduleDelayed(state->ui, 600, [state]() { checkRolesAndIdentity(state); });
         });
 }

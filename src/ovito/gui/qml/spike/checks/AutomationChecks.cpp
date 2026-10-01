@@ -139,6 +139,9 @@ QStringList workCapabilities()
 ******************************************************************************/
 void runAutomationTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
+    // The phases this check walks through, in the order of the numbered sections below.
+    declareCheckPhases({ "before serving", "serving", "status", "snapshot", "describe", "stopped serving" });
+
     auto state = std::make_shared<AutomationCheckState>();
     state->continuation = std::move(continuation);
     state->sessionDirectory = QDir::tempPath() + QStringLiteral("/ovito-qml-automation-check-%1").arg(QCoreApplication::applicationPid());
@@ -156,6 +159,7 @@ void runAutomationTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         if(!sessions.empty())
             state->fail(QStringLiteral("a workbench that was not asked to serve a session is discoverable"));
     }
+    reportCheckPhase("before serving");
 
     // ---------------------------------------------------------------- 2. serving publishes exactly one session
     AutomationLocalEndpoint* endpoint = nullptr;
@@ -181,6 +185,8 @@ void runAutomationTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         if(!sessions.empty() && !sessions.front().endpoint().startsWith(state->sessionDirectory))
             state->fail(QStringLiteral("the session's endpoint lies outside the session directory"));
     }
+
+    reportCheckPhase("serving");
 
     const quint64 revisionBefore = ui->automationSession()->revision();
 
@@ -239,6 +245,8 @@ void runAutomationTest(QmlMainWindowUI* ui, std::function<void()> continuation)
             if(!refused.isEmpty())
                 state->fail(QStringLiteral("the session refused capabilities the read-only client asked for: %1").arg(refused.join(QStringLiteral(", "))));
 
+            reportCheckPhase("status");
+
             // ------------------------------------------------------------ 4. the snapshot composes the viewport and selection state
             runCommandLine(ui, state, { QStringLiteral("--automation"), QStringLiteral("snapshot"), QStringLiteral("--json") }, [ui, state](bool started) {
                 if(!started) {
@@ -271,6 +279,8 @@ void runAutomationTest(QmlMainWindowUI* ui, std::function<void()> continuation)
                         state->fail(QStringLiteral("the snapshot contains no events even though the session was asked twice"));
                     if(!snapshot.value(QStringLiteral("selection")).toObject().contains(QStringLiteral("count")))
                         state->fail(QStringLiteral("the snapshot does not contain the selection"));
+
+                    reportCheckPhase("snapshot");
 
                     // -------------------------------------------------------- 5. one object by ID, with its parameters
                     state->viewportId = viewports.isEmpty() ? QString() : viewports.first().toObject().value(QStringLiteral("id")).toString();
@@ -317,6 +327,8 @@ void runAutomationTest(QmlMainWindowUI* ui, std::function<void()> continuation)
                                     state->fail(QStringLiteral("a parameter was reported without a property ID: %1").arg(id));
                             }
 
+                            reportCheckPhase("describe");
+
                             // ---------------------------------------------------- 6. stopping the server removes the session
                             ui->stopAutomationServer();
                             QStringList problems;
@@ -327,6 +339,7 @@ void runAutomationTest(QmlMainWindowUI* ui, std::function<void()> continuation)
                             // The session itself survives being unserved: the presentation keeps identifying objects by it.
                             if(!ui->automationSession() || ui->automationSession()->dataSet() == nullptr)
                                 state->fail(QStringLiteral("stopping the server took the session away from the workbench"));
+                            reportCheckPhase("stopped serving");
                             state->continuation();
                         });
                     });

@@ -418,12 +418,20 @@ protected:
             scheduleDelayed(ui, holdMs, [status]() { QCoreApplication::exit(status); });
         };
 
-        // Assemble the verification steps in the order of the table above.
+        // Assemble the verification steps in the order of the table above. Each step runs inside the phase contract of
+        // its check: the check declares the phases it walks through, and a step whose check stopped before one of them
+        // finishes the run as a failure rather than as a pass (see declareCheckPhases()).
         for(const SpikeStep& step : spikeSteps()) {
             if(step.enabled && !step.enabled(cmdLineParser()))
                 continue;
-            _verificationSteps.push_back([ui = mainWinUI, &parser = cmdLineParser(), run = step.run](std::function<void()> next) {
-                run(ui, parser, std::move(next));
+            const QString checkName = step.option.names().constFirst();
+            _verificationSteps.push_back([ui = mainWinUI, &parser = cmdLineParser(), run = step.run,
+                                          checkName](std::function<void()> next) {
+                beginCheckPhases(checkName);
+                run(ui, parser, [next = std::move(next)]() {
+                    verifyCheckPhases();
+                    next();
+                });
             });
         }
         runNextVerificationStep();

@@ -17,6 +17,8 @@ namespace Ovito::Spike {
 /// through the regular input mode path.
 void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void()> continuation)
 {
+    declareCheckPhases({ "viewport item", "picking buffer", "synthetic click" });
+
     QuickViewportItem* item = firstViewportItem(ui);
     QuickViewportWindow* viewportWindow = item ? item->viewportWindow() : nullptr;
     if(!viewportWindow) {
@@ -28,6 +30,8 @@ void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void(
     const QSizeF itemSize = item->size();
     qInfo() << "PICK_TEST" << viewportItems(ui).size() << "viewport items; first item size" << itemSize
             << "test position" << itemPos;
+
+    reportCheckPhase("viewport item");
 
     // First pass: the picking buffer has not been rendered yet, so this starts the picking pass.
     reportPicking(probePicking(viewportWindow, item->size(), itemPos), QStringLiteral("before picking pass"));
@@ -57,6 +61,8 @@ void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void(
                 reportVerificationFailure(QStringLiteral("no object was picked anywhere in the viewport"));
             else if(finalProbe.hits == 0)
                 qInfo() << "PICK_TEST the test position" << itemPos << "does not contain an object in this viewport shape";
+
+            reportCheckPhase("picking buffer");
 
             // Negative control: a corner of the viewport shows only the empty background.
             if(std::optional<ViewportWindow::PickResult> backgroundPick = viewportWindow->pick(QPointF(2, 2))) {
@@ -98,6 +104,7 @@ void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void(
                     }
                 }
             }
+            reportCheckPhase("synthetic click");
             continuation();
         });
 }
@@ -106,6 +113,8 @@ void runPickTest(QmlMainWindowUI* ui, const QPoint& itemPos, std::function<void(
 /// acquires them again when it reappears; rendering and picking must survive that.
 void runHideShowTest(QmlMainWindowUI* ui, const QPoint& probePos, std::function<void()> continuation)
 {
+    declareCheckPhases({ "hidden", "shown again" });
+
     const QList<QuickViewportItem*> items = viewportItems(ui);
     if(items.isEmpty()) {
         reportVerificationFailure(QStringLiteral("hide/show: no viewport item found"));
@@ -122,11 +131,16 @@ void runHideShowTest(QmlMainWindowUI* ui, const QPoint& probePos, std::function<
             reportPicking(probePicking(viewportWindow, item->size(), probePos), QStringLiteral("while hidden"));
     }
 
+    reportCheckPhase("hidden");
+
     const QDateTime changeTime = QDateTime::currentDateTime();
     scheduleDelayed(ui, 500, [ui, items, probePos, changeTime, continuation]() {
         for(QuickViewportItem* item : items)
             item->setVisible(true);
-        waitForPickingBuffer(ui, probePos, QStringLiteral("after hide/show"), changeTime, continuation);
+        waitForPickingBuffer(ui, probePos, QStringLiteral("after hide/show"), changeTime, [continuation]() {
+            reportCheckPhase("shown again");
+            continuation();
+        });
     });
 }
 
@@ -134,6 +148,8 @@ void runHideShowTest(QmlMainWindowUI* ui, const QPoint& probePos, std::function<
 /// that picking recovers after a resize, which may happen at any time in a real session.
 void runResizeTest(QmlMainWindowUI* ui, const QSize& newSize, const QPoint& probePos, std::function<void()> continuation)
 {
+    declareCheckPhases({ "resized", "picking after the resize" });
+
     QQuickWindow* window = ui->view();
     if(!window) {
         continuation();
@@ -156,7 +172,12 @@ void runResizeTest(QmlMainWindowUI* ui, const QSize& newSize, const QPoint& prob
 
     // Poll immediately: the picking buffer is only used once the viewport geometry has been updated, so the
     // measured time is the delay until a picking buffer exists for the resized viewport.
-    waitForPickingBuffer(ui, probePos, QStringLiteral("after resize"), changeTime, continuation, previousItemSize);
+    reportCheckPhase("resized");
+
+    waitForPickingBuffer(ui, probePos, QStringLiteral("after resize"), changeTime, [continuation]() {
+        reportCheckPhase("picking after the resize");
+        continuation();
+    }, previousItemSize);
 }
 
 /******************************************************************************
@@ -169,6 +190,9 @@ void runResizeTest(QmlMainWindowUI* ui, const QSize& newSize, const QPoint& prob
 ******************************************************************************/
 void runDeviceTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
+    // One phase: the frontend answers whether it has a graphics device, and that answer has to match the window.
+    declareCheckPhases({ "device report" });
+
     pollUntil(ui, 100, 10000, [ui]() { return ui->hasGraphicsDevice().has_value(); },
         [ui, continuation = std::move(continuation)](bool answered) {
 
@@ -204,6 +228,7 @@ void runDeviceTest(QmlMainWindowUI* ui, std::function<void()> continuation)
                     "with the platform plugin's name (notice: \"%1\")").arg(notice));
             }
         }
+        reportCheckPhase("device report");
         continuation();
     });
 }
@@ -329,6 +354,7 @@ void verifyPickingAfterResize(std::shared_ptr<OffscreenCheckState> state)
                 reportVerificationFailure(QStringLiteral("no object was picked after the resize had superseded the picking target"));
                 reportPickingState(state->ui, QPoint(8, 8));
             }
+            reportCheckPhase("picking after the resize");
             state->continuation();
         });
 }
@@ -395,6 +421,7 @@ void renderOutputAgain(std::shared_ptr<OffscreenCheckState> state)
 
         qInfo() << "OFFSCREEN_TEST the render output" << image.size() << "shows the ambient occlusion shading after"
                 << state->outputsRendered << "render pass(es)";
+        reportCheckPhase("render output");
         verifyPickingAfterResize(state);
     });
 }
@@ -454,6 +481,7 @@ void runOffscreenCheckWithSelection(std::shared_ptr<OffscreenCheckState> state)
             state->continuation();
             return;
         }
+        reportCheckPhase("baseline");
 
         // Insert the ambient-occlusion modifier through the shared command of its library entry, the way the frontends
         // do it. Its sampling loop submits one picking-only pass per sample from the pipeline evaluation's worker thread.
@@ -482,6 +510,7 @@ void runOffscreenCheckWithSelection(std::shared_ptr<OffscreenCheckState> state)
         }
         qInfo() << "OFFSCREEN_TEST the ambient occlusion modifier was inserted through the shared command"
                 << insertCommand->id();
+        reportCheckPhase("sampling");
 
         // Start a picking pass of the Qt Quick viewport, so that it renders while the sampling runs. The result of
         // this pass is not awaited: the resize below supersedes its target, and the check waits for the pass that
@@ -503,6 +532,7 @@ void runOffscreenCheckWithSelection(std::shared_ptr<OffscreenCheckState> state)
         if(QQuickWindow* window = ui->view()) {
             window->resize(qMax(640, window->width() - 40), qMax(400, window->height() - 30));
             qInfo() << "OFFSCREEN_TEST resized the workbench while the sampling, a picking pass and the render output are in flight";
+            reportCheckPhase("resize");
         }
 
         renderOutputAgain(state);
@@ -548,6 +578,10 @@ void startOffscreenCheckAfterImport(std::shared_ptr<OffscreenCheckState> state)
 ******************************************************************************/
 void runOffscreenTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
+    // The phases of the chain this check walks through: the kind check, the baseline image, the sampling, the resize,
+    // the render output that shows the sampling's effect and the picking pass the resize superseded.
+    declareCheckPhases({ "target kind", "baseline", "sampling", "resize", "render output", "picking after the resize" });
+
     // Creating the pipeline list model and triggering a command instantiates OVITO objects and opens transactions.
     GuiTaskScope taskScope(*ui);
 
@@ -595,6 +629,8 @@ void runOffscreenTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 #else
     qInfo() << "OFFSCREEN_TEST (skipped) a mismatch of the target kind aborts this build, which is the point of the check";
 #endif
+
+    reportCheckPhase("target kind");
 
     auto state = std::make_shared<OffscreenCheckState>();
     state->ui = ui;
@@ -700,6 +736,8 @@ void countIdleFrames(QmlMainWindowUI* ui, int durationMs, std::function<void(int
 /// the buffer over and over would be a continuous renderer in disguise.
 void runPrewarmTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
+    declareCheckPhases({ "buffer caught up", "camera move", "idle frames" });
+
     GuiTaskScope taskScope(*ui);
 
     QuickViewportItem* item = firstViewportItem(ui);
@@ -723,6 +761,7 @@ void runPrewarmTest(QmlMainWindowUI* ui, std::function<void()> continuation)
             return;
         }
         qInfo() << "PREWARM_TEST the picking buffer caught up with the imported scene without a pick";
+        reportCheckPhase("buffer caught up");
 
         // The position of the probe: the center of the viewport item, clamped into it (a probe outside the item
         // reports nothing and would look like a picking failure).
@@ -784,6 +823,7 @@ void runPrewarmTest(QmlMainWindowUI* ui, std::function<void()> continuation)
                         .arg(describePick(firstPick), describePick(secondPick)));
                 else
                     qInfo() << "PREWARM_TEST both picks after the camera move agree on" << describePick(firstPick);
+                reportCheckPhase("camera move");
 
                 // A view that nobody touches must not keep rendering - the pre-warm refreshes the picking buffer once
                 // and stops, it does not turn the viewport into a continuous renderer.
@@ -795,6 +835,7 @@ void runPrewarmTest(QmlMainWindowUI* ui, std::function<void()> continuation)
                             .arg(frames));
                     else
                         qInfo() << "PREWARM_TEST the settled viewport rendered" << frames << "frame(s) within 1 s";
+                    reportCheckPhase("idle frames");
                     continuation();
                 });
             });
@@ -807,6 +848,9 @@ void runPrewarmTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 /// on the render thread, while requesting frames is a GUI-thread operation.
 void measureFrameRate(QmlMainWindowUI* ui, int durationMs, std::function<void()> continuation)
 {
+    // One phase: the measurement itself, which reports how many frames the viewports rendered in the period.
+    declareCheckPhases({ "measurement" });
+
     QQuickWindow* window = ui->view();
     if(!window) {
         continuation();
@@ -836,6 +880,7 @@ void measureFrameRate(QmlMainWindowUI* ui, int durationMs, std::function<void()>
         // that catches it.
         if(*frames == 0)
             reportVerificationFailure(QStringLiteral("no frame was rendered within %1 ms").arg(durationMs));
+        reportCheckPhase("measurement");
         continuation();
     });
     timer->start(durationMs);
@@ -850,9 +895,13 @@ void measureFrameRate(QmlMainWindowUI* ui, int durationMs, std::function<void()>
  */
 void scheduleLifecycleCycles(QmlMainWindowUI* ui, int cycles, std::function<void()> continuation)
 {
+    // One phase: every cycle released and rebuilt the graphics resources when the last one is done.
+    declareCheckPhases({ "cycles" });
+
     auto step = std::make_shared<std::function<void(int)>>();
     *step = [ui, continuation, step](int remaining) {
         if(remaining <= 0) {
+            reportCheckPhase("cycles");
             continuation();
             return;
         }

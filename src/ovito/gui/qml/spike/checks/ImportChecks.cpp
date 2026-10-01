@@ -76,6 +76,7 @@ void verifyCancelledImport(QmlMainWindowUI* ui, std::function<void()> continuati
         if(!idle)
             reportVerificationFailure(QStringLiteral("the task progress model still reports the canceled import"));
         reportTaskProgress(ui, QStringLiteral("after the cancelled import"));
+        reportCheckPhase("cancelled import");
         continuation();
     });
 }
@@ -117,12 +118,17 @@ void verifyUnsupportedFileImport(QmlMainWindowUI* ui, const QString& directory, 
         else {
             reportVerificationFailure(QStringLiteral("the failed import did not show an error dialog"));
         }
+        reportCheckPhase("unsupported format");
         verifyCancelledImport(ui, std::move(continuation));
     });
 }
 
 void runImportTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
+    // The phases this check walks through: a trajectory becomes one pipeline, an unsupported file reports an error and
+    // leaves the scene alone, and a cancelled import leaves neither a pipeline nor a busy task model behind.
+    declareCheckPhases({ "trajectory", "unsupported format", "cancelled import" });
+
     QmlWorkbenchController* controller = ui->workbenchController();
     if(controller == nullptr) {
         reportVerificationFailure(QStringLiteral("the workbench has no shell controller"));
@@ -175,6 +181,7 @@ void runImportTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         if(Command* playbackCommand = ui->actionManager() ? ui->actionManager()->findCommand(QStringLiteral("AnimationTogglePlayback")) : nullptr)
             probeAnimationPlaybackCommand(ui, playbackCommand);
 
+        reportCheckPhase("trajectory");
         verifyUnsupportedFileImport(ui, directory, std::move(continuation));
     });
     return;

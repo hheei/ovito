@@ -253,6 +253,7 @@ void checkIntervalAndTime(const StatePtr& state)
             if(model->firstFrame() != 0 || model->lastFrame() != 20)
                 reportVerificationFailure(QStringLiteral("redoing the interval change produced %1..%2 instead of 0..20")
                     .arg(model->firstFrame()).arg(model->lastFrame()));
+            reportCheckPhase("interval");
             checkTracksAndKeys(state);
         });
     });
@@ -344,6 +345,8 @@ void checkTracksAndKeys(const StatePtr& state)
         if(keyRowAt(model, state->positionTrack, 0) < 0 || keyRowAt(model, state->positionTrack, 20) < 0 || keyRowAt(model, state->rotationTrack, 10) < 0)
             reportVerificationFailure(QStringLiteral("the keys of the position and rotation tracks are not at the frames they were created at"));
 
+        reportCheckPhase("tracks and keys");
+
         checkKeySelection(state);
     });
 }
@@ -401,6 +404,7 @@ void checkKeySelection(const StatePtr& state)
     qInfo() << "ANIMATION_TEST selection: single, frame based, all and empty selections verified";
 
     model->clearKeySelection();
+    reportCheckPhase("key selection");
     checkContinuousKeyMove(state);
 }
 
@@ -495,6 +499,7 @@ void checkContinuousKeyMove(const StatePtr& state)
                 }
                 if(keyRowAt(model, state->rotationTrack, 15) < 0)
                     reportVerificationFailure(QStringLiteral("redoing the accepted drag did not move the key back to frame 15"));
+                reportCheckPhase("continuous move");
                 checkDiscreteKeyMove(state);
             });
         });
@@ -561,6 +566,7 @@ void checkDiscreteKeyMove(const StatePtr& state)
             }
             if(model->keyCount() != 3 || keyRowAt(model, state->rotationTrack, 15) < 0)
                 reportVerificationFailure(QStringLiteral("undoing the discrete move did not restore the key at frame 15"));
+            reportCheckPhase("discrete move");
             checkKeyDeletion(state);
         });
     });
@@ -631,6 +637,8 @@ void checkKeyDeletion(const StatePtr& state)
                     .arg(model->selectedKeyCount()));
             qInfo() << "ANIMATION_TEST deletion undo: the three keys are back, the selection stays empty";
 
+            reportCheckPhase("deletion");
+
             checkVisibleRange(state);
         });
     });
@@ -693,6 +701,7 @@ void checkVisibleRange(const StatePtr& state)
             // Restore the interval the other phases worked with.
             model->setInterval(0, 20);
             qInfo() << "ANIMATION_TEST range: follows the interval, is clamped, and an explicit range survives an interval change";
+            reportCheckPhase("visible range");
             afterSettle(state, checkPlaybackAndSettings);
         });
     });
@@ -749,6 +758,7 @@ void checkPlaybackAndSettings(const StatePtr& state)
 
     qInfo() << "ANIMATION_TEST playback: the model mirrors the shared playback, and the playback settings are undoable";
 
+    reportCheckPhase("playback");
     state->continuation();
 }
 
@@ -756,6 +766,10 @@ void checkPlaybackAndSettings(const StatePtr& state)
 
 void runAnimationTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
+    // The phases this check walks through, in the order the check functions hand over to each other.
+    declareCheckPhases({ "import", "node selected", "interval", "tracks and keys", "key selection", "continuous move",
+                         "discrete move", "deletion", "visible range", "playback" });
+
     auto state = std::make_shared<AnimationCheckState>();
     state->ui = ui;
     state->continuation = std::move(continuation);
@@ -792,6 +806,7 @@ void runAnimationTest(QmlMainWindowUI* ui, std::function<void()> continuation)
                 state->continuation();
                 return;
             }
+            reportCheckPhase("import");
             scheduleDelayed(state->ui, 600, [state]() {
                 GuiTaskScope taskScope(*state->ui);
                 // Select the node the import created: the timeline of the frontend shows the objects the scene selection
@@ -806,6 +821,7 @@ void runAnimationTest(QmlMainWindowUI* ui, std::function<void()> continuation)
                 state->node = node;
                 scene->selection()->setNode(node);
                 // The selection change is announced after a timer turn of the data set container, so wait for it.
+                reportCheckPhase("node selected");
                 afterSettle(state, checkIntervalAndTime);
             });
         });

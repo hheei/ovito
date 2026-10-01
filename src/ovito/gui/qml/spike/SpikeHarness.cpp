@@ -7,6 +7,8 @@
 
 #include <ovito/gui/qml/spike/SpikeHarness.h>
 
+#include <QSet>
+
 namespace Ovito::Spike {
 
 /// Number of verification checks that did not produce the expected result. The spike exits with a non-zero
@@ -25,6 +27,66 @@ void reportVerificationFailure(const QString& message)
 {
     verificationFailures++;
     qWarning() << "VERIFY_FAILED" << message;
+}
+
+/// The option of the check that is running, empty while no check is running.
+static QString runningCheckName;
+
+/// The phases the running check declared, and the ones it has reported so far.
+static QSet<QString> declaredCheckPhases;
+static QSet<QString> reportedCheckPhases;
+
+void declareCheckPhases(std::initializer_list<const char*> phases)
+{
+    if(!declaredCheckPhases.isEmpty()) {
+        // A second declaration would silently replace the first one's contract, which is the kind of forgotten state
+        // a phase contract exists to catch. One check, one declaration.
+        reportVerificationFailure(QStringLiteral("%1 declares its phases twice").arg(runningCheckName));
+        return;
+    }
+    for(const char* phase : phases)
+        declaredCheckPhases.insert(QString::fromLatin1(phase));
+}
+
+void reportCheckPhase(const char* phase)
+{
+    const QString name = QString::fromLatin1(phase);
+    if(!declaredCheckPhases.contains(name)) {
+        // Reported where it happens, because the check may stop before its declaration is verified - and an undeclared
+        // phase is a defect of the declaration rather than a late one.
+        reportVerificationFailure(QStringLiteral("%1 reported the phase \"%2\", which it did not declare").arg(runningCheckName, name));
+        return;
+    }
+    reportedCheckPhases.insert(name);
+}
+
+void beginCheckPhases(const QString& checkName)
+{
+    runningCheckName = checkName;
+    declaredCheckPhases.clear();
+    reportedCheckPhases.clear();
+}
+
+void verifyCheckPhases()
+{
+    if(!declaredCheckPhases.isEmpty()) {
+        QStringList missing;
+        for(const QString& phase : declaredCheckPhases) {
+            if(!reportedCheckPhases.contains(phase))
+                missing.push_back(phase);
+        }
+        if(!missing.isEmpty()) {
+            // Sorted, because the set has no order and the message has to be readable.
+            missing.sort();
+            reportVerificationFailure(QStringLiteral("%1 stopped early: it declared %2 phase(s) and never reached %3")
+                                          .arg(runningCheckName)
+                                          .arg(declaredCheckPhases.size())
+                                          .arg(missing.join(QStringLiteral(", "))));
+        }
+    }
+    runningCheckName.clear();
+    declaredCheckPhases.clear();
+    reportedCheckPhases.clear();
 }
 
 /// Runs the given function after the specified delay.
