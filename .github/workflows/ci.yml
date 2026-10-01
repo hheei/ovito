@@ -143,6 +143,9 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           LD_LIBRARY_PATH: ${{ env.QT_ROOT_DIR }}/lib:${{ github.workspace }}/build/lib/ovito/plugins
+          # This job builds the application, so the suite that drives its command line must not skip itself for want
+          # of a binary (see tst_automation_cli).
+          OVITO_REQUIRE_TEST_BINARY: 1
         run: |
           ctest --test-dir build --output-on-failure -V
 
@@ -273,6 +276,9 @@ jobs:
       - name: Test (CTest)
         env:
           QT_QPA_PLATFORM: offscreen
+          # This job builds the application, so the suite that drives its command line must not skip itself for want
+          # of a binary (see tst_automation_cli).
+          OVITO_REQUIRE_TEST_BINARY: 1
         run: |
           ctest --test-dir build --output-on-failure
 
@@ -425,6 +431,9 @@ jobs:
       - name: Test (CTest)
         env:
           QT_QPA_PLATFORM: offscreen
+          # This job builds the application, so the suite that drives its command line must not skip itself for want
+          # of a binary (see tst_automation_cli).
+          OVITO_REQUIRE_TEST_BINARY: 1
         shell: pwsh
         run: |
           # On Windows every OVITO library - Core, Gui and the plugin DLLs - is placed directly in the build

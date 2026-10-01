@@ -337,7 +337,8 @@ private:
     QVariantList _messageBoxButtons;
     UserInterface::MessageBoxButton _messageBoxAnswer = UserInterface::MessageBoxButton::NoButton;
 
-    /// The event loop that presentMessageBox() blocks in, or null when no message dialog is open.
+    /// The event loop that presentMessageBox() blocks in, or null when no message dialog is open. It is also what
+    /// makes a second question while the first one is open impossible.
     QEventLoop* _messageBoxLoop = nullptr;
 
     /// The state of the file selection dialog of the session workflow.
@@ -351,7 +352,8 @@ private:
     QString _fileDialogAnswer;
     bool _fileDialogCancelled = true;
 
-    /// The event loop that presentFileDialog() blocks in, or null when no file selection dialog is open.
+    /// The event loop that presentFileDialog() blocks in, or null when no file selection dialog is open. It is also
+    /// what makes a second question while the first one is open impossible.
     QEventLoop* _fileDialogLoop = nullptr;
 
     /// The state of the dialog that asks which pipeline of a session with several of them to keep.
@@ -359,7 +361,8 @@ private:
     QStringList _pipelineChoiceItems;
     int _pipelineChoiceAnswer = -1;
 
-    /// The event loop that choosePipeline() blocks in, or null when no pipeline question is open.
+    /// The event loop that choosePipeline() blocks in, or null when no pipeline question is open. It is also what
+    /// makes a second question while the first one is open impossible.
     QEventLoop* _pipelineChoiceLoop = nullptr;
 
     /// The directory the file selection dialog should start in.

@@ -76,7 +76,8 @@ Command* CommandListModel::command(int row) const
 {
     if(row < 0 || row >= rowCount())
         return nullptr;
-    return sourceCommand(mapToSource(index(row, 0)).row(), mapToSource(index(row, 0)).parent());
+    const QModelIndex sourceIndex = mapToSource(index(row, 0));
+    return sourceCommand(sourceIndex.row(), sourceIndex.parent());
 }
 
 /******************************************************************************

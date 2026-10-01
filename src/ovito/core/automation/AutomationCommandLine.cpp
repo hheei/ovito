@@ -36,8 +36,6 @@ QString humanValue(const QVariant& value)
 {
     if(value.typeId() == QMetaType::QString)
         return value.toString();
-    if(value.metaType().id() == QMetaType::QJsonValue)
-        return QString::fromUtf8(QJsonDocument::fromVariant(value.toJsonValue().toVariant()).toJson(QJsonDocument::Compact));
     switch(value.typeId()) {
         case QMetaType::Bool:
             return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
@@ -135,7 +133,9 @@ void printStatus(QTextStream& out, const QVariantMap& session, const QVariantMap
     out << QStringLiteral("  objects           %1").arg(session.value(QStringLiteral("objectCount")).toLongLong()) << Qt::endl;
     out << QStringLiteral("  scene nodes       %1").arg(session.value(QStringLiteral("sceneNodeCount")).toInt()) << Qt::endl;
     out << QStringLiteral("  current frame     %1").arg(session.value(QStringLiteral("currentFrame")).toInt()) << Qt::endl;
-    out << QStringLiteral("  selected          %1").arg(selection.value(QStringLiteral("count")).toInt()) << Qt::endl;
+    out << QStringLiteral("  selected          %1%2")
+               .arg(selection.value(QStringLiteral("count")).toInt())
+               .arg(selection.value(QStringLiteral("unavailable")).toBool() ? QStringLiteral(" (not granted)") : QString()) << Qt::endl;
     out << QStringLiteral("  viewports         %1").arg(viewports.value(QStringLiteral("viewports")).toList().size()) << Qt::endl;
     out << QStringLiteral("  tasks             %1").arg(tasks.value(QStringLiteral("tasks")).toList().size()) << Qt::endl;
     for(const QVariant& entry : tasks.value(QStringLiteral("tasks")).toList()) {
@@ -312,14 +312,21 @@ int AutomationCommandLine::run(const QCommandLineParser& parser, const QStringLi
         const AutomationLocalClient::Reply viewports = client.dispatch(QStringLiteral("viewport.list"));
         // The selection and the tasks are reported as far as the session grants them; a session that refuses them is
         // still worth a status answer, so their absence is not an error here.
-        AutomationLocalClient::Reply selection = client.dispatch(QStringLiteral("selection.describe"));
-        if(!selection.transportOk || !selection.result.value(QStringLiteral("ok")).toBool())
-            selection.result = QVariantMap{ { QStringLiteral("ok"), true }, { QStringLiteral("data"), QVariantMap{{ QStringLiteral("count"), 0 }} } };
+        const AutomationLocalClient::Reply selection = client.dispatch(QStringLiteral("selection.describe"));
         const int limit = parser.isSet(QStringLiteral("limit")) ? parser.value(QStringLiteral("limit")).toInt() : 10;
         const AutomationLocalClient::Reply tasks = client.dispatch(QStringLiteral("task.list"), { { QStringLiteral("limit"), limit } });
         const QVariantMap status = session.result.value(QStringLiteral("data")).toMap();
         const QVariantMap viewportData = viewports.transportOk && viewports.result.value(QStringLiteral("ok")).toBool() ? viewports.result.value(QStringLiteral("data")).toMap() : QVariantMap{};
-        const QVariantMap selectionData = selection.result.value(QStringLiteral("data")).toMap();
+        // A selection the session refuses (the capability is optional) is reported as such rather than as an empty
+        // selection: a caller that reads only the payload must be able to tell "nothing is selected" from "not allowed".
+        QVariantMap selectionData = selection.result.value(QStringLiteral("data")).toMap();
+        if(!selection.transportOk || !selection.result.value(QStringLiteral("ok")).toBool()) {
+            selectionData.insert(QStringLiteral("count"), 0);
+            selectionData.insert(QStringLiteral("unavailable"), true);
+            const QVariantMap error = selection.result.value(QStringLiteral("error")).toMap();
+            if(!error.isEmpty())
+                selectionData.insert(QStringLiteral("error"), error);
+        }
         const QVariantMap taskData = tasks.transportOk && tasks.result.value(QStringLiteral("ok")).toBool() ? tasks.result.value(QStringLiteral("data")).toMap() : QVariantMap{};
         if(json) {
             writeJson(out, QVariantMap{
@@ -386,31 +393,41 @@ int AutomationCommandLine::run(const QCommandLineParser& parser, const QStringLi
         return ExitOk;
     }
 
-    // events
-    QVariantMap eventArguments;
-    if(parser.isSet(QStringLiteral("since")))
-        eventArguments.insert(QStringLiteral("since"), parser.value(QStringLiteral("since")).toInt());
-    if(parser.isSet(QStringLiteral("limit")))
-        eventArguments.insert(QStringLiteral("limit"), parser.value(QStringLiteral("limit")).toInt());
-    const AutomationLocalClient::Reply reply = client.dispatch(QStringLiteral("event.list"), eventArguments);
-    if(!reply.transportOk)
-        return printUnavailable(out, err, json, verb, reply.errorMessage);
-    if(!reply.result.value(QStringLiteral("ok")).toBool())
-        return contractError(reply);
-    const QVariantMap events = reply.result.value(QStringLiteral("data")).toMap();
-    if(json) {
-        writeJson(out, QVariantMap{ { QStringLiteral("ok"), true }, { QStringLiteral("verb"), verb }, { QStringLiteral("events"), events } });
-    }
-    else {
-        for(const QVariant& entry : events.value(QStringLiteral("events")).toList()) {
-            const QVariantMap event = entry.toMap();
-            out << QStringLiteral("%1  %2  %3  %4").arg(event.value(QStringLiteral("sequence")).toString(),
-                                                        event.value(QStringLiteral("kind")).toString(),
-                                                        event.value(QStringLiteral("origin")).toString(),
-                                                        event.value(QStringLiteral("summary")).toString()) << Qt::endl;
+    if(verb == QStringLiteral("events")) {
+        QVariantMap eventArguments;
+        if(parser.isSet(QStringLiteral("since")))
+            eventArguments.insert(QStringLiteral("since"), parser.value(QStringLiteral("since")).toInt());
+        if(parser.isSet(QStringLiteral("limit")))
+            eventArguments.insert(QStringLiteral("limit"), parser.value(QStringLiteral("limit")).toInt());
+        const AutomationLocalClient::Reply reply = client.dispatch(QStringLiteral("event.list"), eventArguments);
+        if(!reply.transportOk)
+            return printUnavailable(out, err, json, verb, reply.errorMessage);
+        if(!reply.result.value(QStringLiteral("ok")).toBool())
+            return contractError(reply);
+        const QVariantMap events = reply.result.value(QStringLiteral("data")).toMap();
+        if(json) {
+            writeJson(out, QVariantMap{
+                               { QStringLiteral("ok"), true },
+                               { QStringLiteral("verb"), verb },
+                               { QStringLiteral("events"), events }
+                           });
         }
+        else {
+            for(const QVariant& entry : events.value(QStringLiteral("events")).toList()) {
+                const QVariantMap event = entry.toMap();
+                out << QStringLiteral("%1  %2  %3  %4").arg(event.value(QStringLiteral("sequence")).toString(),
+                                                            event.value(QStringLiteral("kind")).toString(),
+                                                            event.value(QStringLiteral("origin")).toString(),
+                                                            event.value(QStringLiteral("summary")).toString()) << Qt::endl;
+            }
+        }
+        return ExitOk;
     }
-    return ExitOk;
+
+    // The verb list and this dispatch must not drift apart: a verb that is offered but not handled here would
+    // otherwise be answered with the request of the last block above.
+    err << QStringLiteral("error: the verb '%1' is offered by this build but is not implemented.").arg(verb) << Qt::endl;
+    return ExitUnavailable;
 }
 
 }   // End of namespace

@@ -26,9 +26,9 @@ class WorkbenchUI;
  * themselves:
  *
  * 1. **Identity.** A row is a position in a list that is rebuilt whenever the pipeline changes, so a deferred caller
- *    that remembered a row would write to whatever object holds that row later. Every object that the automation
- *    contract can name (a modification node, a pipeline, a scene node, a viewport) therefore also has a stable ID from
- *    the workbench's automation session (D55), and the mutations of this class take that ID rather than a row.
+ *    that remembered a row would write to whatever object holds that row later. A row whose object the automation
+ *    contract can name (a modification node) therefore also has a stable ID from the workbench's automation session
+ *    (D55), and the mutations of this class take that ID rather than a row.
  * 2. **Selection.** The shared model selects through a QItemSelectionModel, which QML cannot drive; this class offers
  *    the selection as an id list and as invokable commands, and announces changes with one signal.
  *
@@ -168,6 +168,9 @@ Q_SIGNALS:
     void selectionChanged();
 
 private:
+
+    /// Returns the list item of a row, or null when there is no such row.
+    PipelineListItem* itemAt(int row) const;
 
     /// Returns the list item that shows the object of an ID, or null when no item does.
     PipelineListItem* itemForObjectId(const QString& objectId) const;

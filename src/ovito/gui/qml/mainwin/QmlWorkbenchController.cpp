@@ -338,6 +338,13 @@ UserInterface::MessageBoxButton QmlWorkbenchController::presentMessageBox(UserIn
         return defaultButton;
     }
 
+    // A dialog that is already waiting for an answer owns it: this question would replace the properties the other
+    // one is blocked on, and both blocks wait on the same signal, so one answer would release both of them.
+    if(_messageBoxLoop != nullptr) {
+        qWarning().noquote() << "A message dialog is already open:" << text;
+        return defaultButton;
+    }
+
     _messageBoxTitle = title.isEmpty() ? Application::applicationName() : title;
     _messageBoxText = detailedText.isEmpty() ? text : text + QStringLiteral("\n\n") + detailedText;
     _messageBoxIcon = static_cast<int>(icon);
@@ -369,6 +376,13 @@ std::optional<QString> QmlWorkbenchController::presentFileDialog(WorkbenchUI::Se
     // Without a QML scene there is nobody who could answer the dialog, so the caller is told that it cannot have a file.
     if(_ui.view() == nullptr || _ui.view()->rootObject() == nullptr) {
         qWarning() << "Cannot ask for a session state file: the workbench window is not available.";
+        return {};
+    }
+
+    // The question a caller asks while another one is open would reset the state that one is blocked on, so it is
+    // refused here: a request that cannot be answered must say so instead of stealing the answer of the other one.
+    if(_fileDialogLoop != nullptr) {
+        qWarning() << "Cannot ask for a session state file: a file selection dialog is already open.";
         return {};
     }
 
@@ -463,6 +477,11 @@ int QmlWorkbenchController::choosePipeline(const QStringList& titles)
     // frontend that way as well).
     if(_ui.view() == nullptr || _ui.view()->rootObject() == nullptr) {
         qWarning() << "The session file contains" << titles.size() << "pipelines, of which only the first one can be kept.";
+        return 0;
+    }
+
+    if(_pipelineChoiceLoop != nullptr) {
+        qWarning() << "Cannot ask which pipeline to keep: the question is already open.";
         return 0;
     }
 

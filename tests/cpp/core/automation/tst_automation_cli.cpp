@@ -143,8 +143,14 @@ private Q_SLOTS:
     void initTestCase()
     {
         _binary = ovitoBinary();
-        if(_binary.isEmpty())
+        if(_binary.isEmpty()) {
+            // A build that does not produce the application (a frontend-only preset, a library build) has nothing to
+            // run, and skipping is honest there. A job that wrote the binary must not silently lose this coverage
+            // instead, so it asks for the failure: OVITO_REQUIRE_TEST_BINARY is set by the CI jobs that build it.
+            if(qEnvironmentVariableIsSet("OVITO_REQUIRE_TEST_BINARY"))
+                QFAIL("This build produced no ovito executable, although the test was told to require one.");
             QSKIP("This build produced no ovito executable to run the command line from.");
+        }
     }
 
     /// The verbs the help text offers, and the capabilities a client of the command line asks for.

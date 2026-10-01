@@ -338,6 +338,10 @@ private:
     /// The selected keys.
     VectorRefTargetListener<AnimationKey> _selectedKeys;
 
+    /// The track of each key row, in row order, rebuilt wherever the rows are (so that a repaint does not have to
+    /// search the tracks for the key of every row).
+    QVector<int> _rowTracks;
+
     /// The undo transaction of a continuous key drag, if one is in progress.
     UndoableTransaction _keyMoveTransaction;
 

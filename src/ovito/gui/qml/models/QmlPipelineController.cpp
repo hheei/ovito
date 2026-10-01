@@ -68,9 +68,8 @@ QString QmlPipelineController::selectedTitle() const
 ******************************************************************************/
 QString QmlPipelineController::objectIdAt(int row) const
 {
-    if(row < 0 || row >= (int)_pipelineModel->items().size())
-        return {};
-    return idOfObject(_pipelineModel->item(row)->object());
+    PipelineListItem* item = itemAt(row);
+    return item ? idOfObject(item->object()) : QString();
 }
 
 /******************************************************************************
@@ -86,9 +85,8 @@ int QmlPipelineController::rowForObjectId(const QString& objectId) const
 ******************************************************************************/
 QString QmlPipelineController::titleAt(int row) const
 {
-    if(row < 0 || row >= (int)_pipelineModel->items().size())
-        return {};
-    return _pipelineModel->item(row)->title();
+    PipelineListItem* item = itemAt(row);
+    return item ? item->title() : QString();
 }
 
 /******************************************************************************
@@ -96,7 +94,7 @@ QString QmlPipelineController::titleAt(int row) const
 ******************************************************************************/
 bool QmlPipelineController::isCheckedAt(int row) const
 {
-    if(row < 0 || row >= (int)_pipelineModel->items().size())
+    if(itemAt(row) == nullptr)
         return false;
     return _pipelineModel->data(_pipelineModel->index(row), PipelineListModel::CheckedRole).toBool();
 }
@@ -106,7 +104,7 @@ bool QmlPipelineController::isCheckedAt(int row) const
 ******************************************************************************/
 void QmlPipelineController::selectRow(int row, bool toggle)
 {
-    if(row < 0 || row >= (int)_pipelineModel->items().size())
+    if(itemAt(row) == nullptr)
         return;
     _pipelineModel->selectionModel()->select(_pipelineModel->index(row),
         toggle ? QItemSelectionModel::Toggle : QItemSelectionModel::ClearAndSelect);
@@ -137,7 +135,7 @@ void QmlPipelineController::clearSelection()
 ******************************************************************************/
 bool QmlPipelineController::setCheckedAt(int row, bool checked)
 {
-    if(row < 0 || row >= (int)_pipelineModel->items().size())
+    if(itemAt(row) == nullptr)
         return false;
     return _pipelineModel->setData(_pipelineModel->index(row), checked, PipelineListModel::CheckedRole);
 }
@@ -253,6 +251,16 @@ bool QmlPipelineController::insertModifier(int category, int row)
 }
 
 /******************************************************************************
+* Returns the list item of a row, or null when there is no such row.
+******************************************************************************/
+PipelineListItem* QmlPipelineController::itemAt(int row) const
+{
+    if(row < 0 || row >= (int)_pipelineModel->items().size())
+        return nullptr;
+    return _pipelineModel->item(row);
+}
+
+/******************************************************************************
 * Returns the list item that shows the object of an ID.
 ******************************************************************************/
 PipelineListItem* QmlPipelineController::itemForObjectId(const QString& objectId) const
@@ -296,15 +304,11 @@ QString QmlPipelineController::idOfObject(OvitoObject* object) const
     AutomationSession* session = _ui.automationSession();
     if(!session)
         return {};
-    // Only the kinds the automation contract can name get an ID; see the class documentation for the rest.
+    // A modification node is the only object of this list the automation contract can name: no row ever holds a
+    // pipeline, a scene node or a viewport, and the rows that hold a visual element, a modifier group or the source
+    // node are named by their row instead (audit decisions D55 and D62).
     if(dynamic_object_cast<ModificationNode>(object))
         return session->objects().idFor(object, AutomationObjectId::Kind::Modifier);
-    if(dynamic_object_cast<Pipeline>(object))
-        return session->objects().idFor(object, AutomationObjectId::Kind::Pipeline);
-    if(dynamic_object_cast<SceneNode>(object))
-        return session->objects().idFor(object, AutomationObjectId::Kind::SceneNode);
-    if(dynamic_object_cast<Viewport>(object))
-        return session->objects().idFor(object, AutomationObjectId::Kind::Viewport);
     return {};
 }
 

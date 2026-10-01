@@ -341,7 +341,9 @@ QVariant QmlAnimationModel::data(const QModelIndex& index, int role) const
     const AnimationKey* key = keyAt(index.row());
     if(!key)
         return {};
-    const int track = trackOfKey(key);
+    // The rows were filled from the controllers, so the track of a row is known without walking them again: a view
+    // asks for this on every repaint, and a walk per role made a repaint cost one scan per row.
+    const int track = (index.row() >= 0 && index.row() < _rowTracks.size()) ? _rowTracks[index.row()] : trackOfKey(key);
     switch(role) {
     case Qt::DisplayRole:
     case ValueRole:
@@ -447,7 +449,9 @@ void QmlAnimationModel::selectAllKeys()
     }
     _selectedKeys.setTargets(keys);
     Q_EMIT selectionChanged();
-    Q_EMIT dataChanged(index(0), index(rowCount() - 1), { SelectedRole, Qt::DisplayRole });
+    // An empty model has no row to report a change for, and the selection is the only thing that changed.
+    if(keyCount() != 0)
+        Q_EMIT dataChanged(index(0), index(keyCount() - 1), { SelectedRole });
 }
 
 void QmlAnimationModel::clearKeySelection()
@@ -763,12 +767,18 @@ void QmlAnimationModel::refreshKeys()
     _updatingTracks = true;
 
     beginResetModel();
-    // The keys of the tracks are observed as well, so that an edit of a single key reaches the rows that show it.
+    // The keys of the tracks are observed as well, so that an edit of a single key reaches the rows that show it. The
+    // rows are built in the order the tracks were collected in, which is what tells a row its track without a walk.
     QVector<AnimationKey*> keys;
-    for(KeyframeController* ctrl : _controllers.targets()) {
-        for(const OORef<AnimationKey>& key : ctrl->keys())
+    QVector<int> rowTracks;
+    const auto& controllers = _controllers.targets();
+    for(int index = 0; index < controllers.size(); index++) {
+        for(const OORef<AnimationKey>& key : controllers[index]->keys()) {
             keys.push_back(key.get());
+            rowTracks.push_back(index);
+        }
     }
+    _rowTracks = std::move(rowTracks);
     const auto& observed = _keys.targets();
     if(observed.size() != keys.size() || !std::equal(keys.begin(), keys.end(), observed.begin(), [](AnimationKey* key, const OORef<AnimationKey>& observedKey) { return key == observedKey.get(); })) {
         _keys.clear();

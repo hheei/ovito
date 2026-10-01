@@ -113,8 +113,9 @@ void PipelineListModel::rememberRemovedObject(RefTarget* object)
     if(!object)
         return;
 
-    // Forget the objects of earlier removals that cannot come back, and keep the list short: it only has to remember
-    // what the next undo could return.
+    // Forget the objects of earlier removals that cannot come back, and keep the list bounded: the objects a single
+    // undo brings back are the ones just removed, so what is dropped here can only be the tail of a deletion that
+    // removed more objects at once than this list remembers.
     constexpr std::size_t maxRememberedObjects = 8;
     std::erase_if(_removedObjects, [](const OOWeakRef<RefTarget>& ref) { return ref.expired(); });
     while(_removedObjects.size() >= maxRememberedObjects)
