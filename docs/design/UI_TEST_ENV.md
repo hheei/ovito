@@ -396,6 +396,14 @@ The spike exits `0` when every check passed, `1` when a check failed (the measur
 no interpreter to measure, so a CI job can tell a failure from a skip. It starts and kills its own interpreters; if a run
 is interrupted, `pgrep -fl ovito_worker.py` finds a leftover one, which is the only process it can leak.
 
+One more rule follows from what the probe *is*: the version envelope of `PythonContract` (CPython 3.10 to 3.13) is checked
+before the platform, the package and the features, so a case that tests one of those three needs an interpreter the probe
+does not reject first. `SKIP_WITHOUT_SUPPORTED_PYTHON` in that file looks for the machine's `python3` and then for
+`python3.13` ... `python3.10`, and *skips* a case when none of them is inside the envelope - failing would blame the code
+for the machine. The GitHub runners' default `python3` is newer than the envelope (3.14.7 when this was written), which is
+why all three CI jobs install a supported interpreter (`actions/setup-python`, 3.13) before CTest: `ctest` counts a skipped
+case as passed, so those rules would otherwise be tested nowhere.
+
 ### 4.3 Running the local-protocol spike
 
 The discovery half is a CTest case like any other (`tst_session_descriptor`); the endpoint itself is driven by a program

@@ -525,6 +525,20 @@ counterpart must enumerate the same registry instead of naming utilities. The ob
    (`Fatal Python error: _enter_buffered_busy`, because the reader thread holds the buffered-reader lock while the
    interpreter finalizes), so a worker that answered `quit` was reported as one that had to be killed. The spike never saw
    it, because the spike always killed its worker; the bridge's `stop()` asks first, and now the answer is exit code 0.
+11. **The probe suite could only pass on a machine whose interpreter is inside the envelope.** The CI matrix found this
+   the first time the Phase 2.6 code reached it: all three platforms failed `tst_python_environment_probe` with
+   `The environment "/opt/hostedtoolcache/Python/3.14.7/x64/bin/python3" is CPython 3.14.7, but this build supports CPython
+   3.10 to 3.13`. The probe was right - that is D48's envelope - and the suite was wrong: five cases ran against whatever
+   `python3` the machine had while asserting a *package* verdict or a package rule, although the version check (step 2 of
+   `PythonEnvironmentProbe::validate`) comes first, so an interpreter outside the envelope made four cases fail and one assert
+   the wrong statement. The two questions are now separated: `probe_finds_the_interpreter_of_this_machine` asserts the verdict
+   the envelope *implies* for the interpreter it found (including `PythonUnsupported`), and the cases that test the platform,
+   the package and the features take an interpreter the probe accepts (`SKIP_WITHOUT_SUPPORTED_PYTHON`, looking for `python3`
+   and then `python3.13`/`python3.12`/`python3.11`/`python3.10`) and skip when the machine runs none - the envelope itself
+   stays covered by the handshake cases, which need no real interpreter. Since `ctest` counts a skip as passed, the three CI
+   jobs install a CPython the contract supports (`actions/setup-python`, 3.13) before CTest, so those rules are tested there
+   rather than skipped. Verified on a machine whose default `python3` is 3.14.4 with `/usr/bin/python3.12` next to it (22
+   passed, 0 skipped, the fallback doing its work) and on one that has only 3.14 (18 passed, 0 failed, 4 skipped).
 
 ### Decisions
 
