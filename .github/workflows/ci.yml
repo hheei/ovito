@@ -504,11 +504,21 @@ jobs:
           $env:PATH = "${{ github.workspace }}\build;$vcpkg\installed\x64-windows\bin;$env:PATH"
           ctest --test-dir build --rerun-failed -V
           $plan = ctest --test-dir build --rerun-failed --show-only=json-v1 | ConvertFrom-Json
+          $number = 0
           foreach ($test in $plan.tests) {
-            $command = $test.command
-            Write-Host "DIAGNOSE $($test.name): $($command -join ' ')"
-            & $command[0] @($command[1..($command.Count - 1)])
+            $command = @($test.command)
+            $executable = $command[0]
+            # A one-element command sliced as $command[1..0] wraps around and passes the executable to itself, which
+            # QtTest reports as an unknown test function instead of running anything.
+            $arguments = if ($command.Count -gt 1) { $command[1..($command.Count - 1)] } else { @() }
+            $log = Join-Path $env:RUNNER_TEMP ("qtlog-{0}.txt" -f $number++)
+            Write-Host "DIAGNOSE $($test.name): $executable $($arguments -join ' ')"
+            # QtTest writes this run's whole log into a file of its own. That is the point: on the Windows runner the
+            # output of a failing test reaches neither the console nor CTest's capture, so the file is what carries the
+            # failure messages, and it is printed here.
+            & $executable @arguments -o "$log,txt"
             Write-Host ("DIAGNOSE {0} exit={1} (0x{2:X8})" -f $test.name, $LASTEXITCODE, $LASTEXITCODE)
+            Get-Content $log -ErrorAction SilentlyContinue | Select-Object -Last 60
           }
           exit 1
 

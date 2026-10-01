@@ -983,6 +983,18 @@ cases of `tst_session_descriptor`. Four traps are behind that, and each is a rul
   caller is entitled to trust the line ending. The worker writes its header lines through `sys.stdout.buffer` now
   (`_write_line()`), which is the same stream the raw payload uses and is never translated; every write holds the one
   output lock, so a header cannot be interleaved with an answer from the reader thread.
+* **A Windows build puts the executable in the build directory, not in `bin/`.** `OVITO_RELATIVE_BINARY_DIRECTORY` is
+  `bin` on Linux, `<name>.app/Contents/MacOS` on macOS and **`.`** on Windows (a Conda build is the exception), so
+  `tst_automation_cli`'s search for the running `ovito` failed on the Windows runner although the executable was in the
+  build root it walked through - and because the job sets `OVITO_REQUIRE_TEST_BINARY=1`, that was a `QFAIL` rather than
+  the `QSKIP` a build without an application deserves. The walk now looks for `ovito`, `bin/ovito` and the bundle paths
+  in every directory it visits.
+* **A test can fail without its output reaching the log.** `tst_python_data_bridge` and `tst_session_descriptor` failed
+  on the Windows runner with exit code 1 - an ordinary QtTest failure, not a crash - while `ctest --output-on-failure`
+  and even a verbose rerun printed nothing at all for them, so the log said only `***Failed`. When that happens, ask the
+  test for its own log instead of relying on the console: `tst_x.exe -o <file>,txt` writes the whole run (every `FAIL!`
+  line and the totals) into the file, and the Windows job's diagnostic step does exactly that for each failed test. The
+  missing output is worth knowing about on its own: a silent `***Failed` does not mean a crashed process.
 * **A temporary path behind a symbolic link is not the path the process reports.** Asserting that a working directory
   changed has to compare *canonical* paths: `QDir::currentPath()` answers in the form the operating system resolved, so
   a directory created through a symbolic link never matches the string it was created from. On macOS this bites every

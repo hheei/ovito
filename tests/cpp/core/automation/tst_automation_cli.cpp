@@ -62,7 +62,14 @@ private:
 /// a library-only build - makes the suite skip itself rather than fail.
 QString ovitoBinary()
 {
+    // Every layout the build can produce: a Linux or Conda build puts the executable in bin/, a macOS build inside
+    // the application bundle, and a plain Windows build (*not* a Conda one) directly into the build directory, because
+    // OVITO_RELATIVE_BINARY_DIRECTORY is "." there - which is why the walk has to look at the directory itself and not
+    // only for bin/ below it. Missing that candidate made this suite fail on the Windows runner for want of a binary
+    // that was sitting right there (see UI_TEST_ENV.md 6.2).
     const QStringList candidates = {
+        QStringLiteral("ovito"),
+        QStringLiteral("ovito.exe"),
         QStringLiteral("bin/ovito"),
         QStringLiteral("bin/ovito.exe"),
         QStringLiteral("bin/Ovito.app/Contents/MacOS/ovito"),
