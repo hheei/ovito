@@ -869,9 +869,10 @@ the last column owns the first user-facing implementation and acceptance gate.
   over `ActionManager` (D57); a continuous edit is one `UndoableTransaction` per gesture (D58); a workbench serves a
   local session only when it is asked to (D59); and the CLI JSON mode is a mode of the `ovito` binary (D60). The phase
   runs in four slices - **S1** = deliverables 1, 3, 4 and 5, **S2** = deliverable 2, **S3** = deliverable 6,
-  **S4** = deliverable 7 - and §8 Verification names the check each slice adds. **S1 (deliverables 1, 3, 4 and 5) and
-  S2 (deliverable 2) are delivered and verified** by the new `--qml-pipeline-check` and `--qml-animation-check` steps and
-  `ctest --preset native` (11/11); the next slice is S3, the session workflow.
+  **S4** = deliverable 7 - and §8 Verification names the check each slice adds. **S1 (deliverables 1, 3, 4 and 5), S2
+  (deliverable 2) and S3 (deliverable 6) are delivered and verified** by the new `--qml-pipeline-check` and
+  `--qml-animation-check` steps, the extended `--qml-session-check` and `ctest --preset native` (11/11); the last slice
+  is S4, the automation foundation.
 - **Deliverables**:
   1. Pipeline presentation using the Phase 0 reuse decision: roles, selection, source/visual-element rows, groups, shared objects, and evaluation status. New adapters, if needed, live under `src/ovito/gui/qml/models/`.
   2. Animation presentation for the scene interval, current time/frame, playback settings, controllers, and keyframe selection. Add scene selection adaptation only where the shared API needs it.
@@ -885,7 +886,7 @@ the last column owns the first user-facing implementation and acceptance gate.
      Phase 4 work. Implement discrete transactions and continuous begin/update/commit/cancel edits as defined in design
      section 5.3.
   5. Define selection/status refresh and edit cancellation on target deletion, undo/redo, and dataset replacement. Do not retain row indices as object identity across deferred work.
-  6. Session save/open and modified-session close handling using extracted shared operations and QML dialogs. Define scene-change and save-failure behavior before users rely on editing sessions.
+  6. Session save/open and modified-session close handling using extracted shared operations and QML dialogs. Define scene-change and save-failure behavior before users rely on editing sessions. *Delivered in S3 per D64-D66*: the shared operations `openSession()`/`saveSessionAs()`/`openSessionFile()`/`canCloseWorkbench()`, the file question of the frontend (a QML `FileDialog` behind `requestSessionFilePath()`, answered by a nested event loop), the wired Open/Save/Save As commands, and the working-directory rule of the shared import path.
   7. **Automation foundation**: consume the Phase 2.6 machine-facing contracts to expose read-only session queries,
      stable object IDs, revisions, structured errors, task/event subscriptions and a local JSONL/IPC endpoint. The first
      CLI mode is read-only and must use the same query catalog as later writable clients. Production viewport PNG capture

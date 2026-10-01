@@ -1113,13 +1113,27 @@ Traps:
 
 ### 9.2.1 Testing the session workflow
 
-`--qml-session-check` verifies the session workflow of `WorkbenchUI` (audit decision D28), which the classic main window
-uses as well and which a Qt Quick session command will bind to: the scene is saved to a `.ovito` file (`saveSessionFile()`
-writes it, the workbench remembers the path, the session counts as unmodified), a change marks the session as modified
-(`isSessionModified()`), saving again through `saveSession()` clears that without asking for a file name, loading the file
-back with `loadSessionFile()` replaces the current scene by the saved one, the file becomes the most recently opened file,
-and `saveSession()` on a session without a file name reports the missing file dialog of the frontend instead of failing
-silently.
+`--qml-session-check` verifies the session workflow of `WorkbenchUI` (audit decisions D28, D64-D66), which both frontends
+use: the scene is saved to a `.ovito` file (`saveSessionFile()` writes it, the workbench remembers the path, the session
+counts as unmodified), a change marks the session as modified (`isSessionModified()`), saving again through `saveSession()`
+clears that without asking for a file name, loading the file back with `loadSessionFile()` replaces the current scene by
+the saved one, the file becomes the most recently opened file, and the file dialog of the frontend decides where a session
+without a file name goes:
+
+1. saving, modifying and reloading a session, the modified marker in the window title and the recent-files entry;
+2. the file question of the frontend: a *cancelled* dialog leaves the session without a file and writes nothing, an
+   *answered* one writes the session where it points and the session adopts that file, and the `FileSaveAs` command asks
+   again although the session has a file of its own - and the check asserts that the shell *presented* the dialog it is
+   waiting on (`QmlWorkbenchController::fileDialogPresented()`), not only that it reported the request;
+3. a save that cannot be written (the parent directory of the target does not exist): no file is written, the session
+   keeps its file and its modified state, and the frontend reports the reason in the status line and in an error dialog;
+4. `openSession()` through the same dialog, which loads the file it answered with;
+5. a directory handed to the shared import path, which becomes the working directory of the process and opens the import
+   dialog there (D66);
+6. the question about unsaved changes when the workbench is closed (`canCloseWorkbench()`), answered three ways:
+   cancelling keeps the window open and the changes, discarding lets it close, saving writes the session and clears the
+   marker - through the window's own close event as well as through the command;
+7. the recent-files entry and a `.ovito` file handed to the import path, which both restore the saved session.
 
 Traps:
 
@@ -1127,9 +1141,14 @@ Traps:
   empty scene) and imports a small lattice of its own if the scene is empty - `loadSessionFile()` of an empty scene would
   otherwise pass every assertion while verifying nothing.
 * **A loaded session replaces the data set**, so every pointer into the scene (the scene node, its children) is invalid
-  afterwards and has to be looked up again.
+  afterwards and has to be looked up again, and so is the `DataSet` itself: writing the session file path of a session the
+  check loaded has to go through `datasetContainer().currentSet()`, not through the data set it started with.
+* **The file dialog is answered from an event loop turn.** The shared workflow blocks in the dialog, so the answer has to
+  arrive from a timer (`answerNextFileDialog()`), exactly like the answer to the question about unsaved changes
+  (`answerNextMessageBox()`). The spike application sets `Qt::AA_DontUseNativeDialogs`, so the check drives Qt's own
+  dialog implementation; the native dialog of macOS and Windows is what a *user* sees and is not covered by a check.
 * **The check writes user settings**: the recently opened files are persisted in `QSettings` under `file/mru`, like the
-  recent-files menu of the classic frontend does.
+  recent-files menu of the classic frontend does, and the session file directory is remembered.
 
 ### 9.2.2 Testing the shared settings facade
 
