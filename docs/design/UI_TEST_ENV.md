@@ -729,6 +729,27 @@ host uses for its own work stay as they are:
   `-DOVITO_REDISTRIBUTABLE_PACKAGE=ON` — the option that makes the *bundled* HDF5/NetCDF submodules be built instead of a
   system HDF5 being looked for, which is why a machine without HDF5 can configure at all — and `-DOVITO_BUILD_CPP_TESTS=ON`.
 
+**The Qt Quick smoke list runs on all three machines, not only on the runners.** It is one invocation - the
+`QML_SMOKE_CHECKS` list of `.github/workflows/ci.yml` plus the dataset - and the only per-platform differences are where
+the spike binary sits and which environment stands in for the GPU:
+
+| | spike binary | how it is launched |
+| --- | --- | --- |
+| Linux | `build-native/bin/ovito-qml-spike` | `xvfb-run` with `QT_QPA_PLATFORM=xcb` |
+| Windows (kitty) | `C:\ovito\build-verify\ovito-qml-spike.exe` | `QT_PLUGIN_PATH`, `QT_QPA_PLATFORM_PLUGIN_PATH`, `QML_IMPORT_PATH`/`QML2_IMPORT_PATH` pointed at the Qt prefix, `QSG_RHI_PREFER_SOFTWARE_RENDERER=1`, `QT_FORCE_STDERR_LOGGING=1` (section 5.5) |
+| macOS (buddy) | `build/Ovito.app/Contents/MacOS/ovito-qml-spike` | `QT_QPA_PLATFORM=offscreen`; the console session of that host is what presents the window (section 5.2) |
+
+The list builds the spike first (`ninja OvitoQmlSpike`), generates or copies a `lattice_512.xyz`, and asks the run for
+`--qml-frame-stats 2000 --qml-hide-show` on top of the shared list on Windows and Linux (macOS omits those two, as the
+workflow does).
+
+**What an ssh logon cannot verify: a window that was never presented.** On kitty the frontend renders zero frames,
+because the logon has no desktop session to present to - and Qt says so itself (`window exposed: false`). Everything the
+frontend renders *without* a window is still verified there: the offscreen check renders through its own render target,
+and the prewarm check's picking buffer holds real content ("subobject 295"). The frame-rate check therefore fails only a
+window that reports `isExposed()`, and prints the exposure state otherwise, so the host is not reported as a frontend
+defect. macOS has a console session, and the same check measures 150 fps there.
+
 **An interrupted remote build leaves processes behind, and they hold the build tree.** A build started over `ssh` and
 then cut off (a session that ends, a caller that kills the background job) leaves `ninja.exe`, `cl.exe`, `link.exe` and
 `cmake.exe` running on the host, still holding the object files and `.ninja_deps` of the target they were writing. The
