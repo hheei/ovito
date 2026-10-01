@@ -26,8 +26,10 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
 #include <QProcessEnvironment>
 #include <QSet>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 
 using namespace Ovito;
@@ -41,6 +43,19 @@ using namespace Ovito;
     const QString interpreter = PythonEnvironmentProbe::findInterpreter();                                                       \
     if(interpreter.isEmpty())                                                                                                    \
     QSKIP("This machine has no python3 executable on its path.")
+
+/**
+ * Skips the current test case on a machine that runs no CPython inside the envelope this build declares, and defines
+ * `interpreter` for the case. Several cases test a rule that sits behind the version check (the package, the platform,
+ * the features), so they need an interpreter the probe does not reject before reaching that rule. A machine that only
+ * runs a newer or older CPython therefore loses those cases instead of reporting a failure its environment cannot
+ * help - the version rule itself is covered by contract_declares_a_bounded_python_envelope,
+ * probe_reports_an_unsupported_python and probe_finds_the_interpreter_of_this_machine.
+ */
+#define SKIP_WITHOUT_SUPPORTED_PYTHON()                                                                                          \
+    const QString interpreter = findSupportedInterpreter();                                                                     \
+    if(interpreter.isEmpty())                                                                                                    \
+    QSKIP("This machine has no CPython within the supported range on its path.")
 
 class PythonEnvironmentProbeTest : public QObject
 {
@@ -96,6 +111,12 @@ private:
 
     /// A request that runs a fixture probe script instead of the built-in one.
     PythonProbeRequest requestForFixtureScript(const QString& interpreter, const QString& scriptPath);
+
+    /**
+     * The interpreter of this machine when it is a CPython inside the declared envelope, otherwise a versioned one
+     * that is, or an empty string when this machine runs none.
+     */
+    static QString findSupportedInterpreter();
 
     /**
      * Writes a probe script that prints the given handshake verbatim, so that a case tests a validation rule rather
@@ -332,29 +353,40 @@ void PythonEnvironmentProbeTest::probe_finds_the_interpreter_of_this_machine()
 
     const PythonProbeResult result = PythonEnvironmentProbe::probeBlocking(request);
 
-    // This machine has no ovito package, so the verdict is PackageMissing - unless someone installed one, in which
-    // case the same probe must have accepted it. Both are a statement about the machine, and the parts that are about
-    // the interpreter have to hold either way.
-    QVERIFY(result.status() == PythonContract::ProbeStatus::PackageMissing ||
-            result.status() == PythonContract::ProbeStatus::Compatible);
+    // The verdict is a statement about this machine, and a machine may well run a CPython outside the declared
+    // envelope (a newer one, for instance): the probe then reports the interpreter as unsupported instead of asking
+    // it for a package. Both are correct answers, so this case asserts the rule rather than one machine's outcome -
+    // a machine with no ovito package answers PackageMissing, one that has a usable package answers Compatible, and
+    // one whose interpreter is outside the envelope answers PythonUnsupported.
     QVERIFY(result.handshake().has_value());
     const PythonEnvironmentInfo& environment = result.handshake()->environment();
-    QCOMPARE(environment.implementation(), QStringLiteral("cpython"));
-    QVERIFY(PythonContract::supportsPythonVersion(environment.versionMajor(), environment.versionMinor()));
+    const bool interpreterIsSupported =
+        environment.implementation().compare(QStringLiteral("cpython"), Qt::CaseInsensitive) == 0 &&
+        PythonContract::supportsPythonVersion(environment.versionMajor(), environment.versionMinor());
+    if(interpreterIsSupported) {
+        QVERIFY(result.status() == PythonContract::ProbeStatus::PackageMissing ||
+                result.status() == PythonContract::ProbeStatus::Compatible);
+    }
+    else {
+        QCOMPARE(result.status(), PythonContract::ProbeStatus::PythonUnsupported);
+        QVERIFY(result.message().contains(QStringLiteral("supports CPython")));
+    }
+
+    // What holds about the interpreter in either case.
     QVERIFY(QFileInfo(environment.executable()).isAbsolute());
     QCOMPARE(QFileInfo(environment.executable()).canonicalFilePath(), QFileInfo(interpreter).canonicalFilePath());
     QVERIFY(!environment.cacheTag().isEmpty());
     QVERIFY(environment.isIsolated());
 
     // The verdict explains itself, and the details carry the machine-readable form of the same statement.
+    QVERIFY(!result.details().value(QStringLiteral("supportedPython")).toString().isEmpty());
+    QVERIFY(result.details().contains(QStringLiteral("executable")));
     if(result.status() == PythonContract::ProbeStatus::PackageMissing) {
         QVERIFY(result.message().contains(QStringLiteral("ovito")));
         QVERIFY(result.message().contains(QStringLiteral("does not install")));
-        QVERIFY(!result.details().value(QStringLiteral("supportedPython")).toString().isEmpty());
-        QVERIFY(result.details().contains(QStringLiteral("executable")));
         QCOMPARE(result.details().value(QStringLiteral("packageFound")).toBool(), false);
     }
-    else {
+    else if(result.status() == PythonContract::ProbeStatus::Compatible) {
         QVERIFY(result.handshake()->package().isUsable());
     }
     QCOMPARE(result.statusName(), PythonContract::probeStatusName(result.status()));
@@ -391,7 +423,7 @@ void PythonEnvironmentProbeTest::probe_blocking_matches_the_asynchronous_interfa
 ******************************************************************************/
 void PythonEnvironmentProbeTest::probe_accepts_a_compatible_package()
 {
-    SKIP_WITHOUT_PYTHON();
+    SKIP_WITHOUT_SUPPORTED_PYTHON();
     const QString directory = writeFixturePackage(PythonContract::featureNames(PythonContract::defaultRequiredFeatures()));
     QVERIFY(!directory.isEmpty());
 
@@ -414,7 +446,7 @@ void PythonEnvironmentProbeTest::probe_accepts_a_compatible_package()
 
 void PythonEnvironmentProbeTest::probe_reports_a_package_that_cannot_be_imported()
 {
-    SKIP_WITHOUT_PYTHON();
+    SKIP_WITHOUT_SUPPORTED_PYTHON();
     // The package is present in the environment, and importing it raises: exactly the mixed installation the design
     // says a manifest cannot rule out.
     const QString directory = writeFixturePackage(PythonContract::featureNames(PythonContract::defaultRequiredFeatures()),
@@ -436,7 +468,7 @@ void PythonEnvironmentProbeTest::probe_reports_a_package_that_cannot_be_imported
 
 void PythonEnvironmentProbeTest::probe_reports_an_incompatible_protocol_version()
 {
-    SKIP_WITHOUT_PYTHON();
+    SKIP_WITHOUT_SUPPORTED_PYTHON();
     const QString directory = writeFixturePackage(PythonContract::featureNames(PythonContract::defaultRequiredFeatures()),
                                                  QStringLiteral("2.0"));
     QVERIFY(!directory.isEmpty());
@@ -451,7 +483,7 @@ void PythonEnvironmentProbeTest::probe_reports_an_incompatible_protocol_version(
 
 void PythonEnvironmentProbeTest::probe_reports_a_missing_feature()
 {
-    SKIP_WITHOUT_PYTHON();
+    SKIP_WITHOUT_SUPPORTED_PYTHON();
     // A package of the right protocol version that cannot run the first modifier contract: metadata only.
     const QString directory = writeFixturePackage({ QStringLiteral("schema.introspection") });
     QVERIFY(!directory.isEmpty());
@@ -762,6 +794,38 @@ void PythonEnvironmentProbeTest::probe_emits_exactly_one_verdict()
 /******************************************************************************
 * Helpers.
 ******************************************************************************/
+QString PythonEnvironmentProbeTest::findSupportedInterpreter()
+{
+    // The interpreter of the machine comes first, so that a normal development machine runs the cases with the one a
+    // user's environment selection would find; the versioned names follow, so that a machine whose default python3 is
+    // outside the envelope still runs them with a supported interpreter it happens to have.
+    const QStringList candidates = { PythonEnvironmentProbe::findInterpreter(), QStringLiteral("python3.13"),
+                                     QStringLiteral("python3.12"), QStringLiteral("python3.11"),
+                                     QStringLiteral("python3.10") };
+    for(const QString& candidate : candidates) {
+        if(candidate.isEmpty())
+            continue;
+        const QString executable = QFileInfo(candidate).isAbsolute() ? candidate : QStandardPaths::findExecutable(candidate);
+        if(executable.isEmpty())
+            continue;
+
+        // Not the probe itself: this asks a different question (is this interpreter inside the envelope?) and must
+        // not report a verdict about it.
+        QProcess process;
+        const QString versionScript =
+            QStringLiteral("import sys; print(sys.implementation.name, sys.version_info[0], sys.version_info[1])");
+        process.start(executable, { QStringLiteral("-I"), QStringLiteral("-c"), versionScript });
+        if(!process.waitForFinished(10000) || process.exitCode() != 0)
+            continue;
+        const QStringList fields = QString::fromUtf8(process.readAllStandardOutput()).simplified().split(QLatin1Char(' '));
+        if(fields.size() != 3 || fields.at(0) != QStringLiteral("cpython"))
+            continue;
+        if(PythonContract::supportsPythonVersion(fields.at(1).toInt(), fields.at(2).toInt()))
+            return executable;
+    }
+    return {};
+}
+
 QString PythonEnvironmentProbeTest::writeFixture(const QString& relativePath, const QString& content)
 {
     const QString path = _tempDirectory.filePath(relativePath);

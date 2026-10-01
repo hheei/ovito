@@ -139,6 +139,15 @@ jobs:
           cmake --build --preset ci-linux --parallel "$(nproc)"
           ccache --show-stats
 
+      # The Python suites test the environment rules of the package contract, and the first of those rules is the
+      # version envelope of PythonContract (CPython 3.10 to 3.13). The runners' default python3 is newer than that, so
+      # the cases that need an interpreter inside the envelope would skip themselves and the job would go green without
+      # having tested them (the same hole OVITO_REQUIRE_TEST_BINARY closes for a missing application).
+      - name: Install a Python the contract supports
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
       - name: Test (CTest)
         env:
           QT_QPA_PLATFORM: offscreen
@@ -272,6 +281,11 @@ jobs:
         run: |
           cmake --build --preset ci-macos --parallel "$(sysctl -n hw.ncpu)"
           ccache --show-stats
+
+      - name: Install a Python the contract supports
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
 
       - name: Test (CTest)
         env:
@@ -427,6 +441,11 @@ jobs:
         run: |
           cmake --build --preset ci-windows --parallel $env:NUMBER_OF_PROCESSORS
           if (Get-Command ccache -ErrorAction SilentlyContinue) { ccache --show-stats }
+
+      - name: Install a Python the contract supports
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
 
       - name: Test (CTest)
         env:
