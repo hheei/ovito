@@ -1429,6 +1429,33 @@ A new check is one entry in `main.cpp`'s `spikeSteps()` table - the option, the 
 
 Order matters and the table's comments say why: the checks run in the order of the table, the importing checks come last because they load data sets of their own, and the shell checks that only read state come before the ones that change the scene. A new check that leaves the scene in a different state belongs at the end of the list, or it has to restore the scene itself.
 
+**Every check declares the phases it walks through.** `declareCheckPhases({...})` at the top of a check names them in the
+order they run, `reportCheckPhase("...")` marks each one as it is reached, and the harness reports a failure when the
+check's continuation arrives with a declared phase missing:
+
+```
+VERIFY_FAILED "qml-pipeline-check stopped early: it declared 8 phase(s) and never reached command list"
+```
+
+This exists because a check that stops early used to be indistinguishable from a check that verified everything: both
+called their continuation and both left the failure counter at zero, so a phase that bailed out - a missing
+precondition, an awaited state that never arrived, a phase deleted while the rest of the chain was adapted - read as a
+pass in CI. The three rules are:
+
+* **One report per phase, not per continuation.** The chains in these checks call their continuation at every
+  intermediate step (streaming one large file in chunks, waiting for a polling condition on the way to a phase), and
+  those are not phases. A phase may be reported more than once - a phase that iterates over the objects of a scene is
+  one phase - and only completeness is checked, not a count.
+* **A skipped phase still reports.** A section that is skipped because the platform or the data set provides nothing to
+  check walks its phase anyway (the report sits at the end of the section, not inside the branch that would run its
+  body); the skip is reported by the check itself, as `qInfo("... (skipped) ...")`. A conditional phase is declared
+  conditionally, e.g. `declareCheckPhases({ "device", hasGpu ? "render" : "no render" })`.
+* **A report of a phase that was not declared is a failure too**, which is what keeps the declaration and the check from
+  drifting apart in the other direction: adding a phase means adding it to the declaration in the same edit.
+
+A step whose check declares nothing is not checked at all - that is the state `--qml-startup-delay` is in, because it
+waits rather than verifying something - and it is the only kind of step that may do so.
+
 ### 9.2.9 Testing the pipeline model (Phase 3, S1)
 
 `--qml-pipeline-check` verifies what a QML view reads from the shared pipeline model and what it may write back through it

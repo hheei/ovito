@@ -814,7 +814,27 @@ counterpart must enumerate the same registry instead of naming utilities. The ob
     `animationModel()` and `insertModifier()`, and every one of those calls `reportVerificationFailure()` before
     returning null. What is left of that thought is a hardening idea, not a defect - the harness counts failures, not
     completion, so a phase that stopped being reached would not be noticed (the false pass of the first
-    `--qml-pipeline-check` had exactly that shape); a per-check phase count is the change that would notice it.
+    `--qml-pipeline-check` had exactly that shape); the phase contract of finding 22 is the change that notices it.
+
+22. **The harness counted failures, not completion, so a check that stopped early passed - and the checks now declare the
+    phases they walk through.** The first `--qml-pipeline-check` of the S1 work is the proof: it exited 0 with
+    `VERIFICATION_DONE with 0 failed check(s)` although only its first phases had run, because the way a check ends - it
+    calls the continuation it was given - was the same whether it had verified everything or had bailed out at its first
+    missing precondition, and only an explicit `reportVerificationFailure()` moved the counter. Every check therefore
+    declares its phases at its top (`declareCheckPhases({ "roles and identity", "insertion", ... })`) and reports each one
+    as it is reached (`reportCheckPhase("insertion")`); the harness opens that contract around each step of
+    `spikeSteps()`, and when the check's continuation arrives it reports what is missing:
+    `qml-pipeline-check stopped early: it declared 8 phase(s) and never reached command list`. A report of a phase that
+    was not declared is a failure as well, so the declaration and the check cannot drift apart in either direction, and a
+    phase that a check skips because the platform or the data set offers nothing to check is still reported - the skip is
+    the check's own `(skipped)` line, while the phase says the check walked to the end of its scope. Both messages were
+    verified against a deliberately broken declaration: a declaration with an extra phase and a report of an undeclared
+    one produced exactly the two `VERIFY_FAILED` lines above and exit status 1 (finding 21's test).
+
+| # | Decision | Rationale |
+|---|---|---|
+| D71 | **A verification check declares the phases it walks through, and the harness fails the step when one of them was not reported.** `declareCheckPhases({...})` names the phases in run order, `reportCheckPhase("...")` marks each one, the harness wraps every step of `spikeSteps()` with the contract, and a step whose check declares nothing is not checked at all (the `--qml-startup-delay` wait). A phase may be reported more than once, only completeness is checked, a skipped section still reports its phase, and a report of an undeclared phase is a failure. | The harness counts *failures*, so "the check ran to the end of what it means to verify" was previously indistinguishable from "the check gave up early": both call the continuation and both leave the counter at zero, which is how the first `--qml-pipeline-check` reported success while verifying a fraction of its phases. A per-phase report is the smallest change that makes the difference visible, and it is deliberately a contract of the *check* rather than of the framework: a count of continuation calls would be meaningless (a phase polls, streams or waits several times) and a per-check flag would only say "it ended". Declaring a conditional phase with a conditional expression keeps the contract honest on platforms and data sets that skip work, and failing on an undeclared report is what keeps the declaration from rotting into a shorter list than the check has phases. |
+
 
 ### Verification
 
@@ -901,3 +921,10 @@ verified, which completes Phase 3.**
   of skipping when a binary that should exist does not - verified by moving `bin/ovito` aside, where the run then reports
   the failure and exits 1 instead of skipping with 0. The file-dialog guard is what `--qml-session-check` drives, and the
   animation model's row-to-track cache is what `--qml-animation-check` reads through its row roles.
+* **The phase contract of finding 22 is verified by running every check that declares one**, in the release build and in
+  the assert-enabled `build-asserts` build: the ten rendering and shell checks of the CI list, the five automation-side
+  checks of the Phase 2.6 suites, and the checks the CI list does not contain (`--qml-frame-stats`, `--qml-hide-show`,
+  `--qml-resize` and `--qml-device-check`) all report 0 failed checks, and the whole `QML_SMOKE_CHECKS` list of the CI
+  still reports one `VERIFICATION_DONE`. The contract's own failure paths were verified by breaking a declaration on
+  purpose: adding an unreached phase and a report of an undeclared one produced the two `VERIFY_FAILED` messages quoted
+  in finding 22 and exit status 1, so neither message is dead code.
