@@ -298,8 +298,6 @@ jobs:
 
       - name: Smoke test the Qt Quick frontend
         timeout-minutes: 10
-        env:
-          DYLD_LIBRARY_PATH: ${{ env.QT_ROOT_DIR }}/lib
         run: |
           python3 - <<'PY'
           import os, pathlib
@@ -309,10 +307,33 @@ jobs:
           lines += [f"Ar {i*a} {j*a} {k*a}" for i in range(n) for j in range(n) for k in range(n)]
           pathlib.Path(os.environ["RUNNER_TEMP"], "lattice_512.xyz").write_text("\n".join(lines) + "\n")
           PY
-          build/Ovito.app/Contents/MacOS/ovito-qml-spike \
-            # QML_SMOKE_CHECKS holds the check list as separate arguments, which is what shellcheck warns about.
-            # shellcheck disable=SC2086
-            $QML_SMOKE_CHECKS "$RUNNER_TEMP/lattice_512.xyz"
+          # The application finds Qt through the rpath it was linked with. install-qt-action exports
+          # DYLD_LIBRARY_PATH pointing at the Qt installation's lib directory, and on macOS that makes this frontend
+          # hang right after its bootstrap line: three runs stopped there (36682114351, 36686187926, 36691537242),
+          # and the value only became effective when the variable was renamed from the Qt6_DIR that the action does
+          # not export on macOS to QT_ROOT_DIR. The variable is therefore dropped on purpose, and a hang is sampled
+          # instead of only reported as a timeout (see UI_TEST_ENV.md 9.2.13).
+          unset DYLD_LIBRARY_PATH
+          # QML_SMOKE_CHECKS holds the check list as separate arguments, which is what shellcheck warns about.
+          # shellcheck disable=SC2086
+          build/Ovito.app/Contents/MacOS/ovito-qml-spike $QML_SMOKE_CHECKS "$RUNNER_TEMP/lattice_512.xyz" > spike.log 2>&1 &
+          SpikePid=$!
+          Hung=1
+          for _ in $(seq 1 90); do
+            kill -0 "$SpikePid" 2>/dev/null || { Hung=0; break; }
+            sleep 5
+          done
+          if [[ $Hung == 1 ]]; then
+            echo "SPIKE_HUNG: the frontend made no progress for 450 s; sampling the process."
+            sample "$SpikePid" 3 -file spike.sample.txt || true
+            head -150 spike.sample.txt || true
+            kill -9 "$SpikePid" || true
+            cat spike.log || true
+            exit 1
+          fi
+          wait "$SpikePid" || status=$?
+          cat spike.log
+          exit "${status:-0}"
 
   # ---------------------------------------------------------------------------
   # Windows AMD64 - the full product, with ccache.
