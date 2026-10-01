@@ -63,9 +63,18 @@ void WorkbenchUI::initializeWorkbench(QObject* parent)
     // line of the application, which is what both frontends share, rather than from the frontend: whether a workbench
     // may be reached from outside is a property of how it was started, not of how it presents itself.
     if(auto* application = dynamic_object_cast<StandaloneApplication>(Application::instance())) {
-        if(application->cmdLineParser().isSet(QStringLiteral("automation-serve")))
+        if(application->cmdLineParser().isSet(automationServeOption()))
             startAutomationServer();
     }
+}
+
+/******************************************************************************
+* Returns the definition of the option that makes this workbench serve its session.
+******************************************************************************/
+QCommandLineOption WorkbenchUI::automationServeOption()
+{
+    return QCommandLineOption(QStringList{QStringLiteral("automation-serve")},
+        tr("Serves the session of this workbench to local automation clients, read-only by default."));
 }
 
 /******************************************************************************

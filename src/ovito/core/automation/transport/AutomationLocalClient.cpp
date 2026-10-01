@@ -144,7 +144,11 @@ void AutomationLocalClient::disconnectFromEndpoint()
         if(_socket->state() == QLocalSocket::ConnectedState) {
             _socket->flush();
             _socket->disconnectFromServer();
-            _socket->waitForDisconnected(1000);
+            // disconnectFromServer() closes the local socket at once when there is nothing left to write,
+            // and waiting for a disconnect that already happened only makes Qt complain on stderr - which
+            // matters for a client whose output a script reads.
+            if(_socket->state() != QLocalSocket::UnconnectedState)
+                _socket->waitForDisconnected(1000);
         }
         _socket->deleteLater();
         _socket = nullptr;

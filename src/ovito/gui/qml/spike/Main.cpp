@@ -313,6 +313,10 @@ protected:
     void registerCommandLineParameters(QCommandLineParser& parser) override
     {
         StandaloneApplication::registerCommandLineParameters(parser);
+        // This application stands in for a real frontend, so it registers the start-up option that makes a workbench
+        // serve its session: the workbench reads it from the command line of the application (D70), and an application
+        // that does not register it would make the parser complain about an unknown option.
+        parser.addOption(WorkbenchUI::automationServeOption());
         // The options of the harness come from its tables, so that a check cannot be added without its option and
         // without the parser knowing about it (see the comment on SpikeStep). An option that enables two steps - the
         // picking option does - is registered once.

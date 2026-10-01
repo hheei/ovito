@@ -6,6 +6,7 @@
 
 #include <ovito/gui/base/GUIBase.h>
 #include <ovito/core/app/UserInterface.h>
+#include <QCommandLineOption>
 #include <ovito/core/dataset/io/FileImporter.h>
 
 namespace Ovito {
@@ -146,6 +147,12 @@ public:
     /// facing layer is a separate decision of the frontend.
     /// \return The session, or null before the workbench has been initialized (see initializeWorkbench()).
     AutomationSession* automationSession() const { return _automationSession; }
+
+    /// The start-up option that makes a workbench serve its session to local automation clients (D70).
+    ///
+    /// It is defined here rather than in a frontend, because the workbench is what reads it - so both frontends serve
+    /// under the same name, and a frontend application only has to register the option it supports.
+    static QCommandLineOption automationServeOption();
 
     /// Starts serving this workbench's session to local clients of the machine-facing layer.
     ///

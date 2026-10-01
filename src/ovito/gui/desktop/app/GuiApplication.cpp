@@ -70,7 +70,7 @@ void GuiApplication::registerCommandLineParameters(QCommandLineParser& parser)
     parser.addOption(QCommandLineOption(QStringList{{"since"}}, tr("The first event sequence number --automation events reports."), tr("N")));
     parser.addOption(QCommandLineOption(QStringList{{"limit"}}, tr("How many records --automation reports at most."), tr("N")));
     parser.addOption(QCommandLineOption(QStringList{{"max-nodes"}}, tr("How many scene nodes --automation snapshot describes at most."), tr("N")));
-    parser.addOption(QCommandLineOption(QStringList{{"automation-serve"}}, tr("Serves the session of this workbench to local automation clients, read-only by default.")));
+    parser.addOption(WorkbenchUI::automationServeOption());
 }
 
 /******************************************************************************
