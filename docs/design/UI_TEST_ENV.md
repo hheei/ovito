@@ -692,9 +692,11 @@ that was reproducible is `ovito --gui=qml` with a data file.
 
 ---
 
-### 5.6 Verifying a change on the two hosts rather than on CI
+### 5.6 Verifying a change on the three machines rather than on CI
 
-A change is verified where it can break, and the two hosts above are faster than the runners by an order of magnitude:
+This is the standing verification policy: Linux here, Windows on `kitty`, macOS on `buddy`, and CI only as the fourth
+confirmation. A change is verified where it can break, and the two hosts are faster than the runners by an order of
+magnitude:
 
 | A change to | Is verified on |
 | --- | --- |
@@ -726,6 +728,30 @@ host uses for its own work stay as they are:
   `BOOST_ROOT=C:/Users/chlo/Tools/boost_1_92_0`, `ZLIB_ROOT=C:/Users/chlo/Tools/zlib` (section 5.5, defect F16),
   `-DOVITO_REDISTRIBUTABLE_PACKAGE=ON` — the option that makes the *bundled* HDF5/NetCDF submodules be built instead of a
   system HDF5 being looked for, which is why a machine without HDF5 can configure at all — and `-DOVITO_BUILD_CPP_TESTS=ON`.
+
+**An interrupted remote build leaves processes behind, and they hold the build tree.** A build started over `ssh` and
+then cut off (a session that ends, a caller that kills the background job) leaves `ninja.exe`, `cl.exe`, `link.exe` and
+`cmake.exe` running on the host, still holding the object files and `.ninja_deps` of the target they were writing. The
+next run then reports what looks like a permissions problem rather than a lock:
+
+```
+fatal error C1083: Cannot open compiler generated file: '...\Particles.dir\import\cif\CIFImporter.cpp.obj': Permission denied
+ninja: error: failed recompaction: Permission denied      (during cmake's generate step)
+configure_rc=1
+```
+
+Kill them before rebuilding - the build tree itself is fine once they are gone - and delete the object directory whose
+compiles were cut off, so a half-written `.obj` cannot be mistaken for a finished one:
+
+```powershell
+taskkill /F /IM cl.exe /IM link.exe /IM ninja.exe /IM cmake.exe /IM mspdbsrv.exe /IM vctip.exe
+rmdir /s /q C:\ovito\build-verify\src\ovito\particles\CMakeFiles
+cd C:\ovito\build-verify ; ninja <targets>          # the configure can be skipped: the tree is already generated
+```
+
+The same reasoning is why a remote build is started as a *tracked* background task whose own command is the `ssh` call -
+an `ssh ... &` inside another command outlives the shell that started it, and nothing then reports when the remote side
+fails or keep it alive when the local side exits.
 
 **The Python suites need a real interpreter on kitty.** What `findInterpreter()` finds there by default is a Microsoft
 Store *app execution alias* (`...\WindowsApps\python3.exe`), which fails when it is started without a console. The official

@@ -147,6 +147,22 @@ Before reporting any task complete:
 2. Run CTest: `ctest --preset native` and ensure all tests pass (100% pass rate).
 3. Verify headless startup: `LD_LIBRARY_PATH="$(pwd)/.qt/6.10.2/gcc_64/lib" QT_QPA_PLATFORM=offscreen ./build-native/bin/ovito --nogui`.
 
+### Platform verification is done on three machines, not on CI
+
+A change that can break on one platform is verified on that platform's machine. This is fixed policy, not a fallback:
+
+| Platform | Where | How |
+| --- | --- | --- |
+| Linux x86_64 | this workstation | `cmake --preset native`, `ctest --preset native`; QML checks through `xvfb-run` with `QT_QPA_PLATFORM=xcb` |
+| Windows AMD64 | `ssh kitty` | `C:\ovito\build-verify` (Visual Studio 2022 x64 developer environment, VS-bundled CMake/Ninja, `-DOVITO_REDISTRIBUTABLE_PACKAGE=ON -DOVITO_IS_DEVELOPMENT_BUILD=OFF`), tests asked for their own `-o <file>,txt` log |
+| macOS ARM64 | `ssh kings@buddy` | `~/ovito/build` with `/opt/homebrew/bin/cmake --build build --parallel 8` and the warm `/Users/kings/.ccache`, tests under `QT_QPA_PLATFORM=offscreen` |
+
+GitHub Actions is the fourth and slowest place, not the place to iterate: its three jobs confirm that the machines and the
+runners agree, so a platform-specific fix found on a machine is pushed once, after the machines pass. Both hosts take the
+code as a `git bundle` over ssh (kitty cannot reach `github.com`). Recipes, traps and the per-platform rules that the
+suites must respect are in **[docs/design/UI_TEST_ENV.md](docs/design/UI_TEST_ENV.md) sections 5 and 6.2** - read them
+before running anything there, and keep them correct whenever a new trap is found.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
