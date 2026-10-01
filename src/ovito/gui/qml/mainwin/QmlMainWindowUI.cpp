@@ -47,7 +47,10 @@ public:
 protected:
     void closeEvent(QCloseEvent* event) override
     {
-        // A close the user cancelled leaves the window (and the session in it) as it was.
+        // A close the user cancelled leaves the window (and the session in it) as it was. The question is the shared
+        // session workflow (WorkbenchUI::canCloseWorkbench() - the same code the classic frontend's close event runs)
+        // and it starts work, so it runs in a task scope of its own.
+        GuiTaskScope taskScope(_ui);
         if(!_ui.canCloseWorkbench()) {
             event->ignore();
             return;
@@ -328,7 +331,24 @@ void QmlMainWindowUI::connectFrontendCommands(QQuickView* view)
             _workbenchController->showImportDialog();
         });
     }
-    if(Command* command = manager->findCommand(ACTION_HELP_ABOUT)) {
+    // The session commands: the workflow behind them is the shared one (WorkbenchUI), and this frontend is the part that
+    // asks the user for a file name (requestSessionFilePath() above) and reports a failure in its status bar.
+    if(Command* command = manager->findCommand(ACTION_FILE_OPEN)) {
+        QObject::connect(command, &Command::triggered, view, [this]() {
+            runSessionOperation([&]() { openSession(); });
+        });
+    }
+    if(Command* command = manager->findCommand(ACTION_FILE_SAVE)) {
+        QObject::connect(command, &Command::triggered, view, [this]() {
+            runSessionOperation([&]() { saveSession(); });
+        });
+    }
+    if(Command* command = manager->findCommand(ACTION_FILE_SAVEAS)) {
+        QObject::connect(command, &Command::triggered, view, [this]() {
+            runSessionOperation([&]() { saveSessionAs(); });
+        });
+    }
+    if(Command* command = manager->findCommand(ACTION_FILE_IMPORT)) {
         QObject::connect(command, &Command::triggered, view, [this]() {
             _workbenchController->showAboutDialog();
         });
@@ -336,12 +356,35 @@ void QmlMainWindowUI::connectFrontendCommands(QQuickView* view)
     if(Command* command = manager->findCommand(ACTION_QUIT)) {
         QObject::connect(command, &Command::triggered, view, [this]() {
             // The same behaviour as the classic frontend's Quit: ask about a modified session, then close the window,
-            // which ends the application when this was the last user interface.
+            // which ends the application when this was the last user interface. The question is shared code that starts
+            // work, so it runs in a task scope of its own.
+            GuiTaskScope taskScope(*this);
             if(canCloseWorkbench()) {
                 shutdown();
                 QCoreApplication::quit();
             }
         });
+    }
+}
+
+/******************************************************************************
+* Runs one operation of the session workflow, reporting the reason when it fails.
+******************************************************************************/
+void QmlMainWindowUI::runSessionOperation(const std::function<void()>& operation)
+{
+    // The operation writes or reads a file, so it needs a task context of its own (a signal handler has none) and the
+    // data set it loads has to be published when the operation ends.
+    GuiTaskScope taskScope(*this);
+    try {
+        operation();
+    }
+    catch(const OperationCanceled&) {
+        // The user cancelled the operation instead of letting it finish, which is not an error and needs no message.
+    }
+    catch(const Exception& ex) {
+        // A session that cannot be written must keep its dirty state and tell the user why - the shared workflow leaves
+        // the session untouched when it throws, so only the message is missing here.
+        reportError(ex);
     }
 }
 
@@ -400,24 +443,23 @@ bool QmlMainWindowUI::checkLoadedDataset(DataSet* dataset)
 /******************************************************************************
 * Asks the user about the changes of a modified session before the workbench is closed.
 ******************************************************************************/
-bool QmlMainWindowUI::canCloseWorkbench()
+
+
+/******************************************************************************
+* Asks the user for the session state file the shared session workflow needs.
+******************************************************************************/
+bool QmlMainWindowUI::requestSessionFilePath(SessionFileRequest request, QString& filePath)
 {
-    // A QML signal handler or a Qt event handler runs without a task context of its own, and the question starts work
-    // (the shared code writes the session file when the user chooses to save).
+    // A QML signal handler or a Qt event handler runs without a task context of its own, and the question belongs to the
+    // scene: the controller presents the file dialog and blocks in it until the user answered it.
     GuiTaskScope taskScope(*this);
-    try {
-        askForSaveChanges();
-        return true;
-    }
-    catch(const OperationCanceled&) {
-        // The user cancelled the question instead of answering it, so the workbench stays open exactly as it was.
+    if(_workbenchController == nullptr)
         return false;
-    }
-    catch(const Exception& ex) {
-        // A session that cannot be written must not let the window close silently.
-        reportError(ex, true);
+    const std::optional<QString> file = _workbenchController->presentFileDialog(request);
+    if(!file)
         return false;
-    }
+    filePath = *file;
+    return true;
 }
 
 /******************************************************************************

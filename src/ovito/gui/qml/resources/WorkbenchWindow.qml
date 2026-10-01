@@ -317,6 +317,25 @@ Rectangle {
         onAccepted: workbenchController.importFiles(selectedFiles)
     }
 
+    // The file dialog of the session workflow (open, save, save as). The frontend is blocked in the shared session
+    // operation while this is open, so the answer ends that operation; the controller reports where it should appear.
+    FileDialog {
+        id: sessionFileDialog
+        title: workbenchController.fileDialogTitle
+        fileMode: workbenchController.fileDialogMode === 1 ? FileDialog.SaveFile : FileDialog.OpenFile
+        defaultSuffix: "ovito"
+        nameFilters: workbenchController.fileDialogNameFilter.length > 0 ? [workbenchController.fileDialogNameFilter] : []
+        currentFolder: workbenchController.fileDialogFolder
+        selectedFile: workbenchController.fileDialogSuggestedFile
+        // The Qt Quick file dialog has no "opened" signal, so the presentation is reported from its visibility.
+        onVisibleChanged: {
+            if(visible)
+                workbenchController.fileDialogOpened()
+        }
+        onAccepted: workbenchController.answerFileDialog(selectedFile)
+        onRejected: workbenchController.cancelFileDialog()
+    }
+
     WorkbenchMessageBox {
         id: messageBox
         controller: workbenchController
@@ -346,6 +365,16 @@ Rectangle {
             if(directoryUrl.toString().length > 0)
                 importDialog.currentFolder = directoryUrl
             importDialog.open()
+        }
+
+        // The session workflow asks for a file while it is blocked, so the dialog is opened and closed with the state the
+        // controller reports rather than by binding its visibility (opening writes that property itself).
+        function onFileDialogRequested() {
+            sessionFileDialog.open()
+        }
+        function onFileDialogChanged() {
+            if(!workbenchController.fileDialogVisible && sessionFileDialog.visible)
+                sessionFileDialog.close()
         }
 
         // The About dialog belongs to the shared About command, whose handler is a surface of the frontend.

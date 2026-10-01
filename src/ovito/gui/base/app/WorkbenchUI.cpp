@@ -65,6 +65,14 @@ void WorkbenchUI::importFiles(const std::vector<QUrl>& urls, const FileImporterC
     OVITO_ASSERT(this_task::get());
     OVITO_ASSERT(!urls.empty());
 
+    // A single directory is not a file to import but the directory the user wants to work in - which is how the command
+    // line treats a directory argument as well. It becomes the working directory of the process and the frontend opens
+    // its file selection dialog there.
+    if(urls.size() == 1 && urls.front().isLocalFile() && QFileInfo(urls.front().toLocalFile()).isDir()) {
+        openWorkingDirectory(QFileInfo(urls.front().toLocalFile()).absoluteFilePath());
+        return;
+    }
+
     // Create references to the active dataset and scene to keep them alive during this long-running operation.
     OORef<DataSet> dataset = datasetContainer().currentSet();
     OORef<Scene> scene = datasetContainer().activeScene();
@@ -241,13 +249,84 @@ bool WorkbenchUI::saveSession()
     QString filePath = dataset->filePath();
     if(filePath.isEmpty()) {
         // The session has not been saved yet, so the frontend has to ask the user for a file name.
-        if(!requestSessionFilePath(filePath))
+        if(!requestSessionFilePath(SessionFileRequest::Save, filePath))
             return false;
         if(filePath.isEmpty())
             return false;
     }
     saveSessionFile(filePath);
     return true;
+}
+
+/******************************************************************************
+* Saves the current session under a file the user selects.
+******************************************************************************/
+bool WorkbenchUI::saveSessionAs()
+{
+    OVITO_ASSERT(this_task::get());
+    OORef<DataSet> dataset = datasetContainer().currentSet();
+    if(!dataset)
+        return false;
+
+    // The user selects the file, which is the whole difference to saveSession(): the session may already have a file, and
+    // this operation is what a "Save As" entry does.
+    QString filePath;
+    if(!requestSessionFilePath(SessionFileRequest::Save, filePath))
+        return false;
+    if(filePath.isEmpty())
+        return false;
+    saveSessionFile(filePath);
+    return true;
+}
+
+/******************************************************************************
+* Loads a session state file, asking the user to save the changes of the current session first.
+******************************************************************************/
+bool WorkbenchUI::openSessionFile(const QUrl& url)
+{
+    OVITO_ASSERT(this_task::get());
+
+    // Replacing the current data set discards the work of the user, so the changes made to it are offered for saving.
+    askForSaveChanges();
+    return loadSessionFile(url);
+}
+
+/******************************************************************************
+* Lets the user pick a session state file and loads it.
+******************************************************************************/
+bool WorkbenchUI::openSession()
+{
+    OVITO_ASSERT(this_task::get());
+
+    askForSaveChanges();
+
+    QString filePath;
+    if(!requestSessionFilePath(SessionFileRequest::Open, filePath))
+        return false;
+    if(filePath.isEmpty())
+        return false;
+    return loadSessionFile(QUrl::fromLocalFile(filePath));
+}
+
+/******************************************************************************
+* Asks the user to save the changes of the current session, answering whether the workbench may be closed.
+******************************************************************************/
+bool WorkbenchUI::canCloseWorkbench()
+{
+    OVITO_ASSERT(this_task::get());
+    try {
+        askForSaveChanges();
+        return true;
+    }
+    catch(const OperationCanceled&) {
+        // The user cancelled the question instead of answering it, so the workbench stays open exactly as it was.
+        return false;
+    }
+    catch(const Exception& ex) {
+        // A session that cannot be written must not let the workbench close silently.
+        reportError(ex, true);
+        return false;
+    }
 }
 
 /******************************************************************************
@@ -279,10 +358,13 @@ void WorkbenchUI::askForSaveChanges()
 /******************************************************************************
 * Hook of the session workflow: asks the frontend for the file the session should be saved to.
 ******************************************************************************/
-bool WorkbenchUI::requestSessionFilePath(QString& filePath)
+bool WorkbenchUI::requestSessionFilePath(SessionFileRequest request, QString& filePath)
 {
-    throw Exception(tr("Cannot save the session: this user interface provides no file selection dialog. Use the "
-                       "session commands of the frontend or save the session from a script."));
+    throw Exception(request == SessionFileRequest::Save
+        ? tr("Cannot save the session: this user interface provides no file selection dialog. Use the session commands "
+             "of the frontend or save the session from a script.")
+        : tr("Cannot load a session: this user interface provides no file selection dialog. Open the session state file "
+             "on the command line instead."));
 }
 
 /******************************************************************************

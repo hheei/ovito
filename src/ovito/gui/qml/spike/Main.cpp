@@ -286,6 +286,12 @@ protected:
         if(!supportGui)
             return StandaloneApplication::createQtApplicationImpl(supportGui, argc, argv);
 
+        // The verification harness drives the file dialogs of the session workflow by answering them programmatically
+        // (see --qml-session-check), so it asks Qt for its own dialog implementation rather than the platform's: a
+        // native dialog of macOS or Windows would run its own event loop on a CI runner that has no user to answer it.
+        // The frontend itself (QmlFrontend) leaves this to the platform.
+        QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
+
         // Qt Quick requires a QGuiApplication. Unlike the classic frontend, we do not force a particular
         // QPA platform plugin here, so that the windowing system of the user's choice is used.
         auto* qtApp = new QGuiApplication(argc, argv);

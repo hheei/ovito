@@ -1199,6 +1199,29 @@ void answerNextMessageBox(QmlMainWindowUI* ui, QmlWorkbenchController* controlle
         });
 }
 
+/// Answers the file selection dialog of the session workflow with the given file as soon as the workbench asks for one.
+/// An empty file cancels the dialog. The shared session workflow blocks in the dialog, so the answer has to arrive from
+/// an event loop turn - which is what this helper arranges, the same way answerNextMessageBox() answers the question
+/// about unsaved changes.
+void answerNextFileDialog(QmlMainWindowUI* ui, QmlWorkbenchController* controller, const QString& filePath)
+{
+    pollUntil(ui, 50, 10000,
+        [controller]() { return controller->fileDialogVisible(); },
+        [controller, filePath](bool appeared) {
+            if(!appeared) {
+                reportVerificationFailure(QStringLiteral("the workbench did not ask for a session state file"));
+                return;
+            }
+            // Asking is not presenting: the scene has to have opened the dialog it is waiting on.
+            if(!controller->fileDialogPresented())
+                reportVerificationFailure(QStringLiteral("the workbench asked for a session state file without presenting the file dialog"));
+            if(filePath.isEmpty())
+                controller->cancelFileDialog();
+            else
+                controller->answerFileDialog(QUrl::fromLocalFile(filePath));
+        });
+}
+
 /// Quick shell has no session commands yet), so this check drives the operations that do not need a file name.
 void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 {
@@ -1226,6 +1249,7 @@ void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     }
 
     GuiTaskScope taskScope(*ui);
+    QmlWorkbenchController* controller = ui->workbenchController();
     ui->handleExceptions([&]() {
         // 1. Saving a session writes the file, remembers it and clears the modified state.
         ui->saveSessionFile(sessionFile);
@@ -1280,30 +1304,110 @@ void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         qInfo() << "SESSION_TEST the session workflow saved, modified and reloaded the scene;"
                 << RecentFilesList::instance().entries().size() << "recent file(s)";
 
-        // 5. A session without a file name needs a file dialog, which this frontend does not provide yet. That has to be
-        //    reported instead of failing silently - the classic frontend overrides requestSessionFilePath() with its
-        //    QFileDialog.
+        // 5. A session without a file name asks the frontend for one. The frontend presents the file dialog of the QML
+        //    scene (the controller owns its state so that this check can answer it, exactly like the message box), and
+        //    the answer decides where the session is written.
         OORef<DataSet> dataset = ui->datasetContainer().currentSet();
         const QString rememberedPath = ui->sessionFilePath();
+        const QString saveAsFile = QDir::tempPath() + QStringLiteral("/ovito-qml-session-test/session-as.ovito");
+        QFile::remove(saveAsFile);
         if(dataset)
             dataset->setFilePath({});
-        bool reportedMissingDialog = false;
-        try {
-            ui->saveSession();
+
+        // 5a. A cancelled question changes nothing: no file, no session path, and the session stays modified.
+        answerNextFileDialog(ui, controller, QString());
+        const bool savedAfterCancel = ui->saveSession();
+        if(savedAfterCancel)
+            reportVerificationFailure(QStringLiteral("session check: a cancelled file dialog still reported a saved session"));
+        if(!ui->sessionFilePath().isEmpty())
+            reportVerificationFailure(QStringLiteral("session check: a cancelled file dialog gave the session a file"));
+        if(!QFileInfo::exists(saveAsFile))
+            qInfo() << "SESSION_TEST a cancelled file dialog wrote no file and left the session without one";
+
+        // 5b. An answered question (and the "Save As" command that goes through it) writes the session to that file.
+        answerNextFileDialog(ui, controller, saveAsFile);
+        if(!ui->saveSession())
+            reportVerificationFailure(QStringLiteral("session check: the session was not saved to the file the dialog answered with"));
+        if(ui->sessionFilePath() != QFileInfo(saveAsFile).absoluteFilePath())
+            reportVerificationFailure(QStringLiteral("session check: the session does not remember the file the dialog answered with (%1)").arg(ui->sessionFilePath()));
+        if(!QFileInfo::exists(saveAsFile))
+            reportVerificationFailure(QStringLiteral("session check: the file the dialog answered with was not written"));
+        if(ui->isSessionModified())
+            reportVerificationFailure(QStringLiteral("session check: a session saved through the file dialog is reported as modified"));
+
+        // "Save As" asks again even though the session now has a file of its own, which is the whole difference to Save.
+        const QString saveAsFile2 = QDir::tempPath() + QStringLiteral("/ovito-qml-session-test/session-as-2.ovito");
+        QFile::remove(saveAsFile2);
+        Command* saveAsCommand = ui->actionManager()->findCommand(QStringLiteral(ACTION_FILE_SAVEAS));
+        if(!saveAsCommand)
+            reportVerificationFailure(QStringLiteral("session check: the Save As command does not exist"));
+        else {
+            answerNextFileDialog(ui, controller, saveAsFile2);
+            saveAsCommand->trigger();
+            if(ui->sessionFilePath() != QFileInfo(saveAsFile2).absoluteFilePath())
+                reportVerificationFailure(QStringLiteral("session check: the Save As command did not save to the file the dialog answered with (%1)").arg(ui->sessionFilePath()));
+            if(!QFileInfo::exists(saveAsFile2))
+                reportVerificationFailure(QStringLiteral("session check: the Save As command wrote no file"));
+            qInfo() << "SESSION_TEST the session file dialog answered by the user writes the session where it points;"
+                    << "cancelling it changes nothing and Save As asks again";
         }
-        catch(const Exception&) {
-            reportedMissingDialog = true;
+
+        // 5c. A session that cannot be written keeps its file and its dirty state and tells the user why. The parent of
+        //     the target path does not exist, so the write fails for every user.
+        const QString unwritableFile = QDir::tempPath() + QStringLiteral("/ovito-qml-session-test/no-such-directory/session.ovito");
+        ui->performTransaction(QStringLiteral("Rename pipeline"), [&]() { node->setSceneNodeName(QStringLiteral("modified before the failed save")); });
+        const QString pathBeforeFailure = ui->sessionFilePath();
+        const bool wasModified = ui->isSessionModified();
+        Command* saveCommand = ui->actionManager()->findCommand(QStringLiteral(ACTION_FILE_SAVEAS));
+        if(!saveCommand) {
+            reportVerificationFailure(QStringLiteral("session check: the Save As command does not exist"));
         }
-        if(!reportedMissingDialog)
-            reportVerificationFailure(QStringLiteral("session check: saving a session without a file name did not report the missing file dialog"));
+        else {
+            // The frontend reports the failure the shared workflow throws, in the status line and in an error dialog.
+            answerNextMessageBox(ui, controller, UserInterface::MessageBoxButton::Ok);
+            answerNextFileDialog(ui, controller, unwritableFile);
+            saveCommand->trigger();
+            if(QFileInfo::exists(unwritableFile))
+                reportVerificationFailure(QStringLiteral("session check: a session was written to a path that cannot be written"));
+            if(ui->sessionFilePath() != pathBeforeFailure)
+                reportVerificationFailure(QStringLiteral("session check: a failed save changed the file of the session to %1").arg(ui->sessionFilePath()));
+            if(!ui->isSessionModified() || !wasModified)
+                reportVerificationFailure(QStringLiteral("session check: a failed save cleared the modified state of the session"));
+            if(controller->statusMessage().isEmpty())
+                reportVerificationFailure(QStringLiteral("session check: a failed save reported nothing in the status line"));
+            else
+                qInfo() << "SESSION_TEST a save that cannot be written keeps the session and reports:" << controller->statusMessage();
+        }
+
+        // 5d. Opening a session asks the same question, and the file it answers with becomes the current session.
+        answerNextFileDialog(ui, controller, saveAsFile2);
+        if(!ui->openSession())
+            reportVerificationFailure(QStringLiteral("session check: the session was not opened through the file dialog"));
+        if(ui->sessionFilePath() != QFileInfo(saveAsFile2).absoluteFilePath())
+            reportVerificationFailure(QStringLiteral("session check: opening a session through the file dialog did not adopt its file (%1)").arg(ui->sessionFilePath()));
+        if(ui->isSessionModified())
+            reportVerificationFailure(QStringLiteral("session check: an opened session is reported as modified"));
+        qInfo() << "SESSION_TEST opening a session through the file dialog loads the file it answered with";
+
+        // The phases that follow work with the session file of the check again, and the data set they get is the one the
+        // load just installed - not the one the earlier phases had.
+        if(OORef<DataSet> reloaded = ui->datasetContainer().currentSet())
+            reloaded->setFilePath(rememberedPath);
+
+        // 5e. A directory is not a file to import but the directory to work in: the shared import path makes it the
+        //     working directory of the process and opens the file dialog there, which is what the command line does.
+        const QString directory = QDir::tempPath() + QStringLiteral("/ovito-qml-session-test/working");
+        QDir().mkpath(directory);
+        const QString previousWorkingDirectory = QDir::currentPath();
+        controller->importFiles(QVariantList{ QUrl::fromLocalFile(directory) });
+        if(QDir::currentPath() != QFileInfo(directory).absoluteFilePath())
+            reportVerificationFailure(QStringLiteral("session check: a directory handed to the import path did not become the working directory (%1)").arg(QDir::currentPath()));
         else
-            qInfo() << "SESSION_TEST a session without a file name reports the missing file dialog";
-        if(dataset)
-            dataset->setFilePath(rememberedPath);
+            qInfo() << "SESSION_TEST a directory handed to the import path becomes the working directory";
+        QDir::setCurrent(previousWorkingDirectory);
 
         // 6. Closing a workbench with unsaved changes asks about them, which is the question the classic frontend asks
         //    in its close event (MainWindow::closeEvent); the title marks the modified session in the meantime.
-        QmlWorkbenchController* controller = ui->workbenchController();
         Scene* currentSceneAfterReload = ui->datasetContainer().activeScene();
         if(!ui->isSessionModified() && currentSceneAfterReload && !currentSceneAfterReload->children().empty()) {
             SceneNode* nodeToRename = currentSceneAfterReload->children().front();

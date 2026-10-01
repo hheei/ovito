@@ -547,12 +547,9 @@ void MainWindow::openRecentFile(int index)
     handleExceptions([&] {
         try {
             if(entry.isSessionFile()) {
-                // This is a .ovito session file.
+                // This is a .ovito session file, which the shared session workflow loads.
                 OVITO_ASSERT(entry.urls.size() == 1);
-                ui().askForSaveChanges();
-                OORef<DataSet> dataset = DataSet::createFromFile(entry.urls.front().toLocalFile());
-                if(ui().checkLoadedDataset(dataset))
-                    datasetContainer().setCurrentSet(std::move(dataset));
+                ui().openSessionFile(entry.urls.front());
             }
             else {
                 // This is a data file import.
@@ -626,12 +623,9 @@ void MainWindow::dropEvent(const QList<QUrl>& urls)
         for(const QUrl& url : urls) {
             if(url.fileName().endsWith(".ovito", Qt::CaseInsensitive)) {
                 if(url.isLocalFile()) {
-                    ui().askForSaveChanges();
-                    OORef<DataSet> dataset = DataSet::createFromFile(url.toLocalFile());
-                    if(ui().checkLoadedDataset(dataset)) {
-                        datasetContainer().setCurrentSet(std::move(dataset));
+                    // A dropped session state file replaces the current session through the shared session workflow.
+                    if(ui().openSessionFile(url))
                         sessionFileUrl = url;
-                    }
                     importUrls.clear();
                     return;
                 }

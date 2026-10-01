@@ -100,7 +100,7 @@ protected:
     virtual ActionManager* createActionManager(QObject* parent) override;
 
     /// Asks the user for the file the current session should be saved to (see WorkbenchUI::saveSession()).
-    virtual bool requestSessionFilePath(QString& filePath) override;
+    virtual bool requestSessionFilePath(SessionFileRequest request, QString& filePath) override;
 
     /// Presents an error message to the user and lets them acknowledge it.
     virtual void displayErrorMessage(const Exception& ex, bool blocking) override;

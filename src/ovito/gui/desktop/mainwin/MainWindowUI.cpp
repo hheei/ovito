@@ -306,9 +306,10 @@ bool MainWindowUI::fileSaveAs(const QString& filename)
 {
     OVITO_ASSERT(this_task::get());
 
-    // Without a file name the user selects one, which is what saving a session without a file does anyway.
+    // Without a file name the user selects a new destination, whether or not the session already has a file - which is
+    // what "Save As" means. The shared operation asks this frontend through requestSessionFilePath() below.
     if(filename.isEmpty())
-        return saveSession();
+        return saveSessionAs();
 
     saveSessionFile(filename);
     return true;
@@ -317,12 +318,37 @@ bool MainWindowUI::fileSaveAs(const QString& filename)
 /******************************************************************************
 * Asks the user for the file the current session should be saved to.
 ******************************************************************************/
-bool MainWindowUI::requestSessionFilePath(QString& filePath)
+bool MainWindowUI::requestSessionFilePath(SessionFileRequest request, QString& filePath)
 {
     OVITO_ASSERT(this_task::get());
     OORef<DataSet> dataset = datasetContainer().currentSet();
     if(!dataset)
         return false;
+
+    // Looking for a file to load is a different question than asking where to write the session, so it is the same dialog
+    // in the mode the user asked for.
+    if(request == SessionFileRequest::Open) {
+        QString defaultPath;
+        if(dataset->filePath().isEmpty()) {
+            if(GuiSettings::instance().keepDirectoryHistory())
+                defaultPath = GuiSettings::instance().sessionFileDirectory();
+        }
+        else {
+            defaultPath = dataset->filePath();
+        }
+
+        TaskManager::setNativeDialogActive(true);
+        const QString filename = QFileDialog::getOpenFileName(mainWindow(), tr("Load Session State"),
+                defaultPath, tr("OVITO State Files (*.ovito);;All Files (*)"));
+        TaskManager::setNativeDialogActive(false);
+        if(filename.isEmpty())
+            return false;
+
+        if(GuiSettings::instance().keepDirectoryHistory())
+            GuiSettings::instance().setSessionFileDirectory(QFileInfo(filename).absolutePath());
+        filePath = filename;
+        return true;
+    }
 
     QFileDialog dialog(mainWindow(), tr("Save Session State"));
     dialog.setNameFilter(tr("OVITO State Files (*.ovito);;All Files (*)"));

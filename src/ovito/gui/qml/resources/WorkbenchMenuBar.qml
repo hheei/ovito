@@ -70,20 +70,11 @@ MenuBar {
 
         MenuSeparator {}
 
-        WorkbenchPlaceholderMenuItem {
-            itemText: qsTr("Open Session State…")
-            ownerPhase: "Phase 3"
-        }
-
-        WorkbenchPlaceholderMenuItem {
-            itemText: qsTr("Save Session State")
-            ownerPhase: "Phase 3"
-        }
-
-        WorkbenchPlaceholderMenuItem {
-            itemText: qsTr("Save Session State As…")
-            ownerPhase: "Phase 3"
-        }
+        // The session commands of the shared command layer. Their handler belongs to the frontend: this shell asks the
+        // user for the file in the file dialog below, which is what the shared session workflow calls back into.
+        WorkbenchMenuItem { command: commandManager.command("FileOpen") }
+        WorkbenchMenuItem { command: commandManager.command("FileSave") }
+        WorkbenchMenuItem { command: commandManager.command("FileSaveAs") }
 
         MenuSeparator {}
 

@@ -128,36 +128,9 @@ void WidgetActionManager::on_FileNewWindow_triggered()
 void WidgetActionManager::on_FileOpen_triggered()
 {
     handleExceptions([&] {
-        ui().askForSaveChanges();
-
-        // Go to the last directory used.
-        QString defaultPath;
-        OORef<DataSet> dataSet = this->dataset();
-        if(!dataSet || dataSet->filePath().isEmpty()) {
-            if(GuiSettings::instance().keepDirectoryHistory())
-                defaultPath = GuiSettings::instance().sessionFileDirectory();
-        }
-        else {
-            defaultPath = dataSet->filePath();
-        }
-
-        TaskManager::setNativeDialogActive(true);
-        QString filename = QFileDialog::getOpenFileName(mainWindow(), tr("Load Session State"),
-                defaultPath, tr("OVITO State Files (*.ovito);;All Files (*)"));
-        TaskManager::setNativeDialogActive(false);
-        if(filename.isEmpty())
-            this_task::cancelAndThrow();
-
-        if(GuiSettings::instance().keepDirectoryHistory()) {
-            // Remember directory for the next time...
-            GuiSettings::instance().setSessionFileDirectory(QFileInfo(filename).absolutePath());
-        }
-
-        OORef<DataSet> dataset = DataSet::createFromFile(filename);
-        if(ui().checkLoadedDataset(dataset)) {
-            datasetContainer().setCurrentSet(std::move(dataset));
-            RecentFilesList::instance().addSessionFileEntry(QUrl::fromLocalFile(filename));
-        }
+        // The session workflow lives in the base class: it asks about unsaved changes, asks this frontend for the file
+        // (requestSessionFilePath() below) and loads it.
+        ui().openSession();
     });
 }
 
@@ -224,12 +197,9 @@ void WidgetActionManager::on_FileImport_triggered()
 
         // If user accidentally tries to import a .ovito session state file, redirect to the corresponding session loading function.
         if(!importerClass && urlsToImport.size() == 1 && urlsToImport.front().fileName().endsWith(QStringLiteral(".ovito"))) {
-            ui().askForSaveChanges();
-            OORef<DataSet> dataset = DataSet::createFromFile(urlsToImport.front().toLocalFile());
-            if(ui().checkLoadedDataset(dataset)) {
-                datasetContainer().setCurrentSet(std::move(dataset));
-                RecentFilesList::instance().addSessionFileEntry(urlsToImport.front());
-            }
+            // A session state file that reaches the import path is loaded as a session, which is the same operation as
+            // opening it.
+            ui().openSessionFile(urlsToImport.front());
             return;
         }
 

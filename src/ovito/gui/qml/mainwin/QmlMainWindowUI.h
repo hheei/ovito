@@ -97,11 +97,6 @@ public:
     /// Gives the active viewport the input focus.
     void setViewportInputFocus() override;
 
-    /// Asks the user about the changes of a modified session before the workbench is closed.
-    /// \return \c true if the workbench may be closed; \c false if the user cancelled the question or the session
-    /// could not be written (the reason is reported in that case).
-    bool canCloseWorkbench();
-
     /// Cancels all running tasks associated with this user interface and closes the user interface.
     bool shutdown() override;
 
@@ -123,6 +118,9 @@ protected:
     /// The message has already been written to the terminal by WorkbenchUI::reportError().
     virtual void displayErrorMessage(const Exception& ex, bool blocking) override;
 
+    /// Asks the user for the session state file the session workflow needs, in the file dialog of the QML scene.
+    virtual bool requestSessionFilePath(SessionFileRequest request, QString& filePath) override;
+
     /// Shows the file selection dialog of the QML scene.
     virtual void openImportDialog(const QString& directoryPath) override;
 
@@ -136,6 +134,9 @@ protected:
     virtual void progressTasksChanged() override;
 
 private:
+
+    /// Runs one operation of the session workflow (open, save, save as), reporting the reason when it fails.
+    void runSessionOperation(const std::function<void()>& operation);
 
     /// Creates the default dataset if no dataset has been loaded yet.
     void initializeDataset();

@@ -228,7 +228,13 @@ void QmlWorkbenchController::importFiles(const QVariantList& urls)
 ******************************************************************************/
 void QmlWorkbenchController::showImportDialog()
 {
-    Q_EMIT importDialogRequested(importDirectoryUrl());
+    // The dialog is told which directory to open in, which is the one the last import used unless somebody asked for a
+    // particular one (opening the working directory of a dropped folder does). That request is used up by this dialog:
+    // keeping it would make every later file dialog - including the one the File menu opens - start in the directory of
+    // that one request instead of where the user last was.
+    const QUrl directory = importDirectoryUrl();
+    _importDialogDirectory.clear();
+    Q_EMIT importDialogRequested(directory);
 }
 
 /******************************************************************************
@@ -282,10 +288,9 @@ void QmlWorkbenchController::openRecentFile(int index)
     try {
         if(entry.isSessionFile()) {
             OVITO_ASSERT(entry.urls.size() == 1);
-            // The unsaved changes of the current session would be gone, so this asks first - the same question the
-            // classic frontend asks when it opens a recent session file.
-            _ui.askForSaveChanges();
-            _ui.loadSessionFile(entry.urls.front());
+            // The unsaved changes of the current session would be gone, so the shared session workflow asks about them
+            // first - the same question the classic frontend asks when it opens a recent session file.
+            _ui.openSessionFile(entry.urls.front());
         }
         else {
             // The entry remembers the importer and the format the user selected, so a data file whose format cannot be
@@ -354,6 +359,98 @@ UserInterface::MessageBoxButton QmlWorkbenchController::presentMessageBox(UserIn
     _messageBoxVisible = false;
     Q_EMIT messageBoxChanged();
     return _messageBoxAnswer;
+}
+
+/******************************************************************************
+* Asks the user for a session state file, in a dialog of the QML scene, and blocks until it is answered.
+******************************************************************************/
+std::optional<QString> QmlWorkbenchController::presentFileDialog(WorkbenchUI::SessionFileRequest request)
+{
+    // Without a QML scene there is nobody who could answer the dialog, so the caller is told that it cannot have a file.
+    if(_ui.view() == nullptr || _ui.view()->rootObject() == nullptr) {
+        qWarning() << "Cannot ask for a session state file: the workbench window is not available.";
+        return {};
+    }
+
+    const bool saving = request == WorkbenchUI::SessionFileRequest::Save;
+    _fileDialogTitle = saving ? tr("Save Session State") : tr("Load Session State");
+    _fileDialogMode = saving ? 1 : 0;
+    _fileDialogNameFilter = tr("OVITO State Files (*.ovito)");
+    _fileDialogCancelled = true;
+    _fileDialogAnswer.clear();
+    _fileDialogPresented = false;
+
+    // The question starts where the last one was answered, or at the current session file. The file of the current
+    // session is the suggestion of a "Save As", while opening a file just starts in its folder.
+    const OORef<DataSet> dataset = _ui.datasetContainer().currentSet();
+    const QString sessionFile = dataset ? dataset->filePath() : QString();
+    if(!sessionFile.isEmpty()) {
+        _fileDialogFolder = QUrl::fromLocalFile(QFileInfo(sessionFile).absolutePath());
+        _fileDialogSuggestedFile = saving ? QUrl::fromLocalFile(sessionFile) : QUrl();
+    }
+    else {
+        const QString directory = GuiSettings::instance().sessionFileDirectory();
+        _fileDialogFolder = directory.isEmpty() ? QUrl() : QUrl::fromLocalFile(directory);
+        _fileDialogSuggestedFile = QUrl();
+    }
+
+    _fileDialogVisible = true;
+    Q_EMIT fileDialogRequested();
+    Q_EMIT fileDialogChanged();
+
+    // Wait for the scene to answer the dialog, exactly like the message dialog of this controller does: the shared
+    // session workflow is blocked in this call and cannot continue without an answer.
+    QEventLoop eventLoop;
+    _fileDialogLoop = &eventLoop;
+    const QMetaObject::Connection connection = connect(this, &QmlWorkbenchController::fileDialogChanged, &eventLoop, &QEventLoop::quit);
+    eventLoop.exec();
+    disconnect(connection);
+    _fileDialogLoop = nullptr;
+
+    _fileDialogVisible = false;
+    Q_EMIT fileDialogChanged();
+
+    if(_fileDialogCancelled || _fileDialogAnswer.isEmpty())
+        return {};
+
+    // The directory of the file the user selected is what the next question starts in, which is what the classic
+    // frontend's file dialog does as well.
+    GuiSettings::instance().setSessionFileDirectory(QFileInfo(_fileDialogAnswer).absolutePath());
+    return _fileDialogAnswer;
+}
+
+/******************************************************************************
+* Reports that the scene presented the file selection dialog.
+******************************************************************************/
+void QmlWorkbenchController::fileDialogOpened()
+{
+    _fileDialogPresented = true;
+}
+
+/******************************************************************************
+* Answers the file selection dialog with the file the user selected.
+******************************************************************************/
+void QmlWorkbenchController::answerFileDialog(const QUrl& file)
+{
+    if(!_fileDialogVisible)
+        return;
+    if(!file.isEmpty()) {
+        _fileDialogAnswer = file.isLocalFile() ? file.toLocalFile() : file.toString();
+        _fileDialogCancelled = _fileDialogAnswer.isEmpty();
+    }
+    Q_EMIT fileDialogChanged();
+}
+
+/******************************************************************************
+* Answers the file selection dialog with "no file", i.e. the user cancelled it.
+******************************************************************************/
+void QmlWorkbenchController::cancelFileDialog()
+{
+    if(!_fileDialogVisible)
+        return;
+    _fileDialogCancelled = true;
+    _fileDialogAnswer.clear();
+    Q_EMIT fileDialogChanged();
 }
 
 /******************************************************************************

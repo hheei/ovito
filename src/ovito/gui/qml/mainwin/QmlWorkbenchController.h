@@ -5,6 +5,7 @@
 
 
 #include <ovito/gui/qml/QmlFrontend.h>
+#include <ovito/gui/base/app/WorkbenchUI.h>
 #include <ovito/core/utilities/concurrent/Task.h>
 
 class QEventLoop;
@@ -66,6 +67,16 @@ class OVITO_GUIQML_EXPORT QmlWorkbenchController : public QObject
 
     /// The button value the dialog answers with when it is dismissed instead of answered (the caller's default).
     Q_PROPERTY(int defaultMessageBoxButton READ defaultMessageBoxButton NOTIFY messageBoxChanged)
+
+    /// The state of the file selection dialog the frontend is waiting on: whether it is open, its title, what it asks
+    /// for (0 = a session file to open, 1 = a file to save the session to), the folder it starts in, the name it suggests
+    /// and the file the user selected. The scene presents it and answers it by calling answerFileDialog().
+    Q_PROPERTY(bool fileDialogVisible READ fileDialogVisible NOTIFY fileDialogChanged)
+    Q_PROPERTY(QString fileDialogTitle READ fileDialogTitle NOTIFY fileDialogChanged)
+    Q_PROPERTY(int fileDialogMode READ fileDialogMode NOTIFY fileDialogChanged)
+    Q_PROPERTY(QUrl fileDialogFolder READ fileDialogFolder NOTIFY fileDialogChanged)
+    Q_PROPERTY(QUrl fileDialogSuggestedFile READ fileDialogSuggestedFile NOTIFY fileDialogChanged)
+    Q_PROPERTY(QString fileDialogNameFilter READ fileDialogNameFilter NOTIFY fileDialogChanged)
 
     /// The name of the application, as the About dialog and the error messages show it.
     /// Whether the dialog that asks which pipeline to keep of a session with several of them is open, and the pipelines
@@ -149,6 +160,45 @@ public:
     /// Asks the scene to open the file selection dialog, starting in the last used directory.
     Q_INVOKABLE void showImportDialog();
 
+    /// Asks the user for a session state file, in a dialog of the QML scene, and blocks until it is answered (the same
+    /// nested event loop the message dialog of this controller uses). This is what the workbench calls when the shared
+    /// session workflow needs a file name (see WorkbenchUI::requestSessionFilePath()).
+    /// \param request Whether the file is needed for saving or for loading a session.
+    /// \return The file the user selected, or nothing if the user cancelled the dialog or the scene cannot present it.
+    std::optional<QString> presentFileDialog(WorkbenchUI::SessionFileRequest request);
+
+    /// Returns whether the file selection dialog is open (see the fileDialogVisible property).
+    bool fileDialogVisible() const { return _fileDialogVisible; }
+
+    /// Returns the title of the file selection dialog (see the fileDialogTitle property).
+    QString fileDialogTitle() const { return _fileDialogTitle; }
+
+    /// Returns what the file selection dialog asks for (see the fileDialogMode property).
+    int fileDialogMode() const { return _fileDialogMode; }
+
+    /// Returns the folder the file selection dialog starts in (see the fileDialogFolder property).
+    QUrl fileDialogFolder() const { return _fileDialogFolder; }
+
+    /// Returns the file the file selection dialog suggests (see the fileDialogSuggestedFile property).
+    QUrl fileDialogSuggestedFile() const { return _fileDialogSuggestedFile; }
+
+    /// Returns the name filter of the file selection dialog (see the fileDialogNameFilter property).
+    QString fileDialogNameFilter() const { return _fileDialogNameFilter; }
+
+    /// Returns whether the scene confirmed that it presented the file selection dialog of the session workflow. A shell
+    /// that reports the request but never shows a dialog fails this, which is what the verification harness asserts.
+    bool fileDialogPresented() const { return _fileDialogPresented; }
+
+    /// Reports that the scene presented the file selection dialog. Called by the QML dialog when it opens.
+    Q_INVOKABLE void fileDialogOpened();
+
+    /// Answers the file selection dialog with the file the user selected. The controller reports it to the blocked
+    /// caller, which records the directory in the settings so that the next question starts there.
+    Q_INVOKABLE void answerFileDialog(const QUrl& file);
+
+    /// Answers the file selection dialog with "no file", i.e. the user cancelled the question.
+    Q_INVOKABLE void cancelFileDialog();
+
     /// Asks the user which of the given pipelines to keep, in a dialog of the QML scene, and blocks until it is
     /// answered (the same nested event loop the message dialog of this controller uses).
     /// \return The index of the pipeline to keep, or -1 if the user aborted the question.
@@ -229,6 +279,11 @@ Q_SIGNALS:
     /// Is emitted when the list of recently opened files changed.
     void recentFilesChanged();
 
+    /// Is emitted when the scene should open the file selection dialog of the session workflow, and whenever its state
+    /// changed (including when it was answered, which closes it).
+    void fileDialogRequested();
+    void fileDialogChanged();
+
     /// Is emitted when the scene should open the dialog that asks which pipeline to keep, or when its state changed.
     void pipelineChoiceRequested();
     void pipelineChoiceChanged();
@@ -284,6 +339,20 @@ private:
 
     /// The event loop that presentMessageBox() blocks in, or null when no message dialog is open.
     QEventLoop* _messageBoxLoop = nullptr;
+
+    /// The state of the file selection dialog of the session workflow.
+    bool _fileDialogVisible = false;
+    QString _fileDialogTitle;
+    int _fileDialogMode = 0;
+    QUrl _fileDialogFolder;
+    QUrl _fileDialogSuggestedFile;
+    QString _fileDialogNameFilter;
+    bool _fileDialogPresented = false;
+    QString _fileDialogAnswer;
+    bool _fileDialogCancelled = true;
+
+    /// The event loop that presentFileDialog() blocks in, or null when no file selection dialog is open.
+    QEventLoop* _fileDialogLoop = nullptr;
 
     /// The state of the dialog that asks which pipeline of a session with several of them to keep.
     bool _pipelineChoiceVisible = false;

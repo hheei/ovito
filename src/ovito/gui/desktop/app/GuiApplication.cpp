@@ -235,9 +235,16 @@ void GuiApplication::initializeUserInterface(UserInterface& ui, const QStringLis
         QString startupFilename = arguments.front();
         if(startupFilename.endsWith(".ovito", Qt::CaseInsensitive)) {
             try {
-                OORef<DataSet> dataset = DataSet::createFromFile(startupFilename);
-                if(ui.checkLoadedDataset(dataset))
-                    datasetContainer.setCurrentSet(std::move(dataset));
+                // The session workflow of the user interface loads the file, which also remembers it as a recently
+                // opened file. The user's default state below does not go through it, because that file is not a
+                // session the user opened and must not become the session's own file.
+                if(WorkbenchUI* workbench = dynamic_object_cast<WorkbenchUI>(&ui))
+                    workbench->loadSessionFile(QUrl::fromLocalFile(startupFilename));
+                else {
+                    OORef<DataSet> dataset = DataSet::createFromFile(startupFilename);
+                    if(ui.checkLoadedDataset(dataset))
+                        datasetContainer.setCurrentSet(std::move(dataset));
+                }
             }
             catch(const Exception& ex) {
                 ui.reportError(ex);
@@ -336,12 +343,8 @@ bool GuiApplication::eventFilter(QObject* watched, QEvent* event)
             MainWindowUI& ui = mainWindow->ui();
             ui.handleExceptions([&] {
                 if(openEvent->file().endsWith(".ovito", Qt::CaseInsensitive)) {
-                    ui.askForSaveChanges();
-                    OORef<DataSet> dataset = DataSet::createFromFile(openEvent->file());
-                    if(ui.checkLoadedDataset(dataset)) {
-                        ui.datasetContainer().setCurrentSet(std::move(dataset));
-                        RecentFilesList::instance().addSessionFileEntry(QUrl::fromLocalFile(openEvent->file()));
-                    }
+                    // The shared session workflow asks about unsaved changes, loads the file and remembers it.
+                    ui.openSessionFile(QUrl::fromLocalFile(openEvent->file()));
                 }
                 else {
                     ui.importFiles({openEvent->url()});
