@@ -1498,14 +1498,15 @@ void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
         QDir().mkpath(directory);
         const QString previousWorkingDirectory = QDir::currentPath();
         controller->importFiles(QVariantList{ QUrl::fromLocalFile(directory) });
-        if(QDir::currentPath() != QFileInfo(directory).absoluteFilePath())
+        // Compared as canonical paths: a working directory is reported in the form the operating system resolved it,
+        // and a temporary directory behind a symbolic link therefore does not look like the path that was asked for -
+        // on macOS QDir::tempPath() is /var/folders/..., which resolves to /private/var/folders/..., so comparing the
+        // strings failed there although the working directory had in fact been changed (UI_TEST_ENV.md 6.2).
+        if(QFileInfo(QDir::currentPath()).canonicalFilePath() != QFileInfo(directory).canonicalFilePath())
             reportVerificationFailure(QStringLiteral("session check: a directory handed to the import path did not become the working directory (%1)").arg(QDir::currentPath()));
         else
             qInfo() << "SESSION_TEST a directory handed to the import path becomes the working directory";
         QDir::setCurrent(previousWorkingDirectory);
-
-        reportCheckPhase("close question");
-
 
         reportCheckPhase("working directory");
 
@@ -1554,6 +1555,8 @@ void runSessionTest(QmlMainWindowUI* ui, std::function<void()> continuation)
             qInfo() << "SESSION_TEST closing the workbench with unsaved changes asks three ways: cancelling keeps the"
                     << "window open, discarding closes it, saving writes the session and clears the modified marker";
         }
+
+        reportCheckPhase("close question");
 
         // 7. The session file is the most recent entry, and opening that entry reads it back - including through the
         //    import path, which redirects a .ovito file to the session loader as the classic frontend does.

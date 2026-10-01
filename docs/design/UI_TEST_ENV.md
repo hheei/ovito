@@ -364,6 +364,15 @@ creating no `RefTarget`, it runs against a bare `QTest` process, and the one tra
 and `QVERIFY` expand to a bare `return`, which a helper that returns a value cannot use (`-Wreturn-type` is an error in
 this build). It skips from the test function itself instead (see `SKIP_WITHOUT_PYTHON` in that file).
 
+**A `tests/cpp` target that links a plugin must be gated on the plugin *option*, not on `if(TARGET …)`.** The top-level
+`CMakeLists.txt` adds the `tests` subdirectory at line 158 and `src` only at line 360, so at test-registration time no
+plugin target exists yet and `if(TARGET Gui)` is false even in a build that will create `Gui`. A target guarded that way
+disappears silently from `ctest -N` instead of failing loudly. The reliable guard is the option the plugin's
+`ADD_SUBDIRECTORY` reads, e.g. `if(OVITO_BUILD_APP AND OVITO_BUILD_PLUGIN_STDMOD AND …)`, since the `OPTION()`
+declarations are at the top of the file and are already set. This is how `tests/cpp/gui/CMakeLists.txt` keeps the classic
+comparison test out of the `OVITO_BUILD_APP=OFF` frontend scope while registering the shared model test that only needs
+`GuiBase` and `StdMod`.
+
 ### 4.2 Running the Python runtime probe and the topology spike
 
 Both are part of the Phase 2.6 Python track and both expect a real interpreter. Three rules keep them honest on a machine
@@ -974,6 +983,14 @@ cases of `tst_session_descriptor`. Four traps are behind that, and each is a rul
   caller is entitled to trust the line ending. The worker writes its header lines through `sys.stdout.buffer` now
   (`_write_line()`), which is the same stream the raw payload uses and is never translated; every write holds the one
   output lock, so a header cannot be interleaved with an answer from the reader thread.
+* **A temporary path behind a symbolic link is not the path the process reports.** Asserting that a working directory
+  changed has to compare *canonical* paths: `QDir::currentPath()` answers in the form the operating system resolved, so
+  a directory created through a symbolic link never matches the string it was created from. On macOS this bites every
+  time, because `QDir::tempPath()` is `/var/folders/...` and `/var` is a link to `/private/var` - `--qml-session-check`
+  failed there with "a directory handed to the import path did not become the working directory
+  (/private/var/folders/...)" although the directory had in fact been changed. Reproduce it on Linux by pointing `TMPDIR`
+  at a symbolic link: a two-line Qt probe prints `/tmp/link/...` for the temp-derived path and `/tmp/real/...` for
+  `QDir::currentPath()`, unequal as strings and equal as canonical paths.
 * **A `pwsh` step's exit code is the exit code of its last statement.** The Windows Build step ended with an
   `if (Get-Command ccache ...) { ccache --show-stats }` report, so the failed `cmake --build` did not fail the step: the job
   reported a *successful* Build and the linker error reappeared 20 seconds later as an unexplained `Test (CTest)` failure
@@ -1647,6 +1664,31 @@ by walking up from its own build directory, and **skips itself with `QSKIP` when
 is right for a frontend-only preset and a trap for a job that builds the product, because `ctest` counts a skipped test
 as passed. The CI jobs that build the application therefore set `OVITO_REQUIRE_TEST_BINARY=1`, which turns the skip into
 a `QFAIL`; a local run can do the same, or move `bin/ovito` aside once to see the difference (exit 1 instead of 0).
+
+### 9.2.13 When the macOS smoke step hangs (and what the hang was hiding)
+
+The macOS ARM64 job hung on every run from `d586ece9f` on: the spike printed its `BOOTSTRAP` line and then nothing at all
+for the whole ten minutes of the step's timeout, with no `VERIFY_FAILED` and no completed check - a state that looks like
+a slow machine and is not one. `git diff --stat e895922e..0f673aa89 -- src/` is empty, so no source change was involved;
+the difference between the last green run and the first hanging one is one line of the workflow:
+
+```yaml
+DYLD_LIBRARY_PATH: ${{ env.Qt6_DIR }}/lib      # e895922e: Qt6_DIR is not exported on macOS, so the value was the inert '/lib'
+DYLD_LIBRARY_PATH: ${{ env.QT_ROOT_DIR }}/lib  # d586ece9f: now the Qt installation's lib directory is an active loader path
+```
+
+The spike application reaches Qt through its link-time rpath - the Qt 6.10.2 installation for macOS holds 66 `.framework`
+directories and no `.dylib` files, so the variable was never needed - and making the Qt lib directory an active loader path
+is what made the frontend stop after its bootstrap line. The macOS smoke step therefore sets no environment at all now,
+`unset DYLD_LIBRARY_PATH` explicitly, and starts the spike **in the background**: it polls for 450 s and, when there is no
+progress, prints `SPIKE_HUNG`, dumps a stack with macOS's `sample(1)` and fails the step, so a hang produces evidence
+instead of only a timeout message (the Windows and Linux steps keep their own platform's settings; they never hung).
+
+That change is what let the smoke step reach its checks for the first time in days, and it immediately reported two
+macOS-only defects that the hang had been hiding: `--qml-automation-check` could not serve a session (the endpoint came to
+about 109 characters against the 104 a socket path may have - see §6.2) and `--qml-session-check` compared a temporary
+path against a resolved one (also §6.2). Both are fixed; the lesson worth keeping is that a step which *times out* is not
+a step that passed, and that the checks behind a hang are unverified until the hang is gone.
 
 ## 10. Quick checklist
 
