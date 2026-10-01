@@ -313,9 +313,9 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir build-asserts
 This configuration found a real defect in the picking path (F4: asynchronous work started from a Qt event handler runs in
 a task **without** a `UserInterface`), which the release build hid completely.
 
-`ctest --preset native` runs 11 tests, five of which are the automation suites of Phase 2.6
+`ctest --preset native` runs 12 tests, six of which are the automation suites
 (`tst_automation_contracts`, `tst_python_environment_probe`, `tst_python_data_bridge`, `tst_python_schema_preview`,
-`tst_session_descriptor`, 97 cases between them). What each of them is allowed to promise, and how the suites relate to
+`tst_session_descriptor`, `tst_automation_cli`, 107 QtTest cases between them). What each of them is allowed to promise, and how the suites relate to
 the prose they check, is [AUTOMATION_CONTRACTS.md](AUTOMATION_CONTRACTS.md) §1 and §19.
 
 ### 4.1 What a core integration test has to provide
@@ -1423,6 +1423,7 @@ The spike used to be one 3300-line `Main.cpp`. It is now five files, and the rul
 | `spike/checks/ImportChecks.cpp` | the import path: trajectory, unsupported file, cancelled import, playback |
 | `spike/checks/PipelineChecks.cpp` | the pipeline model of Phase 3: roles, stable IDs, selection while editing, the shared operations with their undo, the command list model |
 | `spike/checks/AnimationChecks.cpp` | the animation model of Phase 3: the interval and the current time with their undo, the tracks and keys of the selected objects, key selection, key moves, key deletion, the visible range, playback |
+| `spike/checks/AutomationChecks.cpp` | the automation foundation of Phase 3: serving a session, the command line of this build as the client, the read-only capability grant, the snapshot/describe answers, and the removal of the session when the server stops |
 
 A new check is one entry in `main.cpp`'s `spikeSteps()` table - the option, the predicate that decides whether the value asks for the step at all, and the check to run. That table is the single source for the parser options, the help text, the run order and the *is this a verification run* decision, and it exists because those used to be three separate lists: a check that was registered in the parser but forgotten in the predicate hung until the caller's timeout killed it, which costs a CI round and looks like a product defect. A helper moves into `SpikeHarness.h` once two check files need it; a helper of one check stays `static` in its file.
 
@@ -1508,6 +1509,44 @@ Three traps it records:
   and before `--qml-pipeline-check`, which replaces the data set at its end.
 
 
+### 9.2.11 Testing the automation foundation (Phase 3, S4)
+
+`--qml-automation-check` verifies the machine-facing path end to end (audit D67-D70). It is the only check that talks to
+a *second process*, and it does so because a client that blocks the event loop of the workbench it asks could not be
+answered: the workbench serves the session, and the check starts the `ovito` executable of this build next to the spike
+binary as a child process and reads its JSON answer, while polling lets the event loop keep running.
+
+Its phases:
+
+1. nothing is discoverable before the workbench serves (the check points `OVITO_AUTOMATION_SESSION_DIR` at a temporary
+   directory of its own process, so the sessions of the developer are neither seen nor disturbed);
+2. `startAutomationServer()` publishes exactly one session - this process, an endpoint inside that directory, a socket
+   and not a port - and keeps the workbench's own session;
+3. `ovito --automation status --json` answers: exit code 0, `ok`, the workbench's *own* revision, a data set, four
+   viewports, and a grant of exactly `session.read`, `scene.read`, `selection.read` and `file.read` with nothing refused
+   and no write capability among the granted ones;
+4. `ovito --automation snapshot --json` answers the viewports, the selection and the events in one call;
+5. `ovito --automation describe <viewport-id> --json` answers a viewport with its parameters, each carrying a
+   `property:.../...` ID - the only place in the test suite where property IDs are minted with the plugin classes loaded;
+6. `stopAutomationServer()` removes the descriptor while the workbench keeps its session.
+
+Traps it records:
+
+* **A blocking client cannot be answered by its own process.** Calling `AutomationLocalClient` in the check would block
+  the event loop that has to accept the connection, so the client is the command line, started as a child process with
+  `QProcess` and awaited by polling rather than by `waitForFinished()`.
+* **The child needs the session scope in its environment**, not just in this process: the check passes
+  `OVITO_AUTOMATION_SESSION_DIR` to the child, otherwise the child would look at the user's sessions.
+* **The check needs the `ovito` executable next to the spike binary.** It skips (and reports so) when this build has no
+  product executable, which is the case for the frontend-only preset.
+* **It does not verify the `--automation-serve` option's plumbing**, because it calls `startAutomationServer()` directly;
+  the option is read in `WorkbenchUI::initializeWorkbench()`, which both frontends share.
+
+The command line itself has a CTest suite of its own, `tst_automation_cli`, which needs no GUI and covers the failing
+paths (an empty discovery scope, a descriptor whose process is gone, unknown verbs and missing arguments, the exit codes
+and the one-JSON-object rule). Run it with `ctest --preset native -R tst_automation_cli`, or directly with the
+`LD_LIBRARY_PATH` of §4.1.
+
 ## 10. Quick checklist
 
 1. Build the frontend: `cmake --preset native -DOVITO_BUILD_QML_FRONTEND=ON && cmake --build --preset native -j 16`.
@@ -1519,7 +1558,9 @@ Three traps it records:
    Pipeline model: `--qml-pipeline-check` (roles, stable IDs, selection and undo, command list; see §9.2.9). It belongs at
    the end of a run: it imports a data set of its own and replaces the current one. Animation model:
    `--qml-animation-check` (interval, tracks, keys, selection, key moves, deletion, range, playback; see §9.2.10); it
-   animates a scene node of its own, so it runs before the pipeline check.
+   animates a scene node of its own, so it runs before the pipeline check. Automation foundation:
+   `--qml-automation-check` (serving a session, the `ovito --automation` client of this build, the read-only grant, the
+   teardown; see §9.2.11); it starts the product executable as a child process, so this build must have one.
    Command layer: `--qml-command-check` (the commands the QML workbench sees, their state rules and their handlers;
    see §9.3). Workbench state: the shared task progress model is covered by `--qml-import-check` (§9.2), the session
    workflow by `--qml-session-check` (§9.2.1) and the settings facade by `--qml-settings-check` (§9.2.2). Pass a data

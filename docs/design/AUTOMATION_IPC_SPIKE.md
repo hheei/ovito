@@ -19,8 +19,8 @@ arbitrary filesystem writes, and deterministic protocol errors?*
 | Piece | Where it lives | What it is |
 |---|---|---|
 | Session descriptor | `core/automation/AutomationSessionDescriptor` (**Core**, tested) | The discovery contract: identity, owning process, socket path, start time, contract version; written with owner-only permissions into a per-user directory, scanned by a client, and classified as stale when its process is gone |
-| Endpoint (server) | `automation/spike/ipc/AutomationLocalEndpoint` (spike) | A `QLocalServer` speaking one JSON object per line, one gateway per connection, capability policy per connection, event push, bounded snapshot composition, capture with an in-memory artifact |
-| Client | `automation/spike/ipc/AutomationLocalClient` (spike) | Discovery, connect, handshake, request/reply by ID, subscription, pushed events, capture, plus the stale-descriptor rules a client has to apply |
+| Endpoint (server) | `automation/transport/AutomationLocalEndpoint` (spike code promoted into Core by Phase 3, D67) | A `QLocalServer` speaking one JSON object per line, one gateway per connection, capability policy per connection, event push, bounded snapshot composition, capture with an in-memory artifact |
+| Client | `automation/transport/AutomationLocalClient` (promoted into Core by phase 3, D67; it is what `ovito --automation` uses) | Discovery, connect, handshake, request/reply by ID, subscription, pushed events, capture, plus the stale-descriptor rules a client has to apply |
 | Spike program | `automation/spike/IpcSpikeMain.cpp` | `--serve` (host a session), `--list [--prune]` (what a client can see), and the default self-test that starts servers of its own and checks 24 rules against them |
 
 The descriptor is deliberately the only piece in Core: discovery is a filesystem convention that a later CLI, an MCP

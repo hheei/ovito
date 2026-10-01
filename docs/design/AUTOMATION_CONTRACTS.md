@@ -41,14 +41,15 @@ a GUI, a window system or a graphics device.
 
 ## 2. The contract version and its compatibility rule
 
-* The contract version is `AutomationContract::version()`, `"<major>.<minor>"`, currently **0.2**. Every
+* The contract version is `AutomationContract::version()`, `"<major>.<minor>"`, currently **0.3**. Every
   `AutomationResult` carries it as `contractVersion`, including failures.
 * A **new minor version may** add operations, parameters, capability names, error codes and result fields, and may relax
   a previously required parameter. It **may not** remove or rename any of them, require a new parameter, change a
   parameter's type, or change the meaning of an existing error code; that needs a new **major** version.
-* `0.x` means the contract is still being completed by the remaining Phase 2.6 deliverables and has one consumer at a
-  time. 0.2 added the task lifecycle vocabulary (`TaskState`, `EventKind`, `ActivityOrigin`) and the capability
-  `TaskControl`, which is exactly the additive change the rule allows.
+* `0.x` means the contract is still being completed by the phases that implement it and has one consumer at a time.
+  0.2 added the task lifecycle vocabulary (`TaskState`, `EventKind`, `ActivityOrigin`) and the capability `TaskControl`;
+  0.3 added the three read operations of §8 that a client needs to look at a session (`viewport.list`,
+  `selection.describe`, `object.describe`). Both are exactly the additive change the rule allows.
 * Enum numeric values are not part of the contract - wire names are. `TaskControl` was therefore appended after
   `ProcessExecute` instead of being inserted where it reads best, so that no existing name changes value.
 
@@ -239,6 +240,9 @@ authority by being refused (dispatching the whole catalog without a capability l
 | `session.describe` | query | `session.read` | - | `hasDataSet`, `contractVersion`, `revision`, `sessionFilePath`, `objectCount`, `clientId`, `origin`, `capabilities`, `viewports[]` (`id`, `viewType`, `active`), `sceneNodeCount`, `selectedObjects[]`, `currentFrame`, `taskCount`, `openTransactionId` |
 | `scene.list_nodes` | query | `scene.read` | - | `nodes[]`: `id`, `title`, and `pipelineId` when the node holds a pipeline |
 | `pipeline.describe` | query | `scene.read` | `pipelineId` (object-id, required) | `id`, `items[]` in evaluation order: `id` (modification nodes only), `type`, `title`, `className` |
+| `viewport.list` | query | `session.read` | - | `viewports[]`: `id`, `viewType`, `title`, `active`, `maximized`, `fieldOfView`, `gridVisible`, `renderPreviewMode`, `sceneNodeCount`; `activeViewportId`, `maximizedViewportId` |
+| `selection.describe` | query | `selection.read` | - | `sceneNodes[]`: `id`, `title`, `pipelineId`; `count` |
+| `object.describe` | query | `scene.read` | `objectId` (object-id, required) | `id`, `kind`, `className`, `title`, plus the payload of the kind: `pipelineId` (scene node), `items[]` (pipeline, as `pipeline.describe`), `modifierType`, `enabled`, `pipelineIds[]`, `properties[]` (modification node), `viewport` and `properties[]` (viewport), `ownerId`, `ownerTitle`, `ownerClass`, `name`, `label`, `type`, `value` (property) |
 | `task.list` | query | `session.read` | `limit` (integer, optional) | `tasks[]` newest first, `count`, `lastSequence` |
 | `task.describe` | query | `session.read` | `taskId` (string, required) | The task record of §9.1 |
 | `task.cancel` | **command** | `task.control` | `taskId` (string, required) | The task record; see §9.2 |
@@ -255,13 +259,27 @@ Notes that a client needs and the table cannot carry:
 * The source node at the end of a pipeline's chain has no ID of its own yet: it is reported by `title` and `className`.
 * `session.describe` is the first call a client makes: it answers whether there is anything to look at, which contract
   is being spoken, and which revision the next request should be based on.
+* `viewport.list` is how a client learns to address a viewport: the ID of a viewport cannot be derived from anything a
+  client knew before it saw it once, so the list is its entry point to `object.describe`, to the captured images of
+  Phase 5 and to the viewport operations that follow.
+* `selection.describe` is the one operation that needs `selection.read` and nothing else. A client that may look at what
+  is selected need not be allowed to read the whole scene, which is what makes the capability meaningful; it is also why
+  the selection payload is small (the selected scene nodes) and not a second `scene.list_nodes`.
+* `object.describe` is the generic by-ID read: one operation instead of one per kind, and the only one that answers
+  about a **property** - `property:v1/fieldOfView`, the owner's local name plus the field name (see §4). A modification
+  node and a viewport report their parameters with the property IDs a client passes back when it changes one later, so
+  a client can read what it will be able to write without a second catalog.
+* A property's `value` is a JSON value: a field whose type has no JSON representation (a `Vector3`, an
+  `AffineTransformation`) is reported by its `type` name with a null `value`, so that the parameter is visible instead of
+  silently missing the way a field without read accessors would be (§14.1).
 * **There is no catalog query.** A client learns this catalog from this document, from the C++ API, or from the
-  `knownOperations` list of an `unknown_operation` failure. A `catalog.list` operation is Phase 3 work; the
+  `knownOperations` list of an `unknown_operation` failure. A `catalog.list` operation is still not built; the
   declare-without-handler mechanism of §3.1 exists so that it can be reserved before it works.
 
-Phase 2.6 adds one command, `task.cancel`. Every other operation is a query, which is what "a local client can perform
-only the bounded read-only snapshot" of the exit gate means: the write capabilities exist in the vocabulary and are
-checked by the gateway, but no builtin operation requires one, and a later phase adds the operations that do.
+Phase 2.6 added one command, `task.cancel`; Phase 3 added the three read operations above. Every other operation is a
+query, which is what "a local client can perform only the bounded read-only snapshot" of the exit gate means: the write
+capabilities exist in the vocabulary and are checked by the gateway, but no builtin operation requires one, and a later
+phase adds the operations that do.
 
 ## 9. Tasks
 
@@ -590,7 +608,7 @@ Phase 3 transport.
   name under the shared temporary directory, where another user could squat on the name. The path stays short enough for
   the 104-character limit of a UNIX socket path on macOS.
 
-### 17.2 The wire (prototype)
+### 17.2 The wire
 
 One UTF-8 JSON object per line. Request types: `hello`, `ping`, `dispatch`, `snapshot`, `subscribe`, `unsubscribe`,
 `capture`, `bye` (and `quit`, which the endpoint accepts only when started with that permission). Answers are
@@ -618,13 +636,44 @@ exchange carrying the contract's own result, whose `ok` may still be false with 
 vocabularies are disjoint on purpose: the first means "the session did not understand the request", the second means
 "the session understood it and refused the operation".
 
-### 17.4 What is not proven here
+### 17.4 The command line client (`ovito --automation`)
+
+The first client of this transport is a mode of the shipped binary rather than a second program (audit decision D60):
+
+```
+ovito --automation list      [--json] [--session <id>]
+ovito --automation status    [--json] [--session <id>] [--limit <n>]
+ovito --automation describe  <object-id> [--json] [--session <id>]
+ovito --automation snapshot  [--json] [--session <id>] [--max-nodes <n>]
+ovito --automation events    [--json] [--session <id>] [--since <n>] [--limit <n>]
+```
+
+* **It is a read-only client.** It asks for `session.read`, `scene.read`, `selection.read` and `file.read`, and for
+  nothing else: there is no option that widens the request, and no verb that changes anything, so it cannot execute
+  Python or write a file even against a session that would grant it.
+* **`list` never connects.** Discovery is a filesystem convention (§17.1), so a user can see what is running - including a
+  session that does not answer - without disturbing any of it.
+* **Discovery is per session directory**, taken from `OVITO_AUTOMATION_SESSION_DIR` when it is set, which is how a test
+  gets a private scope of its own.
+* **`--json` prints one JSON object per invocation** (`{"ok": true|false, "verb": ..., ...}`), with the contract's own
+  result payload under `session` / `viewports` / `selection` / `tasks` / `snapshot` / `object` / `events` and the
+  capabilities the session granted. Without `--json` the same answer is printed as text for a human.
+* **The exit code says what happened**: `0` the verb answered, `1` the session refused the request or the exchange broke,
+  `2` the request could not be carried out at all (no running session, no session matching `--session`, an unknown verb or
+  a missing argument). A script reads the code and, on failure, the `error.code` of the JSON answer - which is how
+  `no_session`, a transport failure and a contract error stay distinguishable.
+* **The session it talks to must have been asked to serve.** A workbench publishes its session only when it was started
+  with `--automation-serve`, in which case it grants connecting clients the read capabilities of D43 (audit decision
+  D59); the command line says so when it finds nothing.
+
+### 17.5 What is not proven here
 
 The rendering half of a capture is unproven: a real image needs a graphics device and this tree has no headless QPA
 plugin, so the artifact's transport, bounds and bytes are certified while the render behind them is not (O19, Phase 5).
-The endpoint is prototype code: one connection at a time, no backpressure beyond the socket buffer, no resume beyond a
-`since` sequence, no authentication beyond the permissions of the directory and the socket, and measured on Linux x86_64
-only (O20, Phase 3).
+The endpoint serves one connection at a time, has no backpressure beyond the socket buffer, no resume beyond a `since`
+sequence, and no authentication beyond the permissions of the directory and the socket; it has been measured on Linux
+x86_64 only (macOS caps a socket path at 104 characters, Windows uses named pipes without permission bits) - O20, whose
+remaining half is a production transport for a *remote* client, which no phase has designed.
 
 ## 18. What this contract does not promise
 
@@ -645,19 +694,20 @@ only (O20, Phase 3).
 
 ## 19. Verification, and the exit gate of Phase 2.6
 
-The five suites run in `ctest --preset native` (11/11) and again in the assertion-enabled tree of
+The six suites run in `ctest --preset native` (12/12, 107 cases) and again in the assertion-enabled tree of
 [UI_TEST_ENV.md](UI_TEST_ENV.md) §4:
 
 | Suite | Cases | Covers |
 |---|---|---|
-| `tst_automation_contracts` | 28 functions, 30 cases | Vocabulary, wire types, identity grammar and lifetime, revision preconditions, dispatch order, the catalog, tasks, transactions, permissions, undo/redo identity survival, a presentation refresh, and the rule that events carry no argument values |
+| `tst_automation_contracts` | 31 functions, 33 cases | Vocabulary, wire types, identity grammar and lifetime, revision preconditions, dispatch order, the catalog, tasks, transactions, permissions, undo/redo identity survival, a presentation refresh, and the rule that events carry no argument values |
 | `tst_python_environment_probe` | 20 functions, 22 cases | Every probe status, in the fixed order of §13.3, and the absence of silent fallback |
 | `tst_python_data_bridge` | 16 functions, 18 cases | The array descriptor rules, the framed round trip with recomputed digests, an 8 MB payload, the refusals of both sides, a dead interpreter reported by exit code, a graceful stop, a cancellation |
 | `tst_python_schema_preview` | 15 functions, 17 cases | The report value type, AST mode executing nothing, an import mode that does, diagnostics with positions and mapped tracebacks, every exchange failure |
 | `tst_session_descriptor` | 8 functions, 10 cases | The discovery convention of §17.1: allocation, round trip, permissions, staleness, unusable files |
+| `tst_automation_cli` | 5 functions, 7 cases | The command line of §17.5: its read-only capability request, an empty and a stale discovery scope, the exit code of every failing invocation, and one JSON object per invocation |
 
 Two spike programs provide the evidence the suites cannot: `ovito-automation-spike` (topology and transfer: 93 checks with numpy and 89 without,
-all passing) and `ovito-automation-ipc-spike` (`24/24` checks: discovery, handshake and refusals, a
+all passing), `ovito-automation-ipc-spike` (`24/24` checks: discovery, handshake and refusals, a
 bounded snapshot, dispatch, a stale revision, an unknown operation, a missing capability, malformed and unsupported
 messages, a subscription, an artifact verified byte for byte, `render_unavailable`, an oversized capture, the client
 limit, both shutdown modes and a stale prune).
@@ -679,5 +729,6 @@ The exit gate of the phase, item by item:
 What the phase leaves open is recorded in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §5 rather than hidden here: O13 (this
 document) is closed; O14 is resolved; O15 is a pre-existing numbering defect of the decision record; O16, O17 and O21
 (the package-location seam, the unmeasured pooled shared-memory and embedded halves, the missing property-array adapter)
-belong to Phase 4; O18, O19 and O20 (the layer's missing caller, the render half of a capture, the prototype endpoint)
-belong to Phases 3 and 5.
+belong to Phase 4; O18 (the layer's missing caller) was closed by Phase 3, which attached the session to every workbench
+and put the command line and the serving frontend on top of it; O19 (the render half of a capture) belongs to Phase 5 and
+the remaining half of O20 (a transport for a remote client) belongs to no phase yet.

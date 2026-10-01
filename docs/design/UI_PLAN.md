@@ -869,10 +869,12 @@ the last column owns the first user-facing implementation and acceptance gate.
   over `ActionManager` (D57); a continuous edit is one `UndoableTransaction` per gesture (D58); a workbench serves a
   local session only when it is asked to (D59); and the CLI JSON mode is a mode of the `ovito` binary (D60). The phase
   runs in four slices - **S1** = deliverables 1, 3, 4 and 5, **S2** = deliverable 2, **S3** = deliverable 6,
-  **S4** = deliverable 7 - and §8 Verification names the check each slice adds. **S1 (deliverables 1, 3, 4 and 5), S2
-  (deliverable 2) and S3 (deliverable 6) are delivered and verified** by the new `--qml-pipeline-check` and
-  `--qml-animation-check` steps, the extended `--qml-session-check` and `ctest --preset native` (11/11); the last slice
-  is S4, the automation foundation.
+  **S4** = deliverable 7 - and §8 Verification names the check each slice adds. **All four slices are delivered and
+  verified:** `--qml-pipeline-check`, `--qml-animation-check`, the extended `--qml-session-check` and
+  `--qml-automation-check` report 0 failed checks in the release and in the assert-enabled build, the transport of
+  Phase 2.6 is Core code that its own spike still self-tests, `tst_automation_cli` covers the new `ovito --automation`
+  command line, and `ctest --preset native` is 12/12. The phase's decisions are D53-D70, its open items O22-O24 and its
+  resolved ones O18 and O20.
 - **Deliverables**:
   1. Pipeline presentation using the Phase 0 reuse decision: roles, selection, source/visual-element rows, groups, shared objects, and evaluation status. New adapters, if needed, live under `src/ovito/gui/qml/models/`.
   2. Animation presentation for the scene interval, current time/frame, playback settings, controllers, and keyframe selection. Add scene selection adaptation only where the shared API needs it.
@@ -891,6 +893,10 @@ the last column owns the first user-facing implementation and acceptance gate.
      stable object IDs, revisions, structured errors, task/event subscriptions and a local JSONL/IPC endpoint. The first
      CLI mode is read-only and must use the same query catalog as later writable clients. Production viewport PNG capture
      belongs to Phase 5; Phase 2.6's capture probe is not a public Phase 3 operation.
+     **Delivered** per D67 (the transport moved into Core, and Phase 2.6's spike self-tests it there), D68 (the three
+     read operations of the catalog), D69 (the read-only `ovito --automation` client) and D70 (a workbench serves its
+     session only when asked), verified by `tst_automation_cli`, the extended `tst_automation_contracts` and
+     `--qml-automation-check`.
 - **Exit Gate**: Verify the **model and command APIs**, not a UI workflow: insert/reorder/delete of pipeline items
   through the shared operations and their undo/redo, cancellation restoring the original value, coherent selection after
   deletion and undo, and no stale writes when a dataset is replaced during an edit. Reopen a saved session and verify

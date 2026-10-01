@@ -483,9 +483,13 @@ items is the transport and the consent/user-interface half.
    (`AutomationSessionDescriptor`, in Core and tested without a socket), the socket is an **absolute path inside that
    owner-only directory** so no other user can own the name, capabilities are granted per connection with every refusal
    named, the snapshot is a composition of contract answers with explicit truncation flags, artifacts are bounded and in
-   memory, and the transport's error codes are disjoint from the contract's. What is *not* settled and belongs to Phase 3:
-   the production endpoint (backpressure, resume, a client that stops reading), the CLI and its JSON mode, and the
-   Windows/macOS runs (O20). Remote access is not designed here and would need real authentication.
+   memory, and the transport's error codes are disjoint from the contract's. **Settled by Phase 3** (D67, D69, D70): the
+   endpoint and the client are Core code (`automation/transport/`, with the Phase 2.6 spike kept as their self-test), a
+   workbench serves its session only under an explicit start-up option and grants connecting clients the read capabilities,
+   and `ovito --automation <verb> [--json]` is the first client - read-only by construction, with exit codes `0`/`1`/`2`
+   and one JSON object per invocation ([AUTOMATION_CONTRACTS.md](AUTOMATION_CONTRACTS.md) §17). What remains open is the
+   *remote* story: real authentication, backpressure, resume beyond a `since` sequence, and the Windows/macOS runs (O20),
+   which no phase has designed.
 7. **GUI capture vs scene rendering**: exact semantics and whether current viewport capture is available on all target
    platforms while hidden/minimized. **Partly settled in Phase 2.6**: the protocol half is measured (a capture returns a
    bounded in-memory PNG artifact, no file is written, the client verifies the bytes) while the rendering half is not,
