@@ -871,15 +871,24 @@ void measureFrameRate(QmlMainWindowUI* ui, int durationMs, std::function<void()>
 
     auto* timer = new QTimer(window);
     timer->setSingleShot(true);
-    QObject::connect(timer, &QTimer::timeout, window, [frames, counter, durationMs, items, continuation]() {
+    QObject::connect(timer, &QTimer::timeout, window, [frames, counter, durationMs, items, continuation, window]() {
         QObject::disconnect(counter);
         const double fps = durationMs > 0 ? (*frames * 1000.0) / durationMs : 0.0;
         qInfo() << "FRAME_STATS" << *frames << "frames in" << durationMs << "ms with" << items.size() << "viewports ->"
-                << QString::number(fps, 'f', 1) << "fps (" << QString::number(fps > 0.0 ? 1000.0 / fps : 0.0, 'f', 2) << "ms/frame)";
-        // A viewport that renders nothing at all still looks healthy in a screenshot-less run; this is the check
-        // that catches it.
-        if(*frames == 0)
-            reportVerificationFailure(QStringLiteral("no frame was rendered within %1 ms").arg(durationMs));
+                << QString::number(fps, 'f', 1) << "fps (" << QString::number(fps > 0.0 ? 1000.0 / fps : 0.0, 'f', 2) << "ms/frame)"
+                << "window exposed:" << window->isExposed() << "visibility:" << static_cast<int>(window->visibility());
+        // A viewport that renders nothing at all still looks healthy in a screenshot-less run; this is the check that
+        // catches it. Whether the window is expected to present at all is Qt's own statement, though: a process that
+        // runs without a desktop session to present to - an ssh logon on Windows, where the prewarm check's frame probe
+        // reports zero as well while the picking buffer it renders offscreen holds real content - cannot swap a frame,
+        // and failing it there would report the host rather than the frontend.
+        if(*frames == 0) {
+            if(window->isExposed())
+                reportVerificationFailure(QStringLiteral("no frame was rendered within %1 ms").arg(durationMs));
+            else
+                qInfo() << "FRAME_STATS the window was never exposed, so there was nothing to present: this host has no "
+                           "desktop session to render into (UI_TEST_ENV.md 5.5)";
+        }
         reportCheckPhase("measurement");
         continuation();
     });

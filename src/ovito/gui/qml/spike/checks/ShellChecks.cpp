@@ -1239,7 +1239,6 @@ void runSettingsTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 #if defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
     if(!settings.followsSystemColorScheme())
         reportVerificationFailure(QStringLiteral("settings check: following the system color scheme is not compulsory on this platform"));
-    reportCheckPhase("first-start flags");
     qInfo() << "SETTINGS_TEST the color scheme always follows the system on this platform, dark theme is" << cppDarkTheme;
 #else
     const bool originalFollowSystem = settings.followsSystemColorScheme();
@@ -1248,6 +1247,10 @@ void runSettingsTest(QmlMainWindowUI* ui, std::function<void()> continuation)
     settings.setFollowsSystemColorScheme(originalFollowSystem);
     qInfo() << "SETTINGS_TEST the automatic color-scheme flag round-trips, dark theme is" << cppDarkTheme;
 #endif
+
+    // Reported outside the platform branch above: the phases of a check are the same on every platform, so a phase that
+    // is only exercised on some of them is still reported there.
+    reportCheckPhase("first-start flags");
 
     qInfo() << "SETTINGS_TEST the shared settings facade round-trips the window state, the file dialog behaviour and"
             << "the first-start flags; the shell's theme follows it";
