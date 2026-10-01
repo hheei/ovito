@@ -406,9 +406,21 @@ def _execute(request):
         return _op_sleep(request)
     if op == "crash":
         # A deliberate hard exit: the caller measures how fast it notices a dead worker and how well it recovers.
-        sys.stdout.flush()
+        sys.stdout.buffer.flush()
         os._exit(3)
     raise KeyError("unknown operation: {}".format(op))
+
+
+def _write_line(text):
+    """Writes one protocol line, ending it with a single line feed on every platform.
+
+    The line goes to the *binary* stream: a text-mode stdout translates '\n' into '\r\n' on Windows, and while a
+    tolerant JSON reader survives the trailing carriage return, the protocol is one JSON object per line and a client
+    is entitled to trust the line ending it is given. Every caller holds the output lock, so a header line and the raw
+    payload that follows it can never be interleaved with an answer from the reader thread.
+    """
+    sys.stdout.buffer.write(text.encode("utf-8") + b"\n")
+    sys.stdout.buffer.flush()
 
 
 def _error_response(code, message):
@@ -441,8 +453,7 @@ def _reader(queue, lock):
             # A header that cannot be parsed leaves the stream unusable if a payload was announced, which is why the
             # caller (OVITO) never builds one: this is a defect report, not a supported way to talk to the worker.
             with lock:
-                sys.stdout.write(json.dumps(_error_response("invalid_argument", str(exc))) + "\n")
-                sys.stdout.flush()
+                _write_line(json.dumps(_error_response("invalid_argument", str(exc))))
             continue
         payload_size = int(request.get("bytes") or 0)
         if payload_size:
@@ -452,8 +463,7 @@ def _reader(queue, lock):
             if event is not None:
                 event.set()
             with lock:
-                sys.stdout.write(json.dumps({"id": request.get("id"), "ok": True, "cancelled": request.get("target")}) + "\n")
-                sys.stdout.flush()
+                _write_line(json.dumps({"id": request.get("id"), "ok": True, "cancelled": request.get("target")}))
             continue
         _cancelled[request.get("id")] = threading.Event()
         queue.put(request)
@@ -475,8 +485,7 @@ def main():
         if request.get("op") == "quit":
             _close_all_segments()
             with lock:
-                sys.stdout.write(json.dumps({"id": request_id, "ok": True, "quitting": True}) + "\n")
-                sys.stdout.flush()
+                _write_line(json.dumps({"id": request_id, "ok": True, "quitting": True}))
             # os._exit, not a return: the reader thread is blocked in a read on standard input, and letting the
             # interpreter finalize while that thread holds the buffered-reader lock aborts the process
             # ("Fatal Python error: _enter_buffered_busy ... possibly due to daemon threads") - which a caller sees as a
@@ -496,8 +505,7 @@ def main():
         response["id"] = request_id
         response["wallMs"] = (time.perf_counter() - started) * 1000.0
         with lock:
-            sys.stdout.write(json.dumps(response) + "\n")
-            sys.stdout.flush()
+            _write_line(json.dumps(response))
             if payload:
                 # The framed transfer: exactly the announced number of bytes, immediately after the header line.
                 sys.stdout.buffer.write(payload)

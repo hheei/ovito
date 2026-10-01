@@ -962,6 +962,12 @@ cases of `tst_session_descriptor`. Four traps are behind that, and each is a rul
   asks the operating system with `kill(pid, 0)` on UNIX and answers "alive" everywhere else, because deleting the descriptor
   of a live session is worse than trying to connect to a dead one and failing. A case that asserts "a dead PID is stale"
   is therefore a UNIX case; the suite branches on the platform and checks the rule in both directions.
+* **A text-mode stdout writes `\r\n` on Windows.** The Python worker framed its JSON headers with
+  `sys.stdout.write(... + "\n")`, which a Windows interpreter turns into a carriage return *and* a line feed. JSON tolerates
+  the stray `\r`, so a tolerant client keeps working by luck, but the protocol promises one JSON object per line and the
+  caller is entitled to trust the line ending. The worker writes its header lines through `sys.stdout.buffer` now
+  (`_write_line()`), which is the same stream the raw payload uses and is never translated; every write holds the one
+  output lock, so a header cannot be interleaved with an answer from the reader thread.
 * **A `pwsh` step's exit code is the exit code of its last statement.** The Windows Build step ended with an
   `if (Get-Command ccache ...) { ccache --show-stats }` report, so the failed `cmake --build` did not fail the step: the job
   reported a *successful* Build and the linker error reappeared 20 seconds later as an unexplained `Test (CTest)` failure
