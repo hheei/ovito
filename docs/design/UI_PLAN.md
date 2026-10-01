@@ -869,9 +869,9 @@ the last column owns the first user-facing implementation and acceptance gate.
   over `ActionManager` (D57); a continuous edit is one `UndoableTransaction` per gesture (D58); a workbench serves a
   local session only when it is asked to (D59); and the CLI JSON mode is a mode of the `ovito` binary (D60). The phase
   runs in four slices - **S1** = deliverables 1, 3, 4 and 5, **S2** = deliverable 2, **S3** = deliverable 6,
-  **S4** = deliverable 7 - and §8 Verification names the check each slice adds. **S1 (deliverables 1, 3, 4 and 5) is
-  delivered and verified** by the new `--qml-pipeline-check` step and `ctest --preset native` (11/11); the next slice is
-  S2.
+  **S4** = deliverable 7 - and §8 Verification names the check each slice adds. **S1 (deliverables 1, 3, 4 and 5) and
+  S2 (deliverable 2) are delivered and verified** by the new `--qml-pipeline-check` and `--qml-animation-check` steps and
+  `ctest --preset native` (11/11); the next slice is S3, the session workflow.
 - **Deliverables**:
   1. Pipeline presentation using the Phase 0 reuse decision: roles, selection, source/visual-element rows, groups, shared objects, and evaluation status. New adapters, if needed, live under `src/ovito/gui/qml/models/`.
   2. Animation presentation for the scene interval, current time/frame, playback settings, controllers, and keyframe selection. Add scene selection adaptation only where the shared API needs it.

@@ -1403,6 +1403,7 @@ The spike used to be one 3300-line `Main.cpp`. It is now five files, and the rul
 | `spike/checks/RenderingChecks.cpp` | graphics device, picking, hide/show, resize, offscreen service, picking pre-warm, frame rate, lifecycle |
 | `spike/checks/ImportChecks.cpp` | the import path: trajectory, unsupported file, cancelled import, playback |
 | `spike/checks/PipelineChecks.cpp` | the pipeline model of Phase 3: roles, stable IDs, selection while editing, the shared operations with their undo, the command list model |
+| `spike/checks/AnimationChecks.cpp` | the animation model of Phase 3: the interval and the current time with their undo, the tracks and keys of the selected objects, key selection, key moves, key deletion, the visible range, playback |
 
 A new check is one entry in `main.cpp`'s `spikeSteps()` table - the option, the predicate that decides whether the value asks for the step at all, and the check to run. That table is the single source for the parser options, the help text, the run order and the *is this a verification run* decision, and it exists because those used to be three separate lists: a check that was registered in the parser but forgotten in the predicate hung until the caller's timeout killed it, which costs a CI round and looks like a product defect. A helper moves into `SpikeHarness.h` once two check files need it; a helper of one check stays `static` in its file.
 
@@ -1446,6 +1447,48 @@ Two traps it records:
   first, because the scene the earlier steps leave behind may contain no data at all.
 
 
+### 9.2.10 Testing the animation model (Phase 3, S2)
+
+`--qml-animation-check` verifies the model side of the timeline (audit D53, D56, D58, D63). It is a *model* check as well:
+the timeline widget is Phase 5 d2, so the check drives the `QmlAnimationModel` a timeline will bind to and looks at the
+controllers and keys that the model found. Every phase is separated by a wait, because the key rows follow the
+notifications of the controllers and the scene applies the current frame asynchronously.
+
+It verifies, in this order:
+
+1. the animation state of a freshly imported, static lattice (one frame, `isSingleFrame()`), that `setInterval()` is one
+   undo step which the undo reverts and the redo repeats, that the current frame is clamped to the interval, and that the
+   frame<->time conversion is the one of the animation settings (a string they cannot parse has no frame);
+2. the tracks: which animated parameters of the *selected* scene node the model found (its transformation controller
+   contributes a position, a rotation and a scaling track), that a parameter without keys contributes no row, and that
+   three keys created on those controllers - the way a property editor or auto-key mode creates them - appear as three
+   rows naming parameter, frame, time string and value;
+3. the selection: replacing, adding, selecting all keys of a frame, clearing, and jumping the current frame to a selected
+   key;
+4. the continuous key move of a drag (D58): a shift, a second shift that *replaces* the first one instead of adding to it,
+   the clamping at the interval boundary, that cancelling restores the frames the gesture started from without leaving an
+   undo step, and that an accepted drag is exactly one undo step whose undo puts the keys back;
+5. the discrete move: one undo step per call, and a shift that cannot move anything (all selected keys already at the
+   interval boundary) recording nothing;
+6. the deletion of two of three keys, its undo returning the keys at the frames they were deleted at, and the fact that
+   the selection of deleted keys is *not* restored by the undo, which is what the classic track bar does as well;
+7. the visible range as presentation state (D56): it follows the interval, an explicit range survives an interval change
+   and `resetRange()` makes it follow again, an inverted range is refused and an out-of-interval one is clamped;
+8. the playback state - which is core's `SceneAnimationPlayback` and not this model, mirrored by the model and driven
+   through the shared `AnimationTogglePlayback` command - and the playback settings as undoable edits.
+
+Three traps it records:
+
+* **Keys cannot be created through a timeline.** The classic timeline has no add-key operation (keys come from the
+  property editors and auto-key mode), so the check creates them through `KeyframeController::createKey()` on the selected
+  node's transformation controllers and verifies the *presentation* of the result.
+* **Do not measure an edit by the size of the undo stack.** Undoing keeps the undone operation on the stack for redo, so an
+  edit that truncates the redo part leaves the size unchanged while it does add a step; the check counts the *depth*
+  (`canUndo() ? index() + 1 : 0`) instead. Measuring the size produced a false failure of the deletion phase.
+* **The check animates the scene node it imports**, so it belongs after the checks that need the scene they leave behind
+  and before `--qml-pipeline-check`, which replaces the data set at its end.
+
+
 ## 10. Quick checklist
 
 1. Build the frontend: `cmake --preset native -DOVITO_BUILD_QML_FRONTEND=ON && cmake --build --preset native -j 16`.
@@ -1455,7 +1498,9 @@ Two traps it records:
 5. Lifecycle: `--qml-lifecycle-cycles N`, `--qml-hide-show`, `--qml-resize WxH`.
    Import path: `--qml-import-check` (trajectory, unsupported file, cancelled import; see §9.1).
    Pipeline model: `--qml-pipeline-check` (roles, stable IDs, selection and undo, command list; see §9.2.9). It belongs at
-   the end of a run: it imports a data set of its own and replaces the current one.
+   the end of a run: it imports a data set of its own and replaces the current one. Animation model:
+   `--qml-animation-check` (interval, tracks, keys, selection, key moves, deletion, range, playback; see §9.2.10); it
+   animates a scene node of its own, so it runs before the pipeline check.
    Command layer: `--qml-command-check` (the commands the QML workbench sees, their state rules and their handlers;
    see §9.3). Workbench state: the shared task progress model is covered by `--qml-import-check` (§9.2), the session
    workflow by `--qml-session-check` (§9.2.1) and the settings facade by `--qml-settings-check` (§9.2.2). Pass a data
