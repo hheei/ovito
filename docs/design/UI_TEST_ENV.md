@@ -692,6 +692,54 @@ that was reproducible is `ovito --gui=qml` with a data file.
 
 ---
 
+### 5.6 Verifying a change on the two hosts rather than on CI
+
+A change is verified where it can break, and the two hosts above are faster than the runners by an order of magnitude:
+
+| A change to | Is verified on |
+| --- | --- |
+| anything (the default) | this Linux workstation: the native preset, `ctest --preset native`, the QML checks under `xvfb-run` |
+| Windows-specific code, the suites that only fail on Windows, the D3D12/WARP smoke path | the Windows host `kitty` (`ssh kitty`) |
+| macOS-specific code, the Cocoa/Metal smoke path | the macOS host `buddy` (`ssh kings@buddy`, sections 5.1 and 5.2) |
+
+GitHub CI stays the fourth and slowest place: a push starts a three-platform matrix and cancels the run in flight, so it
+confirms that the hosts agree with the runners instead of being where a failure is first diagnosed.
+
+**Both hosts take the code from this workstation, never from the network** (kitty has no route to `github.com` at all, and
+`git fetch` there fails with `Failed to connect to github.com port 443`). The bundle needs a commit the host already has:
+
+```bash
+git bundle create /tmp/ovito.bundle 5decf25..master        # 578 KB for a few dozen commits
+scp /tmp/ovito.bundle kitty:C:/ovito/ ; scp /tmp/ovito.bundle kings@buddy:/Users/kings/
+ssh kitty powershell -NoProfile -EncodedCommand <script as base64 UTF-16LE>   # quoting-free remote commands
+ssh kings@buddy bash -s < script.sh
+# then, on either host: git fetch <bundle> master:refs/heads/verify-ci && git checkout verify-ci
+```
+
+Each host keeps the checkout it already had and gets a verification branch, so the branch and build configuration the
+host uses for its own work stay as they are:
+
+* **buddy**: `~/ovito/build` is already configured with `OVITO_BUILD_CPP_TESTS=ON` and `/Users/kings/.ccache` is warm, so
+  `/opt/homebrew/bin/cmake --build build --parallel 8 --target <test>` rebuilds a small change in about a minute.
+* **kitty**: `C:\ovito\build-verify` is a *second* build directory (the machine's own `C:\ovito\build` is left alone),
+  configured with the Visual Studio copy of CMake and Ninja, Qt `C:/Users/chlo/Qt/6.10.2/msvc2022_64`,
+  `BOOST_ROOT=C:/Users/chlo/Tools/boost_1_92_0`, `ZLIB_ROOT=C:/Users/chlo/Tools/zlib` (section 5.5, defect F16),
+  `-DOVITO_REDISTRIBUTABLE_PACKAGE=ON` — the option that makes the *bundled* HDF5/NetCDF submodules be built instead of a
+  system HDF5 being looked for, which is why a machine without HDF5 can configure at all — and `-DOVITO_BUILD_CPP_TESTS=ON`.
+
+**The Python suites need a real interpreter on kitty.** What `findInterpreter()` finds there by default is a Microsoft
+Store *app execution alias* (`...\WindowsApps\python3.exe`), which fails when it is started without a console. The official
+*embeddable* distribution is enough, because the worker and the schema preview use the standard library only:
+
+```powershell
+Expand-Archive C:\ovito\py313.zip C:\ovito\py313                   # python-3.13.7-embed-amd64.zip, 11 MB
+Copy-Item C:\ovito\py313\python.exe C:\ovito\py313\python3.exe     # findInterpreter() looks for 'python3' first
+```
+
+Prepended to `PATH`, that gives the suites a CPython 3.13 inside the version envelope of the Python contract (D48).
+Both hosts run the suites the same way they are run here - `tst_x.exe -o <file>,txt` for the full test log, and
+`OVITO_REQUIRE_TEST_BINARY=1` where a missing product executable must be a failure rather than a skip (section 6.2).
+
 ## 6. Continuous integration as a test host (all four target platforms)
 
 The GitHub workflow `.github/workflows/ci.yml` builds and smoke tests the Qt Quick frontend on the four target platforms,
