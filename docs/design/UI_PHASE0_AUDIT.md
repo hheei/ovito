@@ -771,10 +771,29 @@ counterpart must enumerate the same registry instead of naming utilities. The ob
 | D69 | **The first automation client is a mode of the shipped binary (`ovito --automation <verb> [--json]`), it is read-only by construction, and it brings its own `QCoreApplication`.** The verbs are `list`, `status`, `describe <object-id>`, `snapshot` and `events`; the capability request is fixed to the four read capabilities; `--json` prints one JSON object per invocation; the exit code is 0 (answered), 1 (the session refused, or the exchange broke) or 2 (the request could not be carried out: no session, no match for `--session`, unknown verb, missing argument). It runs in the application's console mode but creates a plain `QCoreApplication` itself, because that is what the socket needs and what makes the event loop return its exit code (finding 19). | D60 fixed that the CLI is a mode of `ovito` rather than a second program, precisely so that the argument parsing, the discovery convention and the error vocabulary are not duplicated; what it could not fix is *how* a console invocation reports failure, because the binary's console mode has no application object and no exit code of its own (finding 19). Fixing the capability request instead of offering a `--allow-write` flag is what makes this client safe to put in a script or an AI plan: it cannot execute Python or write a file even against a session that would let it, and the `status` answer names the grant so a user can see that. |
 | D70 | **A workbench serves its session only when it was asked to, and it keeps the session when it stops serving.** `WorkbenchUI::startAutomationServer()` (D59's implementation) creates the endpoint on the workbench's own session, parented to the object that owns the session, grants the read-only policy of D43, publishes the descriptor and announces the session on the console; `stopAutomationServer()` closes the socket and removes the descriptor. The `--automation-serve` start-up option is read in `initializeWorkbench()` from the application's command line, so both frontends behave the same; its *definition* is `WorkbenchUI::automationServeOption()`, which a frontend application registers (a name a frontend did not register is an unknown option, and Qt 6.10 reports one). | Serving publishes a socket and a file that every process of the user can see, which is a decision for the user (D59) and not a side effect of starting a GUI; reading the option in the shared workbench keeps the QML frontend and the classic frontend from diverging on it. Keeping the session after the socket closes is what lets the presentation keep identifying objects by contract ID while the workbench is no longer reachable from outside, and it is the teardown order that O18 asked for: the endpoint is destroyed with the object that owns the session, before the session itself. |
 
+20. **The smoke list is a concurrency test as well, and it found a pre-existing race in the frame graph builder.**
+    One full run of the CI check list died with `SIGSEGV` after the offscreen and parity checks, at the moment the import
+    check replaced the data set, and reported no failed check at all - the process was gone. A core dump put the fault in
+    `Pipeline::getReplacementVisElement(this=0x0)` called from `FrameGraphBuilder::gatherVisElements`, i.e. a scene node
+    whose `pipeline()` had become null was being rendered. The mechanism is in `FrameGraph::buildFromScene`: it collects
+    the scene's pipeline nodes as `OORef<SceneNode>`s, then `co_await`s each pipeline evaluation - suspension points at
+    which the event loop replaces the data set, and `SceneNode::requestObjectDeletion()` (SceneNode.cpp:129) clears the
+    node's *pipeline reference* before the node itself goes away. The strong references in the list keep the node alive,
+    so the crash is a null dereference rather than a use-after-free, and it is rare because it needs the replacement to
+    fall inside one of those awaits (one crash in about seven full runs of the list). `SceneNode` itself treats a missing
+    pipeline as a legitimate transient state (`SceneNode.h` guards `node->pipeline()` in `visitPipelines` and
+    `containsPipeline`), so the builder was the outlier: it now skips a node whose pipeline has disappeared, keeping the
+    results and the nodes in one pair of lists so the visual element pass stays aligned.
+    The same assumption exists in `ParticlePickingHelper`, `ParticleInspectionApplet` and `BondVis`, which read the
+    pipeline of a scene node that a pick record or a vis element handed them, but each of them runs in a synchronous
+    caller that cannot be suspended between the check and the use, so none of them is a place this race can land - which
+    is why only the frame graph path is changed.
+
 ### Verification
 
 D53-D60 are the outcome of reading the shared layer (findings 1-8) before the phase started; findings 9 and 10 and
-D61-D62 came out of the first slice's implementation; findings 13-16 came out of S3, and findings 17-19 out of S4. Each slice is verified by the checks it adds, and every check is one
+D61-D62 came out of the first slice's implementation; findings 13-16 came out of S3, findings 17-19 out of S4, and
+finding 20 out of re-running S4's full check list. Each slice is verified by the checks it adds, and every check is one
 row of `spikeSteps()` in
 `src/ovito/gui/qml/spike/Main.cpp` - the single source for the option, its help text, the run order and the decision
 whether a run verifies anything at all (the trap recorded in [UI_TEST_ENV.md](UI_TEST_ENV.md) §9.2.8).
@@ -834,6 +853,13 @@ verified, which completes Phase 3.**
   events, is granted exactly `session.read`, `scene.read`, `selection.read` and `file.read`, describes `viewport:v1` as a
   viewport with 8 parameters whose IDs have the property form, and stopping the server leaves no descriptor behind while
   the workbench keeps its session.
+* The full-list regression run of S4 (`--qml-window-size 1280x800 --qml-startup-delay 3000 --qml-lifecycle-cycles 2
+  --qml-layout-check --qml-command-check --qml-settings-check --qml-session-check --qml-library-check --qml-icon-check
+  --qml-offscreen-check --qml-prewarm-check --qml-pick 300,300 --qml-parity-check --qml-import-check
+  --qml-automation-check --qml-animation-check --qml-pipeline-check`, which is the CI list) exposed and then verified the
+  fix of finding 20: ten runs pass with 0 failed checks and no crash (four before the fix, which included the crash, and
+  six after it), and the assertion-enabled build runs `--qml-offscreen-check --qml-prewarm-check --qml-pick
+  --qml-import-check` on the changed render path with 0 failed checks and no failed `OVITO_ASSERT`.
 * What S4 did not verify: the CLI against a session of a *different* process (the check uses this process' workbench,
   because a check cannot start a second GUI), `viewport.capture` (Phase 5 owns a real rendering capture, O19), a
   transaction or a command from a client (the CLI has no write verb by design, so the write path is verified by the

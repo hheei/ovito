@@ -896,7 +896,9 @@ the last column owns the first user-facing implementation and acceptance gate.
      **Delivered** per D67 (the transport moved into Core, and Phase 2.6's spike self-tests it there), D68 (the three
      read operations of the catalog), D69 (the read-only `ovito --automation` client) and D70 (a workbench serves its
      session only when asked), verified by `tst_automation_cli`, the extended `tst_automation_contracts` and
-     `--qml-automation-check`.
+     `--qml-automation-check`. Re-running the whole CI check list afterwards also exposed a rare, pre-existing race in
+     the frame graph builder (a data set replaced while a frame graph build of the previous one was suspended), which is
+     fixed and recorded as finding 20 in [UI_PHASE0_AUDIT.md](UI_PHASE0_AUDIT.md) §8.
 - **Exit Gate**: Verify the **model and command APIs**, not a UI workflow: insert/reorder/delete of pipeline items
   through the shared operations and their undo/redo, cancellation restoring the original value, coherent selection after
   deletion and undo, and no stale writes when a dataset is replaced during an edit. Reopen a saved session and verify

@@ -1509,7 +1509,22 @@ Three traps it records:
   and before `--qml-pipeline-check`, which replaces the data set at its end.
 
 
-### 9.2.11 Testing the automation foundation (Phase 3, S4)
+### 9.2.11 When the spike dies without reporting a failure
+
+A full run of the list can die of a `SIGSEGV` *between* two checks, in which case it prints neither `VERIFY_FAILED` nor
+`VERIFICATION_DONE` and the shell reports exit code `139` (or the caller's `timeout` reports `124`). That is not a
+check failure but a crash of the application, and the core dump says where: `coredumpctl list ovito-qml-spike`, then
+`coredumpctl dump ovito-qml-spike --output /tmp/core.spike` and
+`gdb -batch -ex "bt 20" ./build-native/bin/ovito-qml-spike /tmp/core.spike`.
+
+The one such crash the list produced so far (audit finding 20) was a race in the *render* path: the import check
+replaced the data set while a frame graph build of the previous one was suspended, and the builder dereferenced the
+pipeline of a scene node that `SceneNode::requestObjectDeletion()` had already cleared. It was rare - one run in about
+seven - so a crash here does not mean the run before it changed anything; it means an interleaving happened. The reason
+to keep reading the exit code of a smoke run rather than only its failed-check count is exactly this case: a dead
+process reports no failure.
+
+### 9.2.12 Testing the automation foundation (Phase 3, S4)
 
 `--qml-automation-check` verifies the machine-facing path end to end (audit D67-D70). It is the only check that talks to
 a *second process*, and it does so because a client that blocks the event loop of the workbench it asks could not be
@@ -1560,7 +1575,7 @@ and the one-JSON-object rule). Run it with `ctest --preset native -R tst_automat
    `--qml-animation-check` (interval, tracks, keys, selection, key moves, deletion, range, playback; see §9.2.10); it
    animates a scene node of its own, so it runs before the pipeline check. Automation foundation:
    `--qml-automation-check` (serving a session, the `ovito --automation` client of this build, the read-only grant, the
-   teardown; see §9.2.11); it starts the product executable as a child process, so this build must have one.
+   teardown; see §9.2.12); it starts the product executable as a child process, so this build must have one.
    Command layer: `--qml-command-check` (the commands the QML workbench sees, their state rules and their handlers;
    see §9.3). Workbench state: the shared task progress model is covered by `--qml-import-check` (§9.2), the session
    workflow by `--qml-session-check` (§9.2.1) and the settings facade by `--qml-settings-check` (§9.2.2). Pass a data

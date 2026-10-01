@@ -212,8 +212,17 @@ Future<void> FrameGraph::buildFromScene(OORef<Scene> scene, OORef<Viewport> view
     }
 
     // Evaluate all visible pipelines in the scene to obtain their output data.
+    //
+    // The awaits below are suspension points at which the event loop runs other work, and that work may delete a scene
+    // node of this list - a data set replacement deletes the whole scene of the old data set.
+    // SceneNode::requestObjectDeletion() clears the node's pipeline reference before the node itself is gone, so a node
+    // whose pipeline has disappeared is no longer rendered, and 'remainingSceneNodes' is kept in sync with
+    // 'pipelineResults' so that the visual element pass below pairs every result with the node it came from.
 	std::vector<PipelineFlowState> pipelineResults;
+    std::vector<OORef<SceneNode>> remainingSceneNodes;
     for(const auto& sceneNode : visiblePipelineSceneNodes) {
+        if(!sceneNode->pipeline())
+            continue;
         try {
             // Request pipeline result.
             PipelineEvaluationResult pipelineResult = sceneNode->pipeline()->evaluatePipeline(PipelineEvaluationRequest(time(), stopOnPipelineError(), isInteractive()));
@@ -230,20 +239,23 @@ Future<void> FrameGraph::buildFromScene(OORef<Scene> scene, OORef<Viewport> view
             // In interactive mode, log the exception and continue rendering.
             ex.logError();
             pipelineResults.push_back({});
-            continue;
         }
+        remainingSceneNodes.push_back(sceneNode);
     }
-    OVITO_ASSERT(pipelineResults.size() == visiblePipelineSceneNodes.size());
+    OVITO_ASSERT(pipelineResults.size() == remainingSceneNodes.size());
 
     // Visit all vis elements and let them populate the frame graph.
     std::vector<OORef<DataVis>> asyncVisElements; // List of asynchronous visual elements.
 	std::vector<Future<PipelineStatus>> asyncVisElementFutures; // List of asynchronous visual element rendering tasks.
-    auto sceneNode = visiblePipelineSceneNodes.begin();
+    auto sceneNode = remainingSceneNodes.begin();
     ConstDataObjectPath dataObjectPath;
     for(const PipelineFlowState& state : pipelineResults) {
-        // Visit all vis elements of all data objects in the pipeline state.
-        if(state)
-            gatherVisElements(*this, state.data(), *sceneNode, state, dataObjectPath, asyncVisElements, asyncVisElementFutures);
+        // Visit all vis elements of all data objects in the pipeline state. A node that lost its pipeline during one
+        // of the awaits above is skipped: it is being deleted, and its visual elements dereference the pipeline as
+        // well (e.g. BondsVis), so rendering it now would be wrong even if it did not crash.
+        SceneNode* node = sceneNode->get();
+        if(state && node->pipeline())
+            gatherVisElements(*this, state.data(), node, state, dataObjectPath, asyncVisElements, asyncVisElementFutures);
         OVITO_ASSERT(dataObjectPath.empty());
         ++sceneNode;
     }
