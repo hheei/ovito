@@ -1031,6 +1031,16 @@ cases of `tst_session_descriptor`. Four traps are behind that, and each is a rul
   caller is entitled to trust the line ending. The worker writes its header lines through `sys.stdout.buffer` now
   (`_write_line()`), which is the same stream the raw payload uses and is never translated; every write holds the one
   output lock, so a header cannot be interleaved with an answer from the reader thread.
+* **A graceful stop has to wait for the process to leave, not for its answer.** `PythonWorkerProcess::stop()` asks
+  the worker to quit and receives its `quitting` answer; on Windows the process object is still `Running` for a moment
+  after that answer arrives, so checking the state right away and falling back to force turned a worker that was exiting
+  cleanly into a killed one. The suite said so precisely - `Actual (worker.exitCode()): 62097`, `Expected (0)` - because
+  QtTest's own log is the only place that output shows up on that platform. The answer means the worker *will* leave; only
+  the wait means it has.
+* **A killed process has no exit code of its own on Windows.** The same suite asked for `9` (SIGKILL) after
+  `QProcess::kill()`, which Windows cannot honour: the code comes from `TerminateProcess` and is not a value to depend
+  on (62097 on the runner, and the same for both cases in the report). Assert the platform's rule instead - a death is
+  never reported as a clean exit.
 * **A Windows build puts the executable in the build directory, not in `bin/`.** `OVITO_RELATIVE_BINARY_DIRECTORY` is
   `bin` on Linux, `<name>.app/Contents/MacOS` on macOS and **`.`** on Windows (a Conda build is the exception), so
   `tst_automation_cli`'s search for the running `ovito` failed on the Windows runner although the executable was in the
