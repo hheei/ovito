@@ -1518,6 +1518,12 @@ pass in CI. The three rules are:
   intermediate step (streaming one large file in chunks, waiting for a polling condition on the way to a phase), and
   those are not phases. A phase may be reported more than once - a phase that iterates over the objects of a scene is
   one phase - and only completeness is checked, not a count.
+* **The order of the reports is not part of the contract, only the set.** A check whose phases are reached through
+  continuations may report them in an order other than the one its declaration lists (the `offscreen` check reports its
+  six phases in the order its callbacks finish, and a check that imports a file first can report `import` last if the
+  report was placed at the end of the runner). Declaring the phases in the order they are *usually* walked keeps the
+  declaration readable; what the harness enforces is that every declared phase is reached and that nothing else is
+  reported.
 * **A skipped phase still reports.** A section that is skipped because the platform or the data set provides nothing to
   check walks its phase anyway (the report sits at the end of the section, not inside the branch that would run its
   body); the skip is reported by the check itself, as `qInfo("... (skipped) ...")`. A conditional phase is declared
