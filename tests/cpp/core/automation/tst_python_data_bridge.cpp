@@ -562,7 +562,14 @@ void PythonDataBridgeTest::worker_notices_a_dead_interpreter()
     worker.kill();
     QVERIFY(worker.waitForFinished(5000));
     QVERIFY(!worker.isRunning());
+#if defined(Q_OS_UNIX)
+    // A process killed on UNIX reports the signal that ended it.
     QCOMPARE(worker.exitCode(), 9);   // SIGKILL through QProcess::kill()
+#else
+    // Windows has no signals, and the code TerminateProcess leaves behind is the platform's, not a contract of this
+    // client. What the client owes its caller is the same on both: the death is never reported as a clean exit.
+    QVERIFY(worker.exitCode() != 0);
+#endif
 
     PythonWorkerRequest request;
     request.operation = QLatin1String(PythonWorkerProtocol::handshakeOperation);

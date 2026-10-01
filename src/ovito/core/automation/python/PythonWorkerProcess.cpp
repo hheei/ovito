@@ -121,6 +121,12 @@ void PythonWorkerProcess::stop(int timeoutMs)
             PythonWorkerReply reply;
             receive(reply, timeoutMs);
         }
+        // Answering `quitting` and being gone are two steps: on Windows the process object is still Running for a moment
+        // after the answer has arrived, and killing it then would turn a graceful stop into a crash - losing both the
+        // exit status that says the worker left by itself and the shared-memory cleanup its exit handler performs. Give
+        // it the rest of the timeout to leave, and use force only if it really is still there.
+        if(_process->state() != QProcess::NotRunning)
+            _process->waitForFinished(timeoutMs);
         if(_process->state() != QProcess::NotRunning) {
             _process->kill();
             _process->waitForFinished(timeoutMs);

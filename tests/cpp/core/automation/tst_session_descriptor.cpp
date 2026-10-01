@@ -125,7 +125,10 @@ private Q_SLOTS:
         // The endpoint is what gets connected to, and it is an absolute socket path inside the session directory: a
         // socket named relatively would be created in the system's temporary directory, which every user can write to.
         QCOMPARE(first.endpoint(), AutomationSessionDescriptor::directory() + u'/' + first.sessionId());
-        QVERIFY(first.endpoint().startsWith(u'/'));
+        // Absolute by the platform's own rule, which is the point of storing a path rather than a bare name: a name
+        // relative to the session directory would be created by Qt in the system's temporary directory instead, which
+        // every user can write to. On Windows the path starts with a drive letter, not with '/'.
+        QVERIFY(QDir::isAbsolutePath(first.endpoint()));
         QVERIFY(first.endpoint().size() <= 104);
         QVERIFY(first.startedAt().isValid());
 
