@@ -7,6 +7,7 @@ ADD_EXECUTABLE(OvitoQmlSpike
     Main.cpp
     SpikeHarness.cpp
     checks/AnimationChecks.cpp
+    checks/AutomationChecks.cpp
     checks/ImportChecks.cpp
     checks/PipelineChecks.cpp
     checks/RenderingChecks.cpp

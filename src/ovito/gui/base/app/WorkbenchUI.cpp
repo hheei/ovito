@@ -7,7 +7,10 @@
 #include <ovito/gui/base/mainwin/RecentFilesList.h>
 #include <ovito/gui/base/viewport/ViewportInputManager.h>
 #include <ovito/core/app/undo/UndoStack.h>
+#include <ovito/core/automation/AutomationGateway.h>
 #include <ovito/core/automation/AutomationSession.h>
+#include <ovito/core/automation/transport/AutomationLocalEndpoint.h>
+#include <ovito/core/app/StandaloneApplication.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
 #include <ovito/core/dataset/scene/Scene.h>
@@ -55,6 +58,54 @@ void WorkbenchUI::initializeWorkbench(QObject* parent)
 
     // Start with a clean undo stack whenever a new dataset is loaded.
     QObject::connect(&datasetContainer(), &DataSetContainer::dataSetChanged, undoStack(), &UndoStack::clear);
+
+    // Serve the session to local clients only when the user asked for it (D59). The option is read from the command
+    // line of the application, which is what both frontends share, rather than from the frontend: whether a workbench
+    // may be reached from outside is a property of how it was started, not of how it presents itself.
+    if(auto* application = dynamic_object_cast<StandaloneApplication>(Application::instance())) {
+        if(application->cmdLineParser().isSet(QStringLiteral("automation-serve")))
+            startAutomationServer();
+    }
+}
+
+/******************************************************************************
+* Starts serving this workbench's session to local clients of the machine-facing layer.
+******************************************************************************/
+AutomationLocalEndpoint* WorkbenchUI::startAutomationServer()
+{
+    if(_automationEndpoint)
+        return _automationEndpoint;
+    OVITO_ASSERT(_automationSession);
+
+    _automationEndpoint = new AutomationLocalEndpoint(*_automationSession, _automationSession->parent());
+    // Read-only by default: a client that connects may look, and may not change anything, run Python or write a file.
+    // A frontend that wants to serve more (a consent dialog in a later phase) widens this policy explicitly, which is
+    // why every grant is recorded in the session's activity log (D43).
+    _automationEndpoint->setGrantPolicy(AutomationPermissionSet(true));
+
+    QString error;
+    if(!_automationEndpoint->start(&error)) {
+        qWarning() << "Cannot serve the automation session of this workbench:" << error;
+        delete _automationEndpoint;
+        _automationEndpoint = nullptr;
+        return nullptr;
+    }
+    // Announce where the session can be found: this is the one line a user or a script needs to know, and it is the
+    // only thing this class writes to the console while starting up.
+    qInfo().noquote() << "Automation session" << _automationEndpoint->descriptor().displayLabel();
+    return _automationEndpoint;
+}
+
+/******************************************************************************
+* Stops serving the session.
+******************************************************************************/
+void WorkbenchUI::stopAutomationServer()
+{
+    if(!_automationEndpoint)
+        return;
+    _automationEndpoint->stop();
+    delete _automationEndpoint;
+    _automationEndpoint = nullptr;
 }
 
 /******************************************************************************

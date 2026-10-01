@@ -571,6 +571,10 @@ void AutomationLocalEndpoint::handleSnapshot(Client& client, const QVariantMap& 
     result.insert(QStringLiteral("revision"), QVariant::fromValue<qulonglong>(_session.revision()));
     result.insert(QStringLiteral("session"), sessionDescription.data());
     result.insert(QStringLiteral("scene"), scene);
+    // The viewports and the selection are part of what the session looks like, and they are two more contract answers
+    // rather than a second description of them.
+    result.insert(QStringLiteral("viewports"), client.gateway->dispatch(AutomationRequest(QStringLiteral("viewport.list"))).data());
+    result.insert(QStringLiteral("selection"), client.gateway->dispatch(AutomationRequest(QStringLiteral("selection.describe"))).data());
     result.insert(QStringLiteral("tasks"), client.gateway->dispatch(AutomationRequest(QStringLiteral("task.list"))).data());
     result.insert(QStringLiteral("events"), client.gateway->dispatch(
                       AutomationRequest(QStringLiteral("event.list"))

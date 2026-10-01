@@ -233,7 +233,7 @@ public:
 
     /// Minor version of the contract; see the class comment for what a new minor version may and may not do.
     /// 0.2 added the task lifecycle vocabulary (TaskState, EventKind, ActivityOrigin) and the capability TaskControl.
-    static constexpr int versionMinor = 2;
+    static constexpr int versionMinor = 3;
 
     /// Returns the contract version as `"<major>.<minor>"`, the value every result carries.
     static QString version();

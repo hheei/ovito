@@ -21,15 +21,12 @@ namespace Ovito {
 class AutomationLocalClient;
 
 /**
- * \brief The spike's local-only endpoint: one workbench, one local socket, one JSON object per line.
+ * \brief The local-only endpoint of the automation layer: one workbench, one local socket, one JSON object per line.
  *
- * This is the measurable half of deliverable 8. It is *not* the production transport - the endpoint is a spike-local
- * class inside `automation/spike/`, and Phase 3 owns the real one - but it is a real endpoint in the sense that
- * matters: it lets a client discover a session on a filesystem convention, connect to it without a network listener
- * existing anywhere, read a bounded snapshot of the session, receive task and scene events, and ask for an image
- * without any file being written.
- *
- * The design decisions the endpoint demonstrates, each of which Phase 3 can keep or replace:
+ * This is the transport a local client (the command line, a script, an AI agent) reaches a running workbench through.
+ * It was written as the measurable half of Phase 2.6's deliverable 8 and promoted into Core by Phase 3, which is why a
+ * reader should treat the wire rules below as normative: they are the contract the CLI of `ovito --automation` and the
+ * clients of later phases speak. The rules are the ones the prototype fixed (audit decision D50):
  *
  * - **Local only, by construction.** The transport is a QLocalServer, i.e. a named pipe on Windows and a UNIX domain
  *   socket elsewhere, in a directory that only its owner can enter. There is no TCP listener and no way to configure
@@ -46,11 +43,16 @@ class AutomationLocalClient;
  *   an error code of the contract vocabulary. The distinction is what lets a client tell "you did not understand me"
  *   from "the workbench refused the operation".
  *
- * The endpoint holds no reference to a frontend: it works on an AutomationSession and a DataSet, which is why it can be
- * exercised in a process without a window (see IpcSpikeMain.cpp) and why a later endpoint can be moved into the
- * frontend without changing what a client sees.
+ * The endpoint holds no reference to a frontend: it works on an AutomationSession and a DataSet, which is why it runs
+ * in a process without a window (as a workbench the user asked to serve, or in a test) and why its behaviour does not
+ * depend on which frontend the workbench runs.
+ *
+ * \note Main thread only, like the session it serves: the endpoint owns a QLocalServer and the sessions' objects, and
+ *       nothing inside it is thread-safe. It is meant to be created and destroyed by the object that owns the session
+ *       (see WorkbenchUI::startAutomationServer()), and stopping it removes the descriptor so that clients which are
+ *       still running discover a session that is gone rather than one that never answers.
  */
-class AutomationLocalEndpoint : public QObject
+class OVITO_CORE_EXPORT AutomationLocalEndpoint : public QObject
 {
     Q_OBJECT
 
@@ -76,7 +78,7 @@ public:
     /// `render_unavailable`, which is the honest answer of a process that has no graphics device.
     using CaptureSource = std::function<QImage(QSize size, QString* error)>;
 
-    /// The counters the spike reports; they are also what a Phase 3 endpoint would expose as its own observability.
+    /// The counters the endpoint keeps, which is also the observability a client or a test can assert on.
     struct Statistics {
         qint64 connections = 0;
         qint64 rejectedConnections = 0;
@@ -93,8 +95,9 @@ public:
     AutomationLocalEndpoint(const AutomationLocalEndpoint&) = delete;
     AutomationLocalEndpoint& operator=(const AutomationLocalEndpoint&) = delete;
 
-    /// The most a connecting client can be granted. A spike run passes the read capabilities plus whatever its command
-    /// line approved, which is a stand-in for the user's consent (D43).
+    /// The most a connecting client can be granted. A workbench that serves its session grants the read capabilities,
+    /// and a client asking for more is refused with the names it did not get (D43); the self-test of the transport
+    /// grants more, because it has to exercise the operations that need them.
     void setGrantPolicy(const AutomationPermissionSet& policy);
     const AutomationPermissionSet& grantPolicy() const { return _policy; }
 
@@ -119,8 +122,8 @@ public:
     /// The transport-level error codes, which are the ones a client can rely on independently of the contract.
     static QStringList transportErrorCodes();
 
-    /// True if the endpoint may answer `quit`; a client that can stop the workbench is a client the spike's own
-    /// self-test creates, not a capability of the protocol.
+    /// True if the endpoint may answer `quit`. Stopping the workbench is not a contract capability: it is the
+    /// self-test's and the `--serve` mode's own switch.
     void setAllowsQuit(bool allows) { _allowsQuit = allows; }
 
 Q_SIGNALS:

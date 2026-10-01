@@ -36,3 +36,16 @@ ovito_add_cpp_test(
     SOURCES tst_session_descriptor.cpp
     LINK_LIBRARIES Core
 )
+
+# The command line is a client of a running session, so this suite starts the built 'ovito' executable as a child
+# process (the binary directory is compiled in for it) and reads the answers it produces. A build without that
+# executable skips the suite instead of failing it.
+ovito_add_cpp_test(
+    NAME tst_automation_cli
+    SOURCES tst_automation_cli.cpp
+    LINK_LIBRARIES Core
+)
+
+# The suite needs the directory of the product executable, which src/main/CMakeLists.txt passes to it as a CTest
+# environment variable, because the tests are configured before that directory exists. A build without the executable
+# makes the suite skip itself.

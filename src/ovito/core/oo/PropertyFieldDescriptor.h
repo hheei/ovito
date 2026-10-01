@@ -127,6 +127,12 @@ public:
     /// Returns true if this reference field stores a vector of objects.
     bool isVector() const { return _flags.testFlag(PROPERTY_FIELD_VECTOR); }
 
+    /// Returns whether this field's value can be read through the generic QVariant accessor of RefMaker.
+    /// A property field created programmatically without accessor thunks (a "runtime property field") cannot be, and
+    /// RefMaker::getPropertyFieldValue() asserts on one - which is why a generic reader such as the automation layer
+    /// asks this first instead of assuming that every non-reference field is readable.
+    bool hasVariantAccessors() const { return _propertyStorageReadFunc != nullptr; }
+
     /// Returns true if referenced target or the property field's value should not be saved to a scene file.
     bool dontSerialize() const { return _flags.testFlag(PROPERTY_FIELD_DONT_SERIALIZE); }
 

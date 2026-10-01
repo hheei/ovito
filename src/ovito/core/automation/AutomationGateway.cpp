@@ -16,6 +16,8 @@
 #include <ovito/core/viewport/Viewport.h>
 #include <ovito/core/viewport/ViewportConfiguration.h>
 
+#include <QJsonValue>
+
 #include <limits>
 
 namespace Ovito {
@@ -61,6 +63,93 @@ Scene* activeScene(DataSet* dataSet)
             return scene;
     }
     return nullptr;
+}
+
+/**
+ * \brief The modification-node chain of a pipeline, in evaluation order.
+ *
+ * Every item that can be addressed carries its ID, because that is how a client reaches the modifier it wants to
+ * describe or change later; the source node at the end of the chain is reported by its title and class name instead,
+ * since the contract has no kind for a pipeline source.
+ */
+QVariantList pipelineItems(AutomationSession& session, Pipeline* pipeline)
+{
+    QVariantList items;
+    for(PipelineNode* node = pipeline->head(); node; node = dynamic_object_cast<ModificationNode>(node) ? static_cast<ModificationNode*>(node)->input() : nullptr) {
+        QVariantMap item;
+        if(ModificationNode* modificationNode = dynamic_object_cast<ModificationNode>(node)) {
+            item.insert(QStringLiteral("id"), session.objects().idFor(modificationNode, AutomationObjectId::Kind::Modifier));
+            if(Modifier* modifier = modificationNode->modifier())
+                item.insert(QStringLiteral("type"), modifier->getOOMetaClass().name());
+        }
+        item.insert(QStringLiteral("title"), node->objectTitle());
+        item.insert(QStringLiteral("className"), node->getOOMetaClass().name());
+        items.push_back(item);
+    }
+    return items;
+}
+
+/**
+ * \brief One viewport as a client reads it.
+ *
+ * The ID is minted here, which is what makes the list a client's entry point to the viewports: the ID of a viewport is
+ * not derivable from anything a client could know before it has seen it once.
+ */
+QVariantMap describeViewport(AutomationSession& session, const Viewport* viewport, const ViewportConfiguration* config)
+{
+    QVariantMap entry;
+    entry.insert(QStringLiteral("id"), session.objects().idFor(const_cast<Viewport*>(viewport), AutomationObjectId::Kind::Viewport));
+    entry.insert(QStringLiteral("viewType"), viewTypeName(viewport->viewType()));
+    entry.insert(QStringLiteral("title"), viewport->viewportTitle());
+    entry.insert(QStringLiteral("active"), config && config->activeViewport() == viewport);
+    entry.insert(QStringLiteral("maximized"), config && config->maximizedViewport() == viewport);
+    // The camera state a client can read without asking the renderer: the field of view (the zoom of an orthogonal
+    // view), whether the grid is drawn and whether the viewport shows a preview of the final render instead.
+    entry.insert(QStringLiteral("fieldOfView"), viewport->fieldOfView());
+    entry.insert(QStringLiteral("gridVisible"), viewport->isGridVisible());
+    entry.insert(QStringLiteral("renderPreviewMode"), viewport->renderPreviewMode());
+    if(const Scene* scene = viewport->scene())
+        entry.insert(QStringLiteral("sceneNodeCount"), scene->children().size());
+    return entry;
+}
+
+/// The ID of the object a property ID belongs to, i.e. the same text without the field name.
+QString ownerIdOf(const AutomationObjectId& id)
+{
+    switch(id.ownerKind()) {
+        case AutomationObjectId::Kind::SceneNode: return AutomationObjectId::forSceneNode(id.number()).toString();
+        case AutomationObjectId::Kind::Pipeline: return AutomationObjectId::forPipeline(id.number()).toString();
+        case AutomationObjectId::Kind::Modifier: return AutomationObjectId::forModifier(id.number()).toString();
+        case AutomationObjectId::Kind::Viewport: return AutomationObjectId::forViewport(id.number()).toString();
+        default: break;
+    }
+    return {};
+}
+
+/**
+ * \brief The parameters of an object, in the form a client reads them.
+ *
+ * A parameter is addressed by a property ID, which is what a client passes back when it changes it later, so the list
+ * answers "what can I set here" and not only "what is set here". Reference fields are left out: their value is another
+ * object, whose own ID is how a client addresses it. A field whose type has no JSON representation is reported by its
+ * type name with a null value rather than silently dropped, so a client can see that it exists.
+ */
+QVariantList describeProperties(AutomationSession& session, RefMaker* object, AutomationObjectId::Kind ownerKind)
+{
+    QVariantList properties;
+    for(const PropertyFieldDescriptor* field : object->getOOMetaClass().propertyFields()) {
+        if(field->isReferenceField() || !field->hasVariantAccessors())
+            continue;
+        QVariantMap entry;
+        entry.insert(QStringLiteral("id"), session.objects().propertyIdFor(object, ownerKind, QString::fromLatin1(field->identifier())));
+        entry.insert(QStringLiteral("name"), QString::fromLatin1(field->identifier()));
+        entry.insert(QStringLiteral("label"), field->displayName());
+        const QVariant value = object->getPropertyFieldValue(field);
+        entry.insert(QStringLiteral("type"), QString::fromLatin1(value.typeName()));
+        entry.insert(QStringLiteral("value"), QJsonValue::fromVariant(value));
+        properties.push_back(entry);
+    }
+    return properties;
 }
 
 }   // End of anonymous namespace
@@ -517,25 +606,174 @@ void AutomationGateway::registerBuiltinOperations()
                 return;
             }
 
-            QVariantList items;
-            for(PipelineNode* node = pipeline->head(); node; node = dynamic_object_cast<ModificationNode>(node) ? static_cast<ModificationNode*>(node)->input() : nullptr) {
-                // Every item of the chain carries a stable ID, which is how a client addresses the modifier it wants to
-                // change later; the source node at the end of the chain has none of its own yet, so it is reported by
-                // its title and type.
-                QVariantMap item;
-                if(ModificationNode* modificationNode = dynamic_object_cast<ModificationNode>(node)) {
-                    item.insert(QStringLiteral("id"), _session.objects().idFor(modificationNode, AutomationObjectId::Kind::Modifier));
-                    if(Modifier* modifier = modificationNode->modifier())
-                        item.insert(QStringLiteral("type"), modifier->getOOMetaClass().name());
-                }
-                item.insert(QStringLiteral("title"), node->objectTitle());
-                item.insert(QStringLiteral("className"), node->getOOMetaClass().name());
-                items.push_back(item);
-            }
             result.data() = QVariantMap{
                 { QStringLiteral("id"), pipelineId },
-                { QStringLiteral("items"), items }
+                { QStringLiteral("items"), pipelineItems(_session, pipeline) }
             };
+        });
+
+    // -----------------------------------------------------------------------
+    // viewport.list: what the user sees, and with which camera.
+    // -----------------------------------------------------------------------
+    registerOperation(
+        AutomationOperationDescriptor(QStringLiteral("viewport.list"),
+                                     AutomationContract::OperationKind::Query,
+                                     QStringLiteral("Lists the viewports of the session with their view type, camera state and which one is active."))
+            .setUndoLabel(QStringLiteral("List the viewports"))
+            .addRequiredCapability(AutomationContract::Capability::SessionRead),
+        [this](const AutomationRequest& request, AutomationResult& result) -> void {
+            QVariantList viewports;
+            const DataSet* dataSet = _session.dataSet();
+            const ViewportConfiguration* config = dataSet ? dataSet->viewportConfig() : nullptr;
+            if(config) {
+                for(Viewport* viewport : config->viewports())
+                    viewports.push_back(describeViewport(_session, viewport, config));
+            }
+            result.data() = QVariantMap{
+                { QStringLiteral("viewports"), viewports },
+                { QStringLiteral("activeViewportId"), config && config->activeViewport() ? _session.objects().idFor(config->activeViewport(), AutomationObjectId::Kind::Viewport) : QString() },
+                { QStringLiteral("maximizedViewportId"), config && config->maximizedViewport() ? _session.objects().idFor(config->maximizedViewport(), AutomationObjectId::Kind::Viewport) : QString() }
+            };
+        });
+
+    // -----------------------------------------------------------------------
+    // selection.describe: who is selected, readable with the selection capability alone.
+    // -----------------------------------------------------------------------
+    registerOperation(
+        AutomationOperationDescriptor(QStringLiteral("selection.describe"),
+                                     AutomationContract::OperationKind::Query,
+                                     QStringLiteral("Describes the selection of the active scene: the scene nodes the user selected."))
+            .setUndoLabel(QStringLiteral("Describe the selection"))
+            // The one operation that needs SelectionRead and nothing else: a client that may look at what is selected
+            // need not be allowed to read the whole scene, and this is what the capability exists for.
+            .addRequiredCapability(AutomationContract::Capability::SelectionRead),
+        [this](const AutomationRequest& request, AutomationResult& result) -> void {
+            QVariantList nodes;
+            if(Scene* scene = activeScene(_session.dataSet())) {
+                if(const SelectionSet* selection = scene->selection()) {
+                    for(SceneNode* node : selection->nodes()) {
+                        QVariantMap entry;
+                        entry.insert(QStringLiteral("id"), _session.objects().idFor(node, AutomationObjectId::Kind::SceneNode));
+                        entry.insert(QStringLiteral("title"), node->objectTitle());
+                        if(Pipeline* pipeline = node->pipeline())
+                            entry.insert(QStringLiteral("pipelineId"), _session.objects().idFor(pipeline, AutomationObjectId::Kind::Pipeline));
+                        nodes.push_back(entry);
+                    }
+                }
+            }
+            result.data() = QVariantMap{
+                { QStringLiteral("sceneNodes"), nodes },
+                { QStringLiteral("count"), nodes.size() }
+            };
+        });
+
+    // -----------------------------------------------------------------------
+    // object.describe: one object of any addressable kind, by ID.
+    // -----------------------------------------------------------------------
+    registerOperation(
+        AutomationOperationDescriptor(QStringLiteral("object.describe"),
+                                     AutomationContract::OperationKind::Query,
+                                     QStringLiteral("Describes one object the session can address - a scene node, pipeline, modifier, viewport or property - by its ID."))
+            .setUndoLabel(QStringLiteral("Describe an object"))
+            .addRequiredCapability(AutomationContract::Capability::SceneRead)
+            .addParameter(AutomationParameter(QStringLiteral("objectId"), AutomationParameter::ObjectId)
+                              .setDescription(QStringLiteral("The ID of the object, as reported by scene.list_nodes, pipeline.describe, viewport.list or object.describe."))),
+        [this](const AutomationRequest& request, AutomationResult& result) -> void {
+            const QString objectId = request.arguments().value(QStringLiteral("objectId")).toString();
+            const std::optional<AutomationObjectId> id = AutomationObjectId::parse(objectId);
+            OVITO_ASSERT(id && id->isValid());
+
+            // A property is not an object of its own: it is named by its owner plus a field name, so it is resolved
+            // through the owner and answered from the owner's field descriptor.
+            if(id->isProperty()) {
+                const OORef<RefTarget> owner = dynamic_object_cast<RefTarget>(_session.objects().resolveOwner(*id));
+                if(!owner) {
+                    const AutomationContract::ErrorCode code =
+                        _session.objects().wasAssigned(objectId) ? AutomationContract::ErrorCode::InvalidatedObject : AutomationContract::ErrorCode::UnknownObject;
+                    result.setError(code, QStringLiteral("The session has no property '%1'.").arg(objectId),
+                                    { { QStringLiteral("objectId"), objectId } });
+                    return;
+                }
+                const PropertyFieldDescriptor* field = nullptr;
+                for(const PropertyFieldDescriptor* candidate : owner->getOOMetaClass().propertyFields()) {
+                    if(!candidate->isReferenceField() && id->fieldName() == QString::fromLatin1(candidate->identifier())) {
+                        field = candidate;
+                        break;
+                    }
+                }
+                if(!field || !field->hasVariantAccessors()) {
+                    result.setError(AutomationContract::ErrorCode::UnknownObject,
+                                    QStringLiteral("'%1' has no readable property '%2'.").arg(ownerIdOf(*id), id->fieldName()),
+                                    { { QStringLiteral("objectId"), objectId } });
+                    return;
+                }
+                const QVariant value = owner->getPropertyFieldValue(field);
+                result.data() = QVariantMap{
+                    { QStringLiteral("id"), objectId },
+                    { QStringLiteral("kind"), AutomationObjectId::kindName(id->kind()) },
+                    { QStringLiteral("ownerId"), ownerIdOf(*id) },
+                    { QStringLiteral("ownerTitle"), owner->objectTitle() },
+                    { QStringLiteral("ownerClass"), owner->getOOMetaClass().name() },
+                    { QStringLiteral("name"), QString::fromLatin1(field->identifier()) },
+                    { QStringLiteral("label"), field->displayName() },
+                    { QStringLiteral("type"), QString::fromLatin1(value.typeName()) },
+                    { QStringLiteral("value"), QJsonValue::fromVariant(value) }
+                };
+                return;
+            }
+
+            // Every kind the contract can name is a RefTarget, which is what makes it possible to report a title and
+            // a class name for it; anything else would be an object of the session's own machinery.
+            const OORef<RefTarget> resolved = dynamic_object_cast<RefTarget>(_session.objects().resolve(objectId));
+            if(!resolved) {
+                const AutomationContract::ErrorCode code =
+                    _session.objects().wasAssigned(objectId) ? AutomationContract::ErrorCode::InvalidatedObject : AutomationContract::ErrorCode::UnknownObject;
+                result.setError(code, QStringLiteral("The session has no object '%1'.").arg(objectId),
+                                { { QStringLiteral("objectId"), objectId } });
+                return;
+            }
+
+            QVariantMap data;
+            data.insert(QStringLiteral("id"), objectId);
+            data.insert(QStringLiteral("kind"), AutomationObjectId::kindName(id->kind()));
+            data.insert(QStringLiteral("className"), resolved->getOOMetaClass().name());
+            data.insert(QStringLiteral("title"), resolved->objectTitle());
+
+            if(const OORef<SceneNode> node = dynamic_object_cast<SceneNode>(resolved)) {
+                if(Pipeline* pipeline = node->pipeline())
+                    data.insert(QStringLiteral("pipelineId"), _session.objects().idFor(pipeline, AutomationObjectId::Kind::Pipeline));
+            }
+            else if(const OORef<Pipeline> pipeline = dynamic_object_cast<Pipeline>(resolved)) {
+                data.insert(QStringLiteral("items"), pipelineItems(_session, pipeline));
+            }
+            else if(const OORef<ModificationNode> node = dynamic_object_cast<ModificationNode>(resolved)) {
+                if(Modifier* modifier = node->modifier()) {
+                    data.insert(QStringLiteral("modifierType"), modifier->getOOMetaClass().name());
+                    data.insert(QStringLiteral("properties"), describeProperties(_session, modifier, AutomationObjectId::Kind::Modifier));
+                }
+                data.insert(QStringLiteral("enabled"), node->modifierAndGroupEnabled());
+                QVariantList pipelines;
+                for(Pipeline* pipeline : node->pipelines(true))
+                    pipelines.push_back(_session.objects().idFor(pipeline, AutomationObjectId::Kind::Pipeline));
+                data.insert(QStringLiteral("pipelineIds"), pipelines);
+            }
+            else if(const OORef<Viewport> viewport = dynamic_object_cast<Viewport>(resolved)) {
+                const DataSet* dataSet = _session.dataSet();
+                data.insert(QStringLiteral("viewport"), describeViewport(_session, viewport, dataSet ? dataSet->viewportConfig() : nullptr));
+                // A viewport's parameters are reported like a modifier's, so that the property IDs of the contract are
+                // the one way a client addresses a value it may want to change later.
+                data.insert(QStringLiteral("properties"), describeProperties(_session, viewport, AutomationObjectId::Kind::Viewport));
+            }
+            else {
+                // Every kind the contract can name is handled above, so reaching this means the object was registered
+                // under a kind whose description this build does not implement.
+                result.setError(AutomationContract::ErrorCode::NotSupported,
+                                QStringLiteral("This build cannot describe '%1'.").arg(objectId),
+                                { { QStringLiteral("objectId"), objectId } });
+                return;
+            }
+
+            result.data() = std::move(data);
         });
 
     // -----------------------------------------------------------------------

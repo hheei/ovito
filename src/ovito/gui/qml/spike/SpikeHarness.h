@@ -225,6 +225,14 @@ void runPipelineTest(QmlMainWindowUI* ui, std::function<void()> continuation);
 /// that replaces the data set.
 void runAnimationTest(QmlMainWindowUI* ui, std::function<void()> continuation);
 
+/// Verifies the automation foundation of the frontend (Phase 3, slice S4): a workbench serves its session only when it
+/// was asked to, the command line of this build finds it, reads it within its read-only capabilities and reports its
+/// objects, and stopping the server removes the session again.
+///
+/// The sessions of the check are its own: it points the session directory at a temporary directory of its process, so it
+/// neither sees nor disturbs the sessions a developer has running.
+void runAutomationTest(QmlMainWindowUI* ui, std::function<void()> continuation);
+
 /// Verifies object picking at the given position of the first viewport item.
 ///
 /// Picking is served from a buffer that the render thread renders asynchronously, so the first call after the

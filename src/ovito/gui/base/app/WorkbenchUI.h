@@ -10,6 +10,7 @@
 
 namespace Ovito {
 
+class AutomationLocalEndpoint;
 class AutomationSession;
 
 /**
@@ -146,6 +147,23 @@ public:
     /// \return The session, or null before the workbench has been initialized (see initializeWorkbench()).
     AutomationSession* automationSession() const { return _automationSession; }
 
+    /// Starts serving this workbench's session to local clients of the machine-facing layer.
+    ///
+    /// A workbench publishes its session only when it was asked to (audit decision D59): serving it publishes a session
+    /// descriptor in the per-user runtime directory and opens a local socket, which is visible to every process of the
+    /// user - so it happens when the user asked for it (the '--automation-serve' start-up option) and not by default.
+    /// The clients that connect are granted the read capabilities only (D43), unless the caller widens the grant policy
+    /// of the returned endpoint.
+    /// \return The endpoint that serves the session, or null if it was already serving or could not be started.
+    AutomationLocalEndpoint* startAutomationServer();
+
+    /// Stops serving the session: the descriptor is removed and the socket is closed, so that a client discovers a
+    /// session that is gone instead of one that never answers.
+    void stopAutomationServer();
+
+    /// Returns the endpoint this workbench serves its session with, or null while it serves nothing.
+    AutomationLocalEndpoint* automationServer() const { return _automationEndpoint; }
+
     /// Displays an error message to the user.
     virtual void reportError(const Exception& ex, bool blocking = false) override;
 
@@ -221,6 +239,10 @@ private:
 
     /// The machine-facing view of this workbench. Owned by the object passed to initializeWorkbench().
     AutomationSession* _automationSession = nullptr;
+
+    /// The endpoint that serves the session to local clients, or null while this workbench serves nothing.
+    /// Owned by the object passed to initializeWorkbench().
+    AutomationLocalEndpoint* _automationEndpoint = nullptr;
 
     /// Head of doubly-linked list of all registered task progress records.
     TaskProgress* _progressTasksHead = nullptr;

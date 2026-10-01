@@ -22,8 +22,8 @@
 #include <ovito/core/automation/AutomationContract.h>
 #include <ovito/core/automation/AutomationSession.h>
 #include <ovito/core/automation/AutomationSessionDescriptor.h>
-#include <ovito/core/automation/spike/ipc/AutomationLocalClient.h>
-#include <ovito/core/automation/spike/ipc/AutomationLocalEndpoint.h>
+#include <ovito/core/automation/transport/AutomationLocalClient.h>
+#include <ovito/core/automation/transport/AutomationLocalEndpoint.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/scene/Pipeline.h>
 #include <ovito/core/dataset/scene/Scene.h>

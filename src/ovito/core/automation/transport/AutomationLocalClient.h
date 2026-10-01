@@ -16,19 +16,23 @@
 namespace Ovito {
 
 /**
- * \brief The spike's client of the local endpoint: discovery, one JSON object per line, request and reply by ID.
+ * \brief The client of the local endpoint: discovery, one JSON object per line, request and reply by ID.
  *
- * Like the endpoint itself this is spike code (the production client is Phase 3's, and the CLI that uses it is
- * Phase 4's), and like the endpoint it is written so that the protocol rules it depends on are visible in one place:
- * it discovers a session through the descriptor directory, it connects to the endpoint the descriptor names, it
- * identifies itself once, and from then on it sends one message at a time and matches the reply by its ID.
+ * Phase 2.6 wrote this as spike code and Phase 3 promoted it into Core, because it is what the command line of
+ * `ovito --automation` and later clients use; the protocol rules it depends on are visible in one place: it discovers
+ * a session through the descriptor directory, it connects to the endpoint the descriptor names, it identifies itself
+ * once, and from then on it sends one message at a time and matches the reply by its ID.
  *
  * Discovery is where a client has to be careful, and this one is deliberately explicit about it: a descriptor whose
  * process is gone is a leftover, and a descriptor whose socket refuses a connection is a leftover too - the first is
  * visible in the file, the second only in the attempt. The client reports both, removes neither by itself unless asked
  * (pruneStale), because deleting another user's discovery entries is not a decision a connecting client gets to make.
+ *
+ * \note Main thread only and blocking: the client drives its socket with waitForReadyRead() instead of an event loop,
+ *       which is what lets the command line answer without a running application; a client that wants to keep its
+ *       application responsive while it waits needs the event-driven client of a later phase.
  */
-class AutomationLocalClient : public QObject
+class OVITO_CORE_EXPORT AutomationLocalClient : public QObject
 {
     Q_OBJECT
 

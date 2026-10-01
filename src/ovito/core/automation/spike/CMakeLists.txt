@@ -35,21 +35,20 @@ ENDIF()
 
 # Phase 2.6, deliverable 8: the local-protocol spike.
 #
-# The second prototype executable of the automation module: it hosts the automation session behind a local-only JSON
-# Lines endpoint, publishes a session descriptor for discovery, and drives itself as a client to check every rule the
-# endpoint claims to enforce. The endpoint, the client and the descriptor's discovery rules are spike code - Phase 3 owns
-# the production transport and Phase 4 the CLI that uses it - but the descriptor value type they build on deliberately
-# lives in Core (automation/AutomationSessionDescriptor), so that the discovery convention is tested without a socket.
+# The second prototype executable of the automation module: it hosts the automation session behind the local-only JSON
+# Lines endpoint of Core, publishes a session descriptor for discovery, and drives itself as a client to check every rule
+# the endpoint claims to enforce. The executable is a developer tool without an install rule; what it exercises is the
+# transport the command line of `ovito --automation` uses.
 #
 # Qt6::Gui is linked for QImage alone: the artifact checks need PNG encoding, not a window, and this program never
 # creates a graphics device (see the note on capture in IpcSpikeMain.cpp). Qt Network provides the local socket, and is
 # the one Qt module Core does not link unless the Python support asks for it, so it is found here.
 OVITO_FIND_PACKAGE(Qt6 ${OVITO_MINIMUM_REQUIRED_QT_VERSION} COMPONENTS Network REQUIRED)
 
+# The endpoint and the client it drives live in Core since Phase 3 (audit decision D67), which is what makes this
+# executable a self-test of the shipped transport rather than of a private clone of it.
 ADD_EXECUTABLE(OvitoAutomationIpcSpike
-    IpcSpikeMain.cpp
-    ipc/AutomationLocalClient.cpp
-    ipc/AutomationLocalEndpoint.cpp)
+    IpcSpikeMain.cpp)
 
 TARGET_LINK_LIBRARIES(OvitoAutomationIpcSpike PRIVATE
     Core

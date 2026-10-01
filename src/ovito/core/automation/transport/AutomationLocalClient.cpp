@@ -167,7 +167,7 @@ void AutomationLocalClient::handleLine(const QByteArray& line)
 {
     const QJsonDocument document = QJsonDocument::fromJson(line);
     if(!document.isObject()) {
-        // A line the client cannot parse is kept as it arrived, so a spike report shows what the endpoint sent rather
+        // A line the client cannot parse is kept as it arrived, so a report shows what the endpoint sent rather
         // than claiming it sent nothing.
         _pushed.push_back(QVariantMap{{ QStringLiteral("_unparsed"), QString::fromUtf8(line) }});
         return;

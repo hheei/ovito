@@ -20,6 +20,7 @@
 #include <ovito/core/automation/AutomationTask.h>
 #include <ovito/core/automation/AutomationTransaction.h>
 #include <ovito/core/app/Application.h>
+#include <ovito/core/app/PluginManager.h>
 #include <ovito/core/app/undo/UndoStack.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/animation/AnimationSettings.h>
@@ -72,6 +73,11 @@ private Q_SLOTS:
         _application = OORef<TestApplication>::create();
         // Prime the thread-identity cache from the main thread, so isMainThread() classifies it correctly.
         QVERIFY(this_task::isMainThread());
+        // Initialize the plugin manager, which is what builds each class's list of property fields out of the
+        // descriptors registered at static-initialization time (RefMakerClass::initialize()). A full application does
+        // this while loading its plugins; without it, a generic reader such as object.describe would find no property
+        // fields at all and this suite could not tell a "no parameters" answer from an uninitialized one.
+        PluginManager::initialize();
         // A user interface owns an undo stack - WorkbenchUI creates its own the same way. The transaction tests need
         // one to show that a command's changes become one undo step; every other test ignores it, and init() empties it.
         _application->createUndoStack();
@@ -83,6 +89,7 @@ private Q_SLOTS:
         // Put the TaskManager into the shutting-down state (drains the work queue and joins the pool) before the
         // Application is destroyed - its destructor asserts that this happened.
         _application->taskManager().requestShutdown();
+        PluginManager::shutdown();
         _application = {};
     }
 
@@ -123,7 +130,7 @@ private Q_SLOTS:
 
     void vocabulary_round_trips()
     {
-        QCOMPARE(AutomationContract::version(), QStringLiteral("0.2"));
+        QCOMPARE(AutomationContract::version(), QStringLiteral("0.3"));
         QCOMPARE(AutomationContract::kindName(AutomationContract::OperationKind::Query), QStringLiteral("query"));
         QCOMPARE(AutomationContract::kindName(AutomationContract::OperationKind::Command), QStringLiteral("command"));
 
@@ -863,6 +870,176 @@ private Q_SLOTS:
 
         // The empty pipeline of a fresh node describes as a chain without items rather than failing.
         QVERIFY(result.data().contains(QStringLiteral("items")));
+    }
+
+    void gateway_lists_the_viewports_and_their_state()
+    {
+        AutomationSession session;
+        AutomationGateway gateway(session);
+        session.setDataSet(OORef<DataSet>::create());
+
+        AutomationResult result = gateway.dispatch(AutomationRequest(QStringLiteral("viewport.list")));
+        QVERIFY(result.isSuccess());
+        const QVariantList viewports = result.data().value(QStringLiteral("viewports")).toList();
+        QCOMPARE(viewports.size(), 4);
+        const QString activeId = result.data().value(QStringLiteral("activeViewportId")).toString();
+        QVERIFY(activeId.startsWith(QStringLiteral("viewport:v")));
+        QVERIFY(result.data().value(QStringLiteral("maximizedViewportId")).toString().isEmpty());
+
+        QStringList ids;
+        bool sawActive = false, sawPerspective = false;
+        for(const QVariant& entry : viewports) {
+            const QVariantMap viewport = entry.toMap();
+            const QString id = viewport.value(QStringLiteral("id")).toString();
+            QVERIFY(id.startsWith(QStringLiteral("viewport:v")));
+            ids.push_back(id);
+            // The camera state a client reads without asking the renderer, and the view type as a contract name.
+            QVERIFY(viewport.value(QStringLiteral("fieldOfView")).toDouble() != 0.0);
+            QVERIFY(viewport.contains(QStringLiteral("gridVisible")));
+            QVERIFY(viewport.contains(QStringLiteral("renderPreviewMode")));
+            QVERIFY(viewport.value(QStringLiteral("sceneNodeCount")).toInt() >= 0);
+            const QString viewType = viewport.value(QStringLiteral("viewType")).toString();
+            QVERIFY(viewType != QStringLiteral("none"));
+            sawPerspective = sawPerspective || viewType == QStringLiteral("perspective");
+            if(viewport.value(QStringLiteral("active")).toBool()) {
+                sawActive = true;
+                QCOMPARE(id, activeId);
+            }
+        }
+        QVERIFY(sawActive);
+        QVERIFY(sawPerspective);
+        // The list is the client's entry point to the viewports: the IDs it mints are the ones session.describe and
+        // object.describe report for the same objects.
+        result = gateway.dispatch(AutomationRequest(QStringLiteral("object.describe")).setArguments({{QStringLiteral("objectId"), ids.front()}}));
+        QVERIFY(result.isSuccess());
+        QCOMPARE(result.data().value(QStringLiteral("kind")).toString(), QStringLiteral("viewport"));
+        QCOMPARE(result.data().value(QStringLiteral("viewport")).toMap().value(QStringLiteral("id")).toString(), ids.front());
+    }
+
+    void gateway_describes_the_selection_with_the_selection_capability_alone()
+    {
+        AutomationSession session;
+        AutomationGateway gateway(session);
+        session.setDataSet(OORef<DataSet>::create());
+        Scene* scene = session.dataSet()->viewportConfig()->viewports().front()->scene();
+        QVERIFY(scene);
+
+        // Nothing is selected in a fresh session, and that is a successful answer.
+        AutomationResult result = gateway.dispatch(AutomationRequest(QStringLiteral("selection.describe")));
+        QVERIFY(result.isSuccess());
+        QCOMPARE(result.data().value(QStringLiteral("count")).toInt(), 0);
+
+        OORef<SceneNode> node = OORef<SceneNode>::create();
+        OORef<Pipeline> pipeline = OORef<Pipeline>::create();
+        node->setPipeline(pipeline);
+        scene->addChildNode(node);
+        scene->selection()->setNode(node);
+
+        result = gateway.dispatch(AutomationRequest(QStringLiteral("selection.describe")));
+        QVERIFY(result.isSuccess());
+        QCOMPARE(result.data().value(QStringLiteral("count")).toInt(), 1);
+        const QVariantMap selected = result.data().value(QStringLiteral("sceneNodes")).toList().front().toMap();
+        QCOMPARE(session.objects().resolve(selected.value(QStringLiteral("id")).toString()).get(), node.get());
+        QCOMPARE(session.objects().resolve(selected.value(QStringLiteral("pipelineId")).toString()).get(), pipeline.get());
+        QVERIFY(selected.value(QStringLiteral("title")).toString().isEmpty() == false || node->objectTitle().isEmpty());
+
+        // SelectionRead and SceneRead are separate: a client that may see what is selected need not be allowed to read
+        // the whole scene. This is the capability the operation exists for.
+        AutomationGateway restricted(session);
+        // A client is granted the read-only defaults when it connects; this one is deliberately given less.
+        restricted.clearCapabilities();
+        restricted.grantCapability(AutomationContract::Capability::SelectionRead);
+        QVERIFY(restricted.dispatch(AutomationRequest(QStringLiteral("selection.describe"))).isSuccess());
+        result = restricted.dispatch(AutomationRequest(QStringLiteral("scene.list_nodes")));
+        QVERIFY(result.isError());
+        QCOMPARE(result.errorCode(), AutomationContract::ErrorCode::MissingCapability);
+        QCOMPARE(result.errorDetails().value(QStringLiteral("missing")).toStringList(), QStringList{QStringLiteral("scene.read")});
+    }
+
+    void object_describe_reads_any_addressable_object()
+    {
+        AutomationSession session;
+        AutomationGateway gateway(session);
+        session.setDataSet(OORef<DataSet>::create());
+        Scene* scene = session.dataSet()->viewportConfig()->viewports().front()->scene();
+        QVERIFY(scene);
+        OORef<SceneNode> node = OORef<SceneNode>::create();
+        OORef<Pipeline> pipeline = OORef<Pipeline>::create();
+        node->setPipeline(pipeline);
+        scene->addChildNode(node);
+
+        // A scene node reports the pipeline behind it, a pipeline its (empty) chain: the same shapes
+        // scene.list_nodes and pipeline.describe answer with, so a client that has one ID can ask for exactly that
+        // object instead of re-reading the whole scene.
+        const QString nodeId = session.objects().idFor(node.get(), AutomationObjectId::Kind::SceneNode);
+        const QString pipelineId = session.objects().idFor(pipeline.get(), AutomationObjectId::Kind::Pipeline);
+        AutomationResult result = gateway.dispatch(AutomationRequest(QStringLiteral("object.describe")).setArguments({{QStringLiteral("objectId"), nodeId}}));
+        QVERIFY(result.isSuccess());
+        QCOMPARE(result.data().value(QStringLiteral("kind")).toString(), QStringLiteral("scenenode"));
+        QCOMPARE(result.data().value(QStringLiteral("pipelineId")).toString(), pipelineId);
+        QCOMPARE(result.data().value(QStringLiteral("title")).toString(), node->objectTitle());
+
+        result = gateway.dispatch(AutomationRequest(QStringLiteral("object.describe")).setArguments({{QStringLiteral("objectId"), pipelineId}}));
+        QVERIFY(result.isSuccess());
+        QCOMPARE(result.data().value(QStringLiteral("kind")).toString(), QStringLiteral("pipeline"));
+        QCOMPARE(result.data().value(QStringLiteral("items")).toList().size(), 0);
+
+        // A viewport reports its parameters with the property IDs a client passes back when it changes one later, and
+        // describing such a property ID reads the value out of the object's own field.
+        const QString viewportId = session.objects().idFor(session.dataSet()->viewportConfig()->viewports().front().get(), AutomationObjectId::Kind::Viewport);
+        result = gateway.dispatch(AutomationRequest(QStringLiteral("object.describe")).setArguments({{QStringLiteral("objectId"), viewportId}}));
+        QVERIFY(result.isSuccess());
+        const QVariantList properties = result.data().value(QStringLiteral("properties")).toList();
+        QVERIFY(properties.size() >= 1);
+        QString fieldOfViewId;
+        double fieldOfView = 0.0;
+        for(const QVariant& entry : properties) {
+            const QVariantMap property = entry.toMap();
+            QVERIFY(property.value(QStringLiteral("name")).toString().isEmpty() == false);
+            // A property has an ID of its own, of the grammar's property form: the owner's local name plus the field.
+            const std::optional<AutomationObjectId> propertyId = AutomationObjectId::parse(property.value(QStringLiteral("id")).toString());
+            QVERIFY(propertyId && propertyId->isProperty());
+            QCOMPARE(propertyId->ownerKind(), AutomationObjectId::Kind::Viewport);
+            if(property.value(QStringLiteral("name")).toString() == QStringLiteral("fieldOfView")) {
+                fieldOfViewId = property.value(QStringLiteral("id")).toString();
+                fieldOfView = property.value(QStringLiteral("value")).toDouble();
+            }
+        }
+        const std::optional<AutomationObjectId> viewportObjectId = AutomationObjectId::parse(viewportId);
+        QVERIFY(viewportObjectId);
+        QCOMPARE(fieldOfViewId, QStringLiteral("property:") + AutomationObjectId::localName(viewportObjectId->kind(), viewportObjectId->number()) + QStringLiteral("/fieldOfView"));
+        QVERIFY(fieldOfView != 0.0);
+
+        result = gateway.dispatch(AutomationRequest(QStringLiteral("object.describe")).setArguments({{QStringLiteral("objectId"), fieldOfViewId}}));
+        QVERIFY(result.isSuccess());
+        QCOMPARE(result.data().value(QStringLiteral("kind")).toString(), QStringLiteral("property"));
+        QCOMPARE(result.data().value(QStringLiteral("name")).toString(), QStringLiteral("fieldOfView"));
+        QCOMPARE(result.data().value(QStringLiteral("ownerId")).toString(), viewportId);
+        QCOMPARE(result.data().value(QStringLiteral("value")).toDouble(), fieldOfView);
+
+        // A property the object does not have, and one on an object that is not in the session, are both reported as
+        // unknown rather than answered from something that happens to be at that row now.
+        result = gateway.dispatch(AutomationRequest(QStringLiteral("object.describe")).setArguments({{QStringLiteral("objectId"), QStringLiteral("property:v1/nonsense")}}));
+        QVERIFY(result.isError());
+        QCOMPARE(result.errorCode(), AutomationContract::ErrorCode::UnknownObject);
+        result = gateway.dispatch(AutomationRequest(QStringLiteral("object.describe")).setArguments({{QStringLiteral("objectId"), QStringLiteral("property:v99/fieldOfView")}}));
+        QVERIFY(result.isError());
+        QCOMPARE(result.errorCode(), AutomationContract::ErrorCode::UnknownObject);
+
+        // An ID of a kind that was never handed out, and a string that is not an ID at all: the second never reaches
+        // the handler, because the argument's wire type validates the grammar before it runs.
+        result = gateway.dispatch(AutomationRequest(QStringLiteral("object.describe")).setArguments({{QStringLiteral("objectId"), QStringLiteral("modifier:m42")}}));
+        QVERIFY(result.isError());
+        QCOMPARE(result.errorCode(), AutomationContract::ErrorCode::UnknownObject);
+        result = gateway.dispatch(AutomationRequest(QStringLiteral("object.describe")).setArguments({{QStringLiteral("objectId"), QStringLiteral("the viewport")}}));
+        QVERIFY(result.isError());
+        QCOMPARE(result.errorCode(), AutomationContract::ErrorCode::InvalidArgument);
+
+        // Replacing the data set invalidates the identity: the client is told to re-query, not that its ID was wrong.
+        session.setDataSet(OORef<DataSet>::create());
+        result = gateway.dispatch(AutomationRequest(QStringLiteral("object.describe")).setArguments({{QStringLiteral("objectId"), nodeId}}));
+        QVERIFY(result.isError());
+        QCOMPARE(result.errorCode(), AutomationContract::ErrorCode::InvalidatedObject);
     }
 
     // -----------------------------------------------------------------------

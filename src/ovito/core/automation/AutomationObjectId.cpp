@@ -5,20 +5,25 @@
 
 namespace Ovito {
 
-namespace {
-
-/// Returns the kind prefix of an object kind, for example "pipeline".
-QString kindPrefix(AutomationObjectId::Kind kind)
+QString AutomationObjectId::kindName(Kind kind)
 {
     switch(kind) {
-        case AutomationObjectId::Kind::SceneNode: return QStringLiteral("scenenode");
-        case AutomationObjectId::Kind::Pipeline: return QStringLiteral("pipeline");
-        case AutomationObjectId::Kind::Modifier: return QStringLiteral("modifier");
-        case AutomationObjectId::Kind::Viewport: return QStringLiteral("viewport");
-        case AutomationObjectId::Kind::Property: return QStringLiteral("property");
+        case Kind::SceneNode: return QStringLiteral("scenenode");
+        case Kind::Pipeline: return QStringLiteral("pipeline");
+        case Kind::Modifier: return QStringLiteral("modifier");
+        case Kind::Viewport: return QStringLiteral("viewport");
+        case Kind::Property: return QStringLiteral("property");
     }
     OVITO_ASSERT(false);
     return {};
+}
+
+namespace {
+
+/// The kind prefix of an object ID, which is the kind's wire name.
+QString kindPrefix(AutomationObjectId::Kind kind)
+{
+    return AutomationObjectId::kindName(kind);
 }
 
 /// Returns the single letter that stands for an object kind inside a local name.

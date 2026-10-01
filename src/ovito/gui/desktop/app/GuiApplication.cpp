@@ -14,10 +14,13 @@
 #include <ovito/gui/base/app/GuiFrontendRegistry.h>
 #include <ovito/gui/base/app/WorkbenchUI.h>
 #include <ovito/core/app/undo/UndoStack.h>
+#include <ovito/core/automation/AutomationCommandLine.h>
 #include <ovito/core/dataset/DataSet.h>
 #include <ovito/core/dataset/DataSetContainer.h>
 #include <ovito/core/utilities/concurrent/Task.h>
 #include <ovito/gui/base/viewport/ViewportRendererRegistry.h>
+#include <QTextStream>
+#include <cstdio>
 #include "GuiApplication.h"
 
 // Registers the embedded Qt resource files embedded in a statically linked executable at application startup.
@@ -58,6 +61,16 @@ void GuiApplication::registerCommandLineParameters(QCommandLineParser& parser)
 
     parser.addOption(QCommandLineOption(QStringList{{"nogui"}}, tr("Run in console mode without displaying a graphical user interface.")));
     parser.addOption(QCommandLineOption(QStringList{{"gui"}}, tr("Selects the user interface frontend to start, e.g. 'qml'."), tr("NAME"), QStringLiteral("qt-widgets")));
+    // The automation mode: 'ovito --automation <verb>' answers a question about a running workbench instead of starting
+    // one (audit decision D60). It is a mode of this binary rather than a second program, because it speaks the same
+    // discovery convention and the same error vocabulary as the process it asks.
+    parser.addOption(QCommandLineOption(QStringList{{"automation"}}, tr("Asks a running workbench instead of starting one: %1.").arg(AutomationCommandLine::verbs().join(QStringLiteral(", "))), tr("VERB")));
+    parser.addOption(QCommandLineOption(QStringList{{"json"}}, tr("Prints the answer of --automation as a single JSON object.")));
+    parser.addOption(QCommandLineOption(QStringList{{"session"}}, tr("Chooses the session --automation talks to, by ID, by endpoint or by a part of its label."), tr("ID")));
+    parser.addOption(QCommandLineOption(QStringList{{"since"}}, tr("The first event sequence number --automation events reports."), tr("N")));
+    parser.addOption(QCommandLineOption(QStringList{{"limit"}}, tr("How many records --automation reports at most."), tr("N")));
+    parser.addOption(QCommandLineOption(QStringList{{"max-nodes"}}, tr("How many scene nodes --automation snapshot describes at most."), tr("N")));
+    parser.addOption(QCommandLineOption(QStringList{{"automation-serve"}}, tr("Serves the session of this workbench to local automation clients, read-only by default.")));
 }
 
 /******************************************************************************
@@ -67,6 +80,12 @@ bool GuiApplication::processCommandLineParameters()
 {
     if(!StandaloneApplication::processCommandLineParameters())
         return false;
+
+    // The automation mode is a client of a running workbench, not a user interface of its own: it answers and exits,
+    // and it must not load a session or open a window while doing so.
+    if(_cmdLineParser.isSet("automation")) {
+        setRunMode(Application::TerminalMode);
+    }
 
     // Check if program was started in console mode.
     if(_cmdLineParser.isSet("nogui")) {
@@ -154,6 +173,15 @@ MainThreadOperation GuiApplication::startupApplication()
     OVITO_ASSERT(this_task::isMainThread());
     OVITO_ASSERT(this_task::get());
 
+    // The automation mode talks to a running workbench and answers on the terminal. It needs a Qt application object
+    // for its local socket and a way to end the process with the answer's exit code, but neither a window nor a
+    // display - which is why it gets a plain QCoreApplication instead of the GUI-enabled one a user interface needs,
+    // and why 'ovito --automation' works on a machine without any windowing system.
+    if(cmdLineParser().isSet(QStringLiteral("automation")) && !QCoreApplication::instance()) {
+        QCoreApplication* qtApp = new QCoreApplication(*_argc, _argv);
+        qtApp->setParent(this);
+    }
+
     if(Application::guiEnabled()) {
         // Find the user interface frontend that the user selected. If it is not part of this build, this is a fatal
         // error instead of a silent fallback to the default frontend: a user (or a test script) that asked for a
@@ -217,6 +245,23 @@ MainThreadOperation GuiApplication::startupApplication()
 ******************************************************************************/
 void GuiApplication::postStartupInitialization()
 {
+    // The automation mode answers one question about a running workbench and ends the process with what it found. It
+    // runs here rather than during the argument parsing, because it needs a Qt application object for its local socket
+    // and because it ends the process with its own exit code (see AutomationCommandLine).
+    if(cmdLineParser().isSet(QStringLiteral("automation"))) {
+        QTextStream out(stdout);
+        QTextStream err(stderr);
+        // The verb is the value of --automation; what follows it on the command line is the verb's own argument (the
+        // object ID of 'describe').
+        QStringList arguments{ cmdLineParser().value(QStringLiteral("automation")) };
+        arguments += cmdLineParser().positionalArguments();
+        const int exitCode = AutomationCommandLine::run(cmdLineParser(), arguments, out, err);
+        out.flush();
+        err.flush();
+        QCoreApplication::exit(exitCode);
+        return;
+    }
+
     GuiApplication::initializeUserInterface(*this_task::ui(), cmdLineParser().positionalArguments());
     StandaloneApplication::postStartupInitialization();
 }

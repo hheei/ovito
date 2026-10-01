@@ -81,6 +81,11 @@ public:
     /// The local part of an object ID, for example `"p42"`; empty for an invalid ID or a property ID.
     static QString localName(Kind kind, quint64 number);
 
+    /// The wire name of an object kind, which is also the prefix of its IDs, for example `"pipeline"`. A client that
+    /// wants to know what the ID it is holding refers to reads this, so it is part of the vocabulary and not an
+    /// implementation detail of the grammar.
+    static QString kindName(Kind kind);
+
 private:
 
     Kind _kind = Kind::SceneNode;

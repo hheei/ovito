@@ -33,6 +33,7 @@ SET(SourceFiles
     app/UserInterface.cpp
     app/undo/UndoableOperation.cpp
     app/undo/UndoStack.cpp
+    automation/AutomationCommandLine.cpp
     automation/AutomationContract.cpp
     automation/AutomationEvent.cpp
     automation/AutomationGateway.cpp
@@ -455,6 +456,13 @@ IF(NOT EMSCRIPTEN)
     # Qt Network module is used by the Core module, except in the wasm build.
     OVITO_FIND_PACKAGE(Qt6 ${OVITO_MINIMUM_REQUIRED_QT_VERSION} COMPONENTS Network REQUIRED)
     TARGET_LINK_LIBRARIES(Core PUBLIC Qt6::Network)
+
+    # The local transport of the automation layer (Phase 2.6 wrote it as a spike, Phase 3 promoted it into Core,
+    # see audit decision D67). It is built only where Qt's local sockets are, which is why it is added here rather
+    # than to the source list above: a session is served over a UNIX domain socket or a named pipe, never over TCP.
+    TARGET_SOURCES(Core PRIVATE
+        automation/transport/AutomationLocalClient.cpp
+        automation/transport/AutomationLocalEndpoint.cpp)
 ENDIF()
 
 # Use zlib library if available to support loading/saving gzip compressed files.

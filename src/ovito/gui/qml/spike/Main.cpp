@@ -217,6 +217,16 @@ const std::vector<SpikeStep>& spikeSteps()
               runImportTest(ui, std::move(next));
           } },
 
+        // Self-contained: it serves the session of this workbench in a session directory of its own and runs the
+        // 'ovito' executable of this build against it, so it neither depends on nor changes the state the other checks
+        // leave behind. It belongs before the check that replaces the data set.
+        { QCommandLineOption(QStringLiteral("qml-automation-check"),
+              QStringLiteral("Verify the automation foundation (Phase 3): the workbench serves its session only when asked, the command line of this build discovers and reads it within its read-only capabilities, and stopping the server removes the session again.")),
+          [](const QCommandLineParser& p) { return p.isSet(QStringLiteral("qml-automation-check")); },
+          [](QmlMainWindowUI* ui, const QCommandLineParser& parser, std::function<void()> next) {
+              runAutomationTest(ui, std::move(next));
+          } },
+
         // After the import check and before the one that replaces the data set: it imports a data set of its own and
         // animates its scene node, so it must not run before a check that needs the scene the checks leave behind.
         { QCommandLineOption(QStringLiteral("qml-animation-check"),
