@@ -55,6 +55,22 @@ struct AutomationCheckState
     }
 };
 
+/// The shortest writable temp base this platform has.
+///
+/// A session's socket path may be 104 characters on macOS and the platform's own temporary directory can spend most of
+/// that on its own: on macOS it is `/var/folders/<2>/<30>/T`, which leaves no room for a session directory plus a
+/// session ID (the workbench then refuses to serve, correctly, and this check used to fail there for that reason -
+/// see UI_TEST_ENV.md 6.2). `/tmp` is short on every UNIX (macOS resolves it to `/private/tmp`).
+QString shortTempBase()
+{
+#if defined(Q_OS_UNIX)
+    const QFileInfo base(QStringLiteral("/tmp"));
+    if(base.isDir() && base.isWritable())
+        return QStringLiteral("/tmp");
+#endif
+    return QDir::tempPath();
+}
+
 /// The `ovito` executable of this build, next to the spike binary, or an empty string when there is none.
 QString ovitoBinary()
 {
@@ -144,7 +160,8 @@ void runAutomationTest(QmlMainWindowUI* ui, std::function<void()> continuation)
 
     auto state = std::make_shared<AutomationCheckState>();
     state->continuation = std::move(continuation);
-    state->sessionDirectory = QDir::tempPath() + QStringLiteral("/ovito-qml-automation-check-%1").arg(QCoreApplication::applicationPid());
+    // A name short enough to leave room for a session ID below the 104-character socket-path limit.
+    state->sessionDirectory = shortTempBase() + QStringLiteral("/ovito-qml-check-%1").arg(QCoreApplication::applicationPid());
     QDir().mkpath(state->sessionDirectory);
     qputenv("OVITO_AUTOMATION_SESSION_DIR", state->sessionDirectory.toUtf8());
 

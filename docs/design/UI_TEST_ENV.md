@@ -952,8 +952,14 @@ cases of `tst_session_descriptor`. Four traps are behind that, and each is a rul
   client could not connect to the socket. Every case of `tst_session_descriptor` that *writes* a descriptor failed there
   while the others passed, which is the signature of this trap; the suite now creates its private scope under the shortest
   temp base the platform has (`/tmp` on UNIX) and pins the refusal deliberately in
-  `an_endpoint_that_does_not_fit_a_socket_path_is_refused`. Reproduce it on Linux without a Mac by pointing `TMPDIR` at a
-  60-character directory (`TMPDIR=/tmp/$(printf 'a%.0s' {1..60}) build-native/tests/cpp/core/automation/tst_session_descriptor`).
+  `an_endpoint_that_does_not_fit_a_socket_path_is_refused`. The same applies to a *spike check* that serves a session:
+  `--qml-automation-check` built its private scope from `QDir::tempPath()`, and with macOS's own temp path plus the check's
+  name plus a session ID the endpoint came to about 109 characters, so the workbench refused to serve and the check failed
+  there; it now uses the short temp base too (`/tmp/ovito-qml-check-<pid>`, an endpoint of about 60 characters). Reproduce it
+  on Linux without a Mac by pointing `TMPDIR` at a 60-character directory:
+  `TMPDIR=/tmp/$(printf 'a%.0s' {1..60}) build-native/tests/cpp/core/automation/tst_session_descriptor` for the suite and
+  `TMPDIR=/tmp/$(printf 'a%.0s' {1..60}) xvfb-run -a build-native/bin/ovito-qml-spike --qml-automation-check <file.xyz>`
+  for the check (both then report the workbench or the descriptor refusing the endpoint).
 * **The descriptor's endpoint is a path, not a string that starts with `/`.** On Windows the session directory is an
   absolute `C:/Users/...` path, so a validity rule written for UNIX refuses every session there and no workbench could ever
   serve one. `isUsableEndpoint()` therefore tests `QDir::isAbsolutePath()` and keeps refusing *relative* paths, which is the
