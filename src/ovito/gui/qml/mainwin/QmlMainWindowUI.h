@@ -8,6 +8,7 @@
 #include <ovito/gui/qml/mainwin/QmlViewportController.h>
 #include <ovito/gui/qml/mainwin/QmlViewportLayout.h>
 #include <ovito/gui/qml/mainwin/QmlWorkbenchController.h>
+#include <ovito/gui/qml/models/QmlAnimationModel.h>
 #include <ovito/gui/qml/models/QmlPipelineController.h>
 #include <ovito/gui/qml/viewport/QmlViewportMenu.h>
 #include <ovito/gui/base/app/WorkbenchUI.h>
@@ -69,6 +70,10 @@ public:
     /// Returns the searchable list of the commands of this workbench, which a menu search or the Phase 8 command
     /// palette presents (Phase 3, deliverable 4).
     CommandListModel* commandList() const { return _commandList; }
+
+    /// Returns the model side of the animation timeline: the animation state, the keys of the selected objects and the
+    /// operations a timeline performs on them (Phase 3, deliverable 2; the timeline itself is Phase 5).
+    QmlAnimationModel* animationModel() const { return _animationModel; }
 
     /// Returns the model of the viewport context menu.
     QmlViewportMenu* viewportMenu() const { return _contextMenu; }
@@ -164,6 +169,9 @@ private:
 
     /// The searchable list of the commands of this workbench.
     QPointer<CommandListModel> _commandList;
+
+    /// The model side of the animation timeline.
+    QPointer<QmlAnimationModel> _animationModel;
 
     /// Keeps the continuation alive that completes the import notice with the number of source frames of the imported
     /// file. A future nobody awaits cancels the continuation it carries, and the frame list of a file source is only

@@ -220,6 +220,11 @@ void probeAnimationPlaybackCommand(QmlMainWindowUI* ui, Command* playbackCommand
 ******************************************************************************/
 void runPipelineTest(QmlMainWindowUI* ui, std::function<void()> continuation);
 
+/// Verifies the model side of the animation timeline (Phase 3, slice S2). It imports a data set of its own and edits the
+/// animation of its scene node, so it belongs after the checks that need the scene they leave behind and before the one
+/// that replaces the data set.
+void runAnimationTest(QmlMainWindowUI* ui, std::function<void()> continuation);
+
 /// Verifies object picking at the given position of the first viewport item.
 ///
 /// Picking is served from a buffer that the render thread renders asynchronously, so the first call after the

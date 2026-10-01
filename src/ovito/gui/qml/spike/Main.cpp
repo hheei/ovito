@@ -217,6 +217,15 @@ const std::vector<SpikeStep>& spikeSteps()
               runImportTest(ui, std::move(next));
           } },
 
+        // After the import check and before the one that replaces the data set: it imports a data set of its own and
+        // animates its scene node, so it must not run before a check that needs the scene the checks leave behind.
+        { QCommandLineOption(QStringLiteral("qml-animation-check"),
+              QStringLiteral("Verify the model side of the animation timeline (Phase 3): the animation state and its undo, the tracks and keys of the selected objects, the key selection, the discrete and continuous key moves, the deletion of keys and the visible range.")),
+          [](const QCommandLineParser& p) { return p.isSet(QStringLiteral("qml-animation-check")); },
+          [](QmlMainWindowUI* ui, const QCommandLineParser& parser, std::function<void()> next) {
+              runAnimationTest(ui, std::move(next));
+          } },
+
         // After everything else: it imports a data set of its own and replaces the data set at the end, so no later step
         // may depend on the scene the other checks left behind.
         { QCommandLineOption(QStringLiteral("qml-pipeline-check"),

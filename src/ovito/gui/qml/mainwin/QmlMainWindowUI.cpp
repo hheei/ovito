@@ -146,6 +146,9 @@ void QmlMainWindowUI::initializeWindow()
     // The model side of the pipeline panel and the modifier library. The two shared models register the commands of the
     // panel with the action manager, so this is also where those commands come into existence.
     _pipelineController = new QmlPipelineController(*this, view);
+    // The model side of the animation timeline: the animation state, the keys of the selected objects and the
+    // operations a timeline performs on them.
+    _animationModel = new QmlAnimationModel(*this, view);
     // The searchable list of commands the workbench offers; a menu search or the Phase 8 command palette presents it.
     if(ActionManager* manager = actionManager())
         _commandList = new CommandListModel(*manager, view);
@@ -170,6 +173,7 @@ void QmlMainWindowUI::initializeWindow()
     view->rootContext()->setContextProperty(QStringLiteral("viewportLayout"), _viewportLayout);
     view->rootContext()->setContextProperty(QStringLiteral("viewportMenu"), _contextMenu);
     view->rootContext()->setContextProperty(QStringLiteral("pipelineController"), _pipelineController);
+    view->rootContext()->setContextProperty(QStringLiteral("animationModel"), _animationModel);
     if(_commandList)
         view->rootContext()->setContextProperty(QStringLiteral("commandList"), _commandList);
 
